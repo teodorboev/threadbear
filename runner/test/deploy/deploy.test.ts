@@ -265,7 +265,7 @@ test('install-runner.sh builds the first release and starts it through launch.mj
   // its child, so privacy prompts are attributed to the app.
   const launcherPid = Number(fs.readFileSync(path.join(launchd, 'child.pid'), 'utf8'));
   assert.equal(spawnSync('ps', ['-o', 'comm=', '-p', String(launcherPid)], { encoding: 'utf8' }).stdout.trim(), path.join(app, 'Contents', 'MacOS', 'Threadbear Runner'));
-  const supervisorPid = Number(spawnSync('pgrep', ['-P', String(launcherPid)], { encoding: 'utf8' }).stdout.trim());
+  const supervisorPid = Number(spawnSync('/usr/bin/pgrep', ['-P', String(launcherPid)], { encoding: 'utf8' }).stdout.trim());
   assert.equal(spawnSync('ps', ['-o', 'command=', '-p', String(supervisorPid)], { encoding: 'utf8' }).stdout.trim(), `${NODE} ${path.join(home, 'runner', 'launch.mjs')}`);
   assert.equal(plist.WorkingDirectory, path.join(home, 'runner'));
   assert.equal(plist.EnvironmentVariables.THREADBEAR_HOME, home);

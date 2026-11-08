@@ -64,8 +64,15 @@ public enum SlashPalette {
         }
     }
 
+    /// Self-contained (not ModelPicker.providerTitle): the iPhone kit shares
+    /// this file, and ModelPicker is the Mac app's alone.
     public static func cliName(_ provider: String) -> String {
-        provider == "claude" || provider.isEmpty ? "Claude Code" : ModelPicker.providerTitle(provider)
+        switch provider {
+        case "", "claude": return "Claude Code"
+        case "codex": return "Codex"
+        case "opencode": return "OpenCode"
+        default: return provider.prefix(1).uppercased() + provider.dropFirst()
+        }
     }
 
     /// The command being typed, without its slash, while the message is
