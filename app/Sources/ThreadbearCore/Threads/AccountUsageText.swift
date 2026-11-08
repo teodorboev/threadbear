@@ -335,8 +335,7 @@ public enum CliText {
     public static func name(_ provider: String) -> String {
         switch provider {
         case "claude": return "Claude Code"
-        case "codex": return "Codex"
-        default: return provider.prefix(1).uppercased() + provider.dropFirst()
+        default: return ModelPicker.providerTitle(provider)
         }
     }
 
@@ -467,7 +466,7 @@ public enum AccountMenu {
                 sections.append(Section(id: provider, title: ModelPicker.providerTitle(provider), items: [item]))
             }
         }
-        let order = ["claude", "codex"]
+        let order = ["claude", "codex", "opencode"]
         return sections.enumerated().sorted { a, b in
             let ia = order.firstIndex(of: a.element.id) ?? order.count
             let ib = order.firstIndex(of: b.element.id) ?? order.count

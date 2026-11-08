@@ -1063,6 +1063,31 @@ still `-32602`.)
 - An effort the model doesn't list in `effortLevels` (when known) is dropped
   with a note. `ultra` on a Claude thread always is.
 
+### OpenCode threads
+
+An `opencode` account (`opencode-main`, present when the runner finds the
+`opencode` binary) runs each live thread as `opencode acp`, the Agent Client
+Protocol over stdio; its sessions belong to OpenCode's background service,
+so `nativeSessionId` is OpenCode's `ses_...` id, reported through the
+session output like Codex's. Differences a client can see:
+
+- `models` are OpenCode's enabled models as `provider/model` ids, with no
+  `effortLevels`; any effort is dropped with a note.
+- Permission modes are applied as the session's own permission rules (over
+  `opencode api`), not left to the user's `opencode.json`: Full allows
+  everything; Ask, Auto and Plan first ask for everything but reading and
+  searching. Plan first also switches OpenCode to its read-only `plan`
+  agent, and the turn's last message becomes the `plan.proposed` card.
+  Always allow is kept per thread as an `opencode:<tool>` rule.
+- A message sent while a turn runs waits for it (ACP can't steer), counted
+  in the turn result's `queuedTurns`.
+- Threadbear's tools reach it as an MCP server on `127.0.0.1` with a
+  per-session token. OpenCode 2 may wrap them in its code-mode `execute`
+  tool; a call that only runs one Threadbear tool is shown as that tool
+  (`mcp__threadbear__end_turn`).
+- No usage windows, no CLI updates (`clis.*` leave it alone), no sandbox,
+  and no editing an earlier message yet (`threads.edit` is `-32602`).
+
 ## Notifications (runner to app)
 
 | method | params |

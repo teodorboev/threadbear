@@ -83,4 +83,18 @@ final class ModelPickerTests: XCTestCase {
         XCTAssertEqual(ModelPicker.effortLevels(for: nil, in: choices), efforts)
         XCTAssertEqual(ModelPicker.effortLevels(for: "opus", in: []), efforts)
     }
+
+    func testOpenCodeModelsAreAllMainRowsAndTakeNoEffort() {
+        let models = [
+            ModelChoice(id: "opencode/big-pickle", model: "opencode/big-pickle", title: "Big Pickle", description: "opencode"),
+            ModelChoice(id: "ollama-cloud/glm-5.3", model: "ollama-cloud/glm-5.3", title: "GLM-5.3", description: "ollama-cloud"),
+        ]
+        let rows = ModelPicker.rows(choices: models, defaultId: "opencode/big-pickle", selected: nil, provider: "opencode")
+        XCTAssertEqual(rows.map(\.id), ["opencode/big-pickle", "ollama-cloud/glm-5.3"])
+        XCTAssertFalse(rows.contains { $0.isOlder })
+        XCTAssertEqual(ModelPicker.effortLevels(for: "opencode/big-pickle", in: models, provider: "opencode"), [])
+        XCTAssertEqual(ModelPicker.providerTitle("opencode"), "OpenCode")
+        // Before the list is known: just the default, never Claude's aliases.
+        XCTAssertEqual(ModelPicker.rows(choices: [], defaultId: "opencode/big-pickle", selected: nil, provider: "opencode").map(\.id), ["opencode/big-pickle"])
+    }
 }

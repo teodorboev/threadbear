@@ -699,7 +699,7 @@ final class AppModel {
     /// came along is still remembered; other providers add ".<provider>".
     static let lastModelKey = "lastModel"
     static let lastEffortKey = "lastEffort"
-    static let memoryProviders = ["claude", "codex"]
+    static let memoryProviders = ["claude", "codex", "opencode"]
     static let collapsedSectionsKey = "collapsedSections"
     /// Set once Hibernating and Archive have been folded the first time.
     /// They came after collapsedSections did, so a saved list without them

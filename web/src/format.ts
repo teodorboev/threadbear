@@ -1,10 +1,12 @@
 // Small words for the pages: model names, dates, times since.
 
 // "claude-opus-5-5" → "Claude Opus 5.5", "opus" → "Claude Opus",
-// "gpt-6-astra" → "GPT-6 Astra". With no model, the CLI's name.
+// "gpt-6-astra" → "GPT-6 Astra", OpenCode's "ollama-cloud/glm-5.3" →
+// "glm-5.3". With no model, the CLI's name.
 export function modelLabel(provider?: string, model?: string): string {
-  const cli = provider === 'codex' ? 'Codex' : 'Claude';
+  const cli = provider === 'codex' ? 'Codex' : provider === 'opencode' ? 'OpenCode' : 'Claude';
   if (!model) return cli;
+  if (provider === 'opencode' && model.includes('/')) return model.slice(model.indexOf('/') + 1);
   const id = model.replace(/\[.*\]$/, '');
   const claude = id.match(/^(?:claude-)?(opus|sonnet|haiku|fable)(?:-(\d+)(?:-(\d+))?)?/i);
   if (claude) {

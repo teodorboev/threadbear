@@ -7,7 +7,8 @@
      so keep a section's slug when you rename its heading. -->
 
 Threadbear is a Mac app for running AI agent threads. It drives the official
-Claude Code and Codex command line tools on your own logins. A small program
+Claude Code and Codex command line tools on your own logins, and OpenCode if
+you have it installed. A small program
 called the runner keeps every agent going in the background, so quitting or
 updating the app never stops a thread. Your threads are also copied to a
 Convex deployment of your own, which is how the iPhone app and the website
@@ -304,7 +305,10 @@ shown on the composer (the box you type in) and changed by clicking it.
 - **Ask before edits**: the agent stops for your OK before it edits a file
   or runs a command. A card shows in the thread with Allow, Always allow and
   Deny. Always allow only lasts for that thread. A Codex thread in this mode
-  can read files but not change them unless you agree. It also asks before
+  can read files but not change them unless you agree. An OpenCode thread
+  reads and searches freely and asks before anything else, whatever your
+  `opencode.json` says; its Always allow covers that tool (all its commands,
+  say) for the rest of the thread. It also asks before
   it does anything to Threadbear itself: messaging or starting another
   thread, changing this one, schedules, projects, pins, panels and the
   Pocket. Reading threads, asking you for a secret and ending its turn
@@ -312,7 +316,8 @@ shown on the composer (the box you type in) and changed by clicking it.
 - **Auto** (Claude threads only): a separate safety check approves or blocks
   each action, and a card shows only when it can't decide. It's for work on
   text you didn't write, like an error report or a web page. It catches a lot
-  but it's no guarantee, and on a Codex thread it behaves like Ask before edits.
+  but it's no guarantee, and on a Codex or OpenCode thread it behaves like Ask
+  before edits.
 - **Plan first**: the agent looks around and writes a plan, but changes
   nothing yet. The plan shows as a card with Go ahead and Send back. Go
   ahead (or Return in an empty message box) lets it start, back in the mode
@@ -448,7 +453,9 @@ than going to the agent as words. In a Claude thread Claude Code runs its
 own commands and your skills (`/compact`, `/context`, `/cost`, `/clear`,
 `/code-review`). A Codex thread runs `/compact`, `/review` (the
 uncommitted changes, or what you write after it), `/clear` or `/new`,
-`/status`, and `/` with the name of one of your Codex skills.
+`/status`, and `/` with the name of one of your Codex skills. An OpenCode
+thread runs OpenCode's own commands (`/init`, `/review` and any you've made
+in its config), plus `/clear` or `/new` and `/status`.
 
 Two are Threadbear's own, on both: `/model` and `/effort` change the
 thread's model and effort level, the same as the menus under the message
@@ -806,7 +813,17 @@ window can be seen; a runner too old to send them says so.
 
 Threadbear uses the Claude Code and Codex logins already on your Mac: the
 Claude Code login in `~/.claude` and the Codex login in `~/.codex`. It never
-reads their passwords or tokens. The account and model a thread runs on are
+reads their passwords or tokens.
+
+If OpenCode is installed (`opencode` from Homebrew, its install script or
+npm), an **OpenCode** login shows up too. It runs whichever models you've
+connected in OpenCode itself (`opencode auth login`): its own Zen models,
+your API keys, Ollama or LM Studio. Its models are listed as
+`provider/model`, and it has no effort levels. Threadbear starts
+`opencode acp` for each live thread and never installs or updates OpenCode;
+`opencodePath` in `runner.json` points it at a copy somewhere else, and
+`"opencodePath": "off"` hides it. An OpenCode thread can't run in the
+sandbox, and has no usage limits to show. The account and model a thread runs on are
 small menus on the composer. Whatever you picked last is what the next
 thread starts on.
 

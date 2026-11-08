@@ -120,10 +120,20 @@ started, errors), never what was said, and is started afresh past 256 KB.
   Another landing waits; exiting, including a crash, releases the lock.
 - **The runner** listens on `127.0.0.1:8797` only, and needs a token
   (`runner/src/config.ts`). It starts the official `claude` and `codex`
-  CLIs for your threads.
+  CLIs for your threads, and `opencode acp` for OpenCode threads when
+  OpenCode is installed (it looks in `/opt/homebrew/bin`, `/usr/local/bin`,
+  `~/.opencode/bin` and `~/.local/bin`, or `opencodePath` in `runner.json`).
+  It also runs `opencode api` to set each OpenCode session's permission
+  rules and Threadbear's instructions, and to list its models.
+- **While an OpenCode thread is live**, the runner also listens on
+  `127.0.0.1` on a port the system picks, for OpenCode to call Threadbear's
+  own tools (`end_turn`, `pin` and the rest) over MCP. Each session has its
+  own random token, and the port closes when no OpenCode thread is live
+  (`runner/src/adapters/opencode/mcp-bridge.ts`).
 - **Agents get full access by default.** Claude runs with
-  `bypassPermissions` and Codex with `danger-full-access`. "Ask before
-  edits" is a choice for each thread.
+  `bypassPermissions`, Codex with `danger-full-access` and OpenCode with an
+  allow-everything rule on its session. "Ask before edits" is a choice for
+  each thread.
 - **Your phone and browser can drive the Mac.** A paired iPhone or a
   signed-in browser can start threads in any folder, send messages and
   answer approvals, through your Convex deployment (`runner/src/sync.ts`).
@@ -227,6 +237,9 @@ started, errors), never what was said, and is started afresh past 256 KB.
   (`runner/src/accounts.ts`, `runner/src/token-tally.ts`;
   `THREADBEAR_TOKEN_TALLY=off` stops the counting). It never reads or
   copies login tokens or the Keychain.
+- From OpenCode, if it's installed: the `model` line of
+  `~/.config/opencode/opencode.json`, and its model list through
+  `opencode api`. Never `auth.json` or any key.
 - Token Stats' files, if you have that app, and any logins you've added
   under `accounts` in its data folder (`claude-1`, `codex-1`...).
 - Your first name, from your Mac account's full name (`id -F`), so its
@@ -255,7 +268,8 @@ started, errors), never what was said, and is started afresh past 256 KB.
 | Your other Macs, over ssh | yours | Only when you run `tb runner add <name> --ssh <host>` or `tb runner check --ssh <host>` on your first Mac: it reads that Mac's Threadbear `runner.json`, writes its id and the deployment's address there if it hasn't them, writes its new key into that Mac's `secrets/convex-key`, and looks whether that Mac has a deploy key, Convex panel keys or a Convex login (names only, never a key), through your own ssh setup with agent and port forwarding off (`runner/src/runner-keys.ts`). `tb runner audit` asks this Mac's runner for its threads' last seqs and your deployment for what the main key made. `tb runner rotate-owner` sets env vars on your deployment with your deploy key, and, if you give it a Convex team access token for that run (`CONVEX_TEAM_TOKEN`, never kept), asks api.convex.dev for the deployment's deploy keys (their names and dates) before it rotates. |
 | GitHub | Mike's repo | Release tags fetched every 6 hours; the fork at setup |
 | downloads.claude.ai, registry.npmjs.org | Anthropic, npm | CLI version checks and installs; `npm ci` |
-| Anthropic, OpenAI | yours | Your threads, through the official CLIs on your own logins. With the `labReview` experiment on (off by default), a thread's code change, with your message and the agent's reply, goes to your other provider's CLI as a review thread, as if you'd started one. After a turn fails because the API couldn't be reached, the runner itself opens (and straight away closes) a connection to api.anthropic.com or chatgpt.com on port 443, at most once a minute, until one opens and the thread carries on. Nothing is sent over it (`runner/src/net-probe.ts`). |
+| Anthropic, OpenAI | yours | Your threads, through the official CLIs on your own logins. With the `labReview` experiment on (off by default), a thread's code change, with your message and the agent's reply, goes to your other provider's CLI as a review thread, as if you'd started one. After a turn fails because the API couldn't be reached, the runner itself opens (and straight away closes) a connection to api.anthropic.com, chatgpt.com or opencode.ai on port 443, at most once a minute, until one opens and the thread carries on. Nothing is sent over it (`runner/src/net-probe.ts`). |
+| Whatever OpenCode is set up to use | yours | Only with OpenCode installed: an OpenCode thread's messages go through your own OpenCode (its background service), to the model providers you connected there (OpenCode Zen, your API keys, a local Ollama or LM Studio). Threadbear doesn't talk to them itself (`runner/src/adapters/opencode/`). |
 | Mike's push relay | Mike's | Only when a paired iPhone gets a notification. It's sent from your Convex deployment, not the Mac. The text is encrypted for the phone; the relay sees the device token and thread id (`convex/push.ts`, `docs/push-relay.md`). The first time, your deployment registers with it, giving its own address; the relay keeps that address and checks it by posting a one-time code back to your deployment's `/relay/verify` (`convex/http.ts`). |
 | A Connectors gateway | whoever runs it | Only if one is set in `runner.json` or `~/.claude.json`. Its `/health` every few minutes (and once more at the end of a turn where a call to one of its services failed, to see if it needs signing in), and for a project with a Notion page, a Notion read or two every 5 minutes for its task board (`runner/src/notion-tasks.ts`), signed with the header the `headersHelper` command in that `connectors` entry prints, which it runs for each read |
 | GitHub, Hugging Face | Kyutai's | Only with the `voiceMode` experiment on, the first time Voice is used: the pocket-tts download, then its model and voices. Nothing of yours is sent. |
