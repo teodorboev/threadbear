@@ -41,6 +41,9 @@ const KNOWN: Record<string, { everywhere: true } | { linux: string; files: strin
   '/usr/bin/pmset': { linux: 'behind darwin checks: the secret check and keeping awake are Mac only', files: ['secret-check.ts', 'keep-awake.ts'] },
   '/usr/bin/caffeinate': { linux: 'behind a darwin check: keeping awake is Mac only', files: ['keep-awake.ts'] },
   '/usr/bin/lockf': { linux: 'behind a darwin check; flock on Linux', files: ['worktrees.ts'] },
+  // One of the places config.ts looks for opencode, only if it's there:
+  // as good a place on Linux as on a Mac.
+  '/usr/local/bin/opencode': { everywhere: true },
 };
 
 function sources(dir: string): string[] {
