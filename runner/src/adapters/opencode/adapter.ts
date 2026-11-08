@@ -225,7 +225,12 @@ export class OpencodeSession implements AgentSession {
     const extra = this.deps.extraGuidance?.() ?? '';
     const text = [this.opts.instructions, tools.length ? toolGuidance(tools) : '', extra].filter(Boolean).join('\n\n');
     if (!text || !this.sessionId) return;
-    await this.api(this.binary, 'PUT', `/api/experimental/session/${this.sessionId}/instructions/entries/threadbear`, { value: text }, this.opts.cwd).catch((e: unknown) => {
+    // Unchanged on a resume: left alone, as OpenCode tells the model about
+    // every change mid-conversation.
+    const base = `/api/experimental/session/${this.sessionId}/instructions/entries`;
+    const have = (await this.api(this.binary, 'GET', base, undefined, this.opts.cwd).catch(() => undefined)) as { data?: { key?: unknown; value?: unknown }[] } | undefined;
+    if (have?.data?.some((e) => e?.key === 'threadbear' && e.value === text)) return;
+    await this.api(this.binary, 'PUT', `${base}/threadbear`, { value: text }, this.opts.cwd).catch((e: unknown) => {
       this.deps.log.warn('could not give opencode its instructions', { threadId: this.opts.threadId, error: String(e) });
     });
   }
