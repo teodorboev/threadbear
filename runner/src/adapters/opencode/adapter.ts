@@ -113,6 +113,12 @@ export class OpencodeAdapter implements AgentAdapter {
     return s;
   }
 
+  // Archives the session in OpenCode too when the thread is archived or
+  // deleted here, so it doesn't pile up in OpenCode's own list. Best effort.
+  async archive(_account: Account, nativeSessionId: string): Promise<void> {
+    await (this.deps.api ?? defaultApi)(this.binary(), 'PATCH', `/api/session/${nativeSessionId}`, { archived: true });
+  }
+
   async models(_account: Account): Promise<ModelChoice[]> {
     const r = (await (this.deps.api ?? defaultApi)(this.binary(), 'GET', '/api/model')) as { data?: unknown } | undefined;
     return opencodeModelChoices(r?.data);
@@ -214,7 +220,7 @@ export class OpencodeSession implements AgentSession {
       });
       current = currentModel(r) ?? current;
     }
-    await this.applyMode(true);
+    await this.applyMode(currentAgent(result));
     await this.putInstructions(tools);
     this.sink.output({ kind: 'session', nativeSessionId: this.sessionId, ...(current ? { model: current } : {}) });
   }
@@ -235,12 +241,14 @@ export class OpencodeSession implements AgentSession {
     });
   }
 
-  // The session's permission rules and agent for the thread's mode.
-  private async applyMode(first = false): Promise<void> {
+  // The session's permission rules and agent for the thread's mode. `has`:
+  // the agent the session is on, when known (a resumed one left in Plan
+  // first stays on OpenCode's plan agent until it's told otherwise).
+  private async applyMode(has?: string): Promise<void> {
     if (!this.sessionId) return;
     await this.api(this.binary, 'PATCH', `/api/session/${this.sessionId}`, { permissions: permissionRules(this.mode) }, this.opts.cwd);
     const agent = this.mode === 'plan' ? 'plan' : 'build';
-    if (first && agent === 'build') return;
+    if (has === agent) return;
     await this.proc.request('session/set_config_option', { sessionId: this.sessionId, configId: 'mode', value: agent }).catch((e: unknown) => {
       this.deps.log.warn('could not set the opencode agent', { threadId: this.opts.threadId, agent, error: String(e) });
     });
@@ -417,10 +425,19 @@ export class OpencodeSession implements AgentSession {
   }
 }
 
-function currentModel(r: Record<string, unknown> | undefined): string | undefined {
+function configValue(r: Record<string, unknown> | undefined, id: string): string | undefined {
   const opts = Array.isArray(r?.configOptions) ? (r.configOptions as Record<string, unknown>[]) : [];
-  const m = opts.find((o) => o?.id === 'model');
+  const m = opts.find((o) => o?.id === id);
   return typeof m?.currentValue === 'string' ? m.currentValue : undefined;
+}
+
+function currentModel(r: Record<string, unknown> | undefined): string | undefined {
+  return configValue(r, 'model');
+}
+
+// OpenCode's agent for the session ("build", "plan"), from its config options.
+function currentAgent(r: Record<string, unknown> | undefined): string | undefined {
+  return configValue(r, 'mode');
 }
 
 // The message as ACP content blocks: its text, then its pictures.
@@ -442,6 +459,8 @@ function errorKind(message: string): Pick<TurnResult, 'errorKind'> {
   if (/rate.?limit|quota|usage limit|insufficient.?credit/i.test(message)) return { errorKind: 'usageLimit' };
   if (/context (window|length)|too many tokens|prompt is too long/i.test(message)) return { errorKind: 'contextWindow' };
   if (/unauthori[sz]ed|api key|auth/i.test(message)) return { errorKind: 'auth' };
-  if (/ECONNREFUSED|ENOTFOUND|ETIMEDOUT|network/i.test(message)) return { errorKind: 'network' };
+  // Never "network": the runner's probe can't tell whether OpenCode's
+  // provider (a local Ollama or LM Studio, say) is back, so it would carry
+  // on into the same failure. The error shows, and Mike sends again.
   return {};
 }

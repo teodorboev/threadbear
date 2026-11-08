@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { OpencodeNormalizer, codeModeCall, toolInput, toolName } from '../../src/adapters/opencode/normalize.ts';
-import { opencodeModelChoices, permissionRules, promptBlocks } from '../../src/adapters/opencode/adapter.ts';
+import { OpencodeAdapter, opencodeModelChoices, permissionRules, promptBlocks } from '../../src/adapters/opencode/adapter.ts';
 import { fileContext } from '../../src/adapters/context.ts';
 import type { AdapterOutput } from '../../src/adapters/types.ts';
 import { tmpDir } from '../helpers/fakes.ts';
@@ -176,4 +176,12 @@ test("a code-mode script that only calls one threadbear tool shows as that tool"
   const evs = events(n.update({ sessionUpdate: 'tool_call_update', toolCallId: 'x1', status: 'in_progress', kind: 'other', rawInput: { code: 'return await tools.threadbear.end_turn({"summary":"done"})' } }));
   assert.equal(evs[0].name, 'mcp__threadbear__end_turn');
   assert.equal(evs[0].kind, 'mcp');
+});
+
+test("archiving a thread archives its OpenCode session, through opencode api", async () => {
+  const calls: unknown[][] = [];
+  const log: any = { info() {}, debug() {}, warn() {}, error() {} };
+  const a = new OpencodeAdapter({ opencodeBinary: () => '/bin/opencode', registry: {} as never, log, api: async (...args) => void calls.push(args) });
+  await a.archive({} as never, 'ses_abc');
+  assert.deepEqual(calls, [['/bin/opencode', 'PATCH', '/api/session/ses_abc', { archived: true }]]);
 });
