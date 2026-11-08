@@ -4,8 +4,15 @@
 
 export const PROTOCOL_VERSION = 1;
 
-export type Provider = 'claude' | 'codex';
-export const PROVIDERS: readonly Provider[] = ['claude', 'codex'];
+export type Provider = 'claude' | 'codex' | 'opencode';
+export const PROVIDERS: readonly Provider[] = ['claude', 'codex', 'opencode'];
+
+// A provider's name in notes and lists ("Claude", "Codex", "OpenCode"),
+// tolerant of a value from a newer runner.
+const PROVIDER_TITLES: Record<Provider, string> = { claude: 'Claude', codex: 'Codex', opencode: 'OpenCode' };
+export function providerTitle(p: string | undefined): string {
+  return (p && PROVIDER_TITLES[p as Provider]) || 'Claude';
+}
 
 export function isProvider(v: unknown): v is Provider {
   return typeof v === 'string' && (PROVIDERS as readonly string[]).includes(v);

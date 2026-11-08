@@ -258,16 +258,23 @@ export const newThreadsPart = {
       const replacement = this.defaultModelFor(provider);
       const fallback = replacement && this.modelFits(account, replacement) ? replacement : undefined;
       const uses = fallback ? modelTitle(account, fallback) : account.defaultModel ? modelTitle(account, account.defaultModel) : "the account's default model";
-      notes.push(`${model} isn't a ${providerName(provider)} model, so this thread uses ${uses}.`);
+      const name = providerName(provider);
+      notes.push(`${model} isn't ${/^[AEIOU]/.test(name) ? 'an' : 'a'} ${name} model, so this thread uses ${uses}.`);
       model = fallback;
     }
     if (effort) {
       const row = modelRow(account, model ?? account.defaultModel);
-      const offered = (e: EffortLevel) => !(provider === 'claude' && e === 'ultra') && (!row?.effortLevels || row.effortLevels.includes(e));
+      // OpenCode takes no effort level: its models' reasoning is set in opencode.json.
+      const offered = (e: EffortLevel) => provider !== 'opencode' && !(provider === 'claude' && e === 'ultra') && (!row?.effortLevels || row.effortLevels.includes(e));
       if (!offered(effort)) {
         const fallback = this.defaultEffortFor(provider);
         const next = fallback && fallback !== effort && offered(fallback) ? fallback : undefined;
-        const why = provider === 'claude' && effort === 'ultra' ? `${effortTitle(effort)} effort is Codex only` : `${row ? row.title : 'This model'} doesn't offer ${effortTitle(effort)} effort`;
+        const why =
+          provider === 'opencode'
+            ? `OpenCode threads don't take an effort level`
+            : provider === 'claude' && effort === 'ultra'
+              ? `${effortTitle(effort)} effort is Codex only`
+              : `${row ? row.title : 'This model'} doesn't offer ${effortTitle(effort)} effort`;
         notes.push(`${why}, so this thread uses ${next ? `${effortTitle(next)} effort` : "the model's own level"}.`);
         effort = next;
       }
@@ -277,11 +284,15 @@ export const newThreadsPart = {
 
   // Whether a thread on this account can run this model id. Codex: one the
   // account lists, or before the list is known anything starting gpt-.
-  // Claude: anything but a Codex id, unless the account itself lists it.
+  // OpenCode: likewise, with any "provider/model" id before it's known.
+  // Claude: anything but a Codex or OpenCode id, unless the account itself
+  // lists it.
   modelFits(this: Runner, account: Account, model: string): boolean {
     if (modelRow(account, model)) return true;
     if (account.provider === 'codex') return !account.models?.length && model.startsWith('gpt-');
+    if (account.provider === 'opencode') return !account.models?.length && model.includes('/');
     if (isClaudeModel(model)) return true;
+    if (model.includes('/')) return false;
     const codexIds = this.safeAccounts().filter((a) => a.provider === 'codex').some((a) => modelRow(a, model));
     return !model.startsWith('gpt-') && !codexIds;
   },

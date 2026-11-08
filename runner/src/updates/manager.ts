@@ -15,7 +15,11 @@ import type { Config } from '../config.ts';
 import type { Logger } from '../log.ts';
 import { paths } from '../config.ts';
 import type { CliPolicy, CliStatus, Provider } from '../protocol.ts';
-import { PROVIDERS } from '../protocol.ts';
+// OpenCode isn't here: Threadbear runs whatever opencode is on the PATH (or
+// opencodePath) and leaves installing and updating it to Homebrew or the user.
+const PROVIDERS = ['claude', 'codex'] as const satisfies readonly Provider[];
+type UpdatedProvider = (typeof PROVIDERS)[number];
+const updated = (p: Provider): p is UpdatedProvider => (PROVIDERS as readonly string[]).includes(p);
 import { claudeChannel, claudeInstalledVersion, claudeLatestVersion, runClaudeUpdate } from './claude.ts';
 import { CodexCopies, NPM_LATEST, codexPackageVersion, type CodexResolver, type SurfaceCheck } from './codex.ts';
 import { VERSION_RE, compareVersions, defaultExec, defaultFetchText, type Exec, type FetchText } from './exec.ts';
@@ -141,16 +145,18 @@ export class CliUpdates {
   }
 
   check(p?: Provider): CliStatus[] {
+    if (p && !updated(p)) return this.list();
     for (const prov of p ? [p] : PROVIDERS) this.track(prov, this.runCheck(prov, true));
     return this.list();
   }
 
   update(p: Provider, o: { version?: string; force?: boolean } = {}): CliStatus[] {
-    this.startUpdate(p, o);
+    if (updated(p)) this.startUpdate(p, o);
     return this.list();
   }
 
   setPolicy(p: Provider, policy: CliPolicy): CliStatus[] {
+    if (!updated(p)) return this.list();
     this.ps(p).policy = policy;
     this.save();
     this.changed();
@@ -167,7 +173,7 @@ export class CliUpdates {
   // CLI's init (Claude) or initialize (Codex). Two failures in a row on a
   // version it just moved to send a warning, once.
   sessionStarted(p: Provider, version: string | undefined, ok: boolean): void {
-    if (!version) return;
+    if (!version || !updated(p)) return;
     const s = this.ps(p);
     if (ok) {
       if (s.startFailures?.version === version) {
@@ -194,7 +200,7 @@ export class CliUpdates {
 
   // ---- status
 
-  private status(p: Provider): CliStatus {
+  private status(p: UpdatedProvider): CliStatus {
     const s = this.st[p] ?? {};
     const installedVersion = this.installed[p];
     const latestVersion = s.latestVersion;
@@ -226,13 +232,13 @@ export class CliUpdates {
   // THREADBEAR_CLI_UPDATES=off (tests, dev runners) and runner.json's own
   // "off" can't be turned on from the app; a Codex binary set by hand is
   // never updated.
-  private policy(p: Provider): CliPolicy {
+  private policy(p: UpdatedProvider): CliPolicy {
     if (this.configOff(p)) return 'off';
     if (p === 'codex' && this.cfg.codexPath) return 'off';
     return this.st[p]?.policy ?? this.cfg.cliUpdates[p];
   }
 
-  private configOff(p: Provider): boolean {
+  private configOff(p: UpdatedProvider): boolean {
     return this.env.THREADBEAR_CLI_UPDATES === 'off' || this.cfg.cliUpdates[p] === 'off';
   }
 
@@ -268,7 +274,7 @@ export class CliUpdates {
           const jitter = Math.floor((this.d.random ?? Math.random)() * CHECK_JITTER_MS);
           this.schedule('check', this.cfg.cliUpdates.checkMinutes * 60_000 + jitter);
         } else if (name.startsWith('retry:')) {
-          const [, p, attempt] = name.split(':') as [string, Provider, string];
+          const [, p, attempt] = name.split(':') as [string, UpdatedProvider, string];
           const o = this.retryOptions[p] ?? {};
           delete this.retryOptions[p];
           this.startUpdate(p, o, Number(attempt));
@@ -277,7 +283,7 @@ export class CliUpdates {
     );
   }
 
-  private async runCheck(p: Provider, asked: boolean): Promise<void> {
+  private async runCheck(p: UpdatedProvider, asked: boolean): Promise<void> {
     await this.refreshInstalled();
     const policy = this.policy(p);
     if (policy === 'off' && !asked) return;
@@ -314,7 +320,7 @@ export class CliUpdates {
 
   // ---- updating
 
-  private startUpdate(p: Provider, o: UpdateOptions, attempt = 1): void {
+  private startUpdate(p: UpdatedProvider, o: UpdateOptions, attempt = 1): void {
     if (this.running[p] || this.stopped) return;
     const target = o.version ?? this.st[p]?.latestVersion;
     if (this.d.hooks.restartPending()) {

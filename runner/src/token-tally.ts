@@ -171,6 +171,8 @@ export class TokenTally {
     const seenRoots = new Set<string>();
     const seenFiles = new Set<string>();
     for (const account of this.accounts()) {
+      // OpenCode keeps its sessions in its own database, not transcript files.
+      if (account.provider === 'opencode') continue;
       const roots =
         account.provider === 'codex'
           ? [path.join(account.configDir, 'sessions'), path.join(account.configDir, 'archived_sessions')]

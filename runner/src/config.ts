@@ -79,6 +79,11 @@ export type Config = {
   codexPath?: string;
   codexArgs: string[]; // extra `codex app-server` arguments
   codexMainDir: string; // codex-main's CODEX_HOME
+  // The opencode binary OpenCode threads start (`opencode acp`), found on
+  // the usual install paths unless runner.json's opencodePath names one.
+  // Unset when there's none: then there's no OpenCode login. Threadbear
+  // never installs or updates it.
+  opencodePath?: string;
   tokenStatsLimitsFile: string; // Token Stats' limits.json, read only
   cliUpdates: CliUpdatesConfig;
   // Reads the CLIs' transcripts for the Usage panel's token counts
@@ -151,6 +156,7 @@ export type RunnerJson = {
   maxLiveCLIs?: number;
   codexPath?: string;
   codexArgs?: string[];
+  opencodePath?: string;
   cliUpdates?: Partial<CliUpdatesConfig>;
   accountNotes?: Record<string, string>;
   poolFolders?: Record<string, string[]>;
@@ -278,6 +284,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     ...(codexPath ? { codexPath: expandHome(codexPath) } : {}),
     codexArgs: Array.isArray(json.codexArgs) ? json.codexArgs.filter((a): a is string => typeof a === 'string') : [],
     codexMainDir: expandHome(env.THREADBEAR_CODEX_MAIN_DIR || '~/.codex'),
+    ...opencodePathFrom(env, json),
     tokenStatsLimitsFile: expandHome(
       env.THREADBEAR_TOKEN_STATS_LIMITS || '~/Library/Application Support/Token Stats/limits.json',
     ),
@@ -435,4 +442,24 @@ export function ensureHome(home: string): void {
 
 export function readToken(home: string): string {
   return fs.readFileSync(paths.token(home), 'utf8').trim();
+}
+
+// Where opencode usually lands (Homebrew on Apple silicon and Intel, its own
+// install script, npm's global bin), as a LaunchAgent's PATH has none of
+// them. THREADBEAR_OPENCODE_PATH=off (tests, dev runners that shouldn't
+// see it) turns OpenCode off.
+const OPENCODE_CANDIDATES = ['/opt/homebrew/bin/opencode', '/usr/local/bin/opencode', '~/.opencode/bin/opencode', '~/.local/bin/opencode'];
+
+function opencodePathFrom(env: NodeJS.ProcessEnv, json: RunnerJson): { opencodePath?: string } {
+  const set = nonEmpty(env.THREADBEAR_OPENCODE_PATH) ?? nonEmpty(json.opencodePath);
+  if (set === 'off') return {};
+  if (set) return { opencodePath: expandHome(set) };
+  const found = OPENCODE_CANDIDATES.map(expandHome).find((p) => {
+    try {
+      return fs.statSync(p).isFile();
+    } catch {
+      return false;
+    }
+  });
+  return found ? { opencodePath: found } : {};
 }

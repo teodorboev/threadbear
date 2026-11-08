@@ -10,12 +10,12 @@ import { createSdkMcpServer, tool } from '@anthropic-ai/claude-agent-sdk';
 import type { McpSdkServerConfigWithInstance } from '@anthropic-ai/claude-agent-sdk';
 import { z } from 'zod';
 import type { Runner } from './runner.ts';
-import type { Account, EffortLevel, PermissionMode, PersistedEvent, Project, Schedule, ThreadSummary } from './protocol.ts';
+import type { Account, EffortLevel, PermissionMode, PersistedEvent, Project, Provider, Schedule, ThreadSummary } from './protocol.ts';
 import type { ToolApprovalAnswer } from './adapters/types.ts';
 import { cardInput, tooLongForCard } from './tools.ts';
 import { usageLine } from './usage.ts';
 import { findPool, poolLine } from './pools.ts';
-import { AGENT_MESSAGE_PREFIX, EFFORT_LEVELS, MOVE_MESSAGE_PREFIX, sentByAgent } from './protocol.ts';
+import { AGENT_MESSAGE_PREFIX, EFFORT_LEVELS, MOVE_MESSAGE_PREFIX, providerTitle, sentByAgent } from './protocol.ts';
 import type { Scheduler } from './schedules.ts';
 import { MAX_CHECK_TIMEOUT_SECS } from './schedule-check.ts';
 import { checkDigest, type CheckCard } from './patch-trust.ts';
@@ -138,7 +138,7 @@ type Result = { content: { type: 'text'; text: string }[]; isError?: boolean };
 // model doesn't offer, with a note.
 const effortEnum = z.enum(EFFORT_LEVELS as unknown as [EffortLevel, ...EffortLevel[]]);
 
-const providerName = (a: Pick<Account, 'provider'>): string => (a.provider === 'codex' ? 'Codex' : 'Claude');
+const providerName = (a: Pick<Account, 'provider'>): string => providerTitle(a.provider);
 
 const ok = (text: string): Result => ({ content: [{ type: 'text', text }] });
 const fail = (text: string): Result => ({ content: [{ type: 'text', text }], isError: true });
@@ -188,8 +188,9 @@ export function buildThreadbearTools(
   schedules?: ScheduleControl,
   projects?: ProjectControl,
   appRestarts?: AppRestartControl,
-  // codex: the tools are for a Codex thread, whose end_turn comes just
-  // before its final answer rather than after it (needs.ts).
+  // codex: the tools are for a Codex (or OpenCode) thread, whose end_turn
+  // comes just before its final answer rather than after it (needs.ts):
+  // neither CLI has Claude's Stop hook.
   // bulletReplies: Settings > General; false has agents write a normal
   // message as the reply, with the bullets only for previews.
   // oneReply: Settings > General; end_turn carries the card and a
@@ -201,7 +202,7 @@ export function buildThreadbearTools(
   // gateway service needs signing in (connectors.ts, signInSignal).
   opts: {
     sleep?: (ms: number) => Promise<void>;
-    provider?: 'claude' | 'codex';
+    provider?: Provider;
     bulletReplies?: () => boolean;
     oneReply?: () => boolean;
     pocket?: () => PocketControl | undefined;
@@ -217,7 +218,7 @@ export function buildThreadbearTools(
     replyButtons?: () => boolean;
   } = {},
 ) {
-  const codex = opts.provider === 'codex';
+  const codex = opts.provider === 'codex' || opts.provider === 'opencode';
   const checks = opts.scheduleChecks?.() === true;
   const checkArg = (update: boolean): Record<string, z.ZodOptional<z.ZodTypeAny>> =>
     checks
@@ -495,7 +496,7 @@ export function buildThreadbearTools(
       `runner: ${runner} (read through Convex: messages and one line per tool call; tool output stays on that runner)`,
       `status: ${t.status}${t.needsYou ? ' (needs the user)' : ''}`,
       `folder: ${t.cwd} (on ${runner})`,
-      `account: ${t.accountId} (${t.provider === 'codex' ? 'Codex' : 'Claude'})`,
+      `account: ${t.accountId} (${providerTitle(t.provider)})`,
       `model: ${t.model ?? 'default'}`,
       t.snoozedUntil ? `snoozed until: ${t.snoozedUntil}` : '',
       t.archivedAt ? `archived: ${t.archivedAt}` : '',

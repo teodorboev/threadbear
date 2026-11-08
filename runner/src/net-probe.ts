@@ -17,6 +17,9 @@ const HOSTS: Record<Provider, string> = {
   claude: 'api.anthropic.com',
   // Codex logins are ChatGPT ones; its requests go to chatgpt.com.
   codex: 'chatgpt.com',
+  // OpenCode reaches many model providers (some local); its own Zen gateway
+  // stands in for them.
+  opencode: 'opencode.ai',
 };
 
 const PROBE_TIMEOUT_MS = 5_000;

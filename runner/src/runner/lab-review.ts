@@ -211,7 +211,7 @@ export const labReviewPart = {
     // Logins kept for certain folders never review anything else.
     const keptIds = new Set(pools.filter((p) => p.folders?.length).flatMap((p) => p.accountIds));
     const others = kept ? [kept] : pools.filter((p) => !p.folders?.length);
-    const other: Provider = rec.provider === 'codex' ? 'claude' : 'codex';
+    const other: Provider = rec.provider === 'claude' ? 'codex' : 'claude';
     const now = this.clock.now();
     const pick = (provider: Provider): Account | undefined => {
       for (const pool of others) {

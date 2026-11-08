@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { isEffortLevel, type Account, type EffortLevel, type ModelChoice } from './protocol.ts';
 import type { UsageStore } from './usage.ts';
@@ -84,7 +85,7 @@ export function isCodexLogin(dir: string): boolean {
 }
 
 export type DiscoveryConfig = Pick<Config, 'claudeMainDir' | 'claudeMainJson' | 'tokenStatsAccountsDir'> &
-  Partial<Pick<Config, 'codexMainDir' | 'accountNotes' | 'accountsDir'>>;
+  Partial<Pick<Config, 'codexMainDir' | 'accountNotes' | 'accountsDir' | 'opencodePath'>>;
 
 // claude-main is ~/.claude (its .claude.json sits at ~/.claude.json);
 // codex-main is ~/.codex. Token Stats' Accounts folder holds claude-N and
@@ -121,6 +122,9 @@ export function discoverAccounts(cfg: DiscoveryConfig): Account[] {
   for (const { id, dir } of [...codex, ...numbered('codex')]) {
     if (isCodexLogin(dir)) out.push(codexAccount(id, dir));
   }
+  // One OpenCode login when its binary is there: OpenCode keeps its own
+  // provider sign-ins (`opencode auth login`), which Threadbear never reads.
+  if (cfg.opencodePath) out.push(opencodeAccount(OPENCODE_CONFIG_DIR));
   for (const a of out) {
     const note = cfg.accountNotes?.[a.id];
     if (note) a.note = note;
@@ -144,6 +148,27 @@ function codexAccount(id: string, configDir: string): Account {
   return account;
 }
 
+export const OPENCODE_ACCOUNT_ID = 'opencode-main';
+const OPENCODE_CONFIG_DIR = path.join(os.homedir(), '.config', 'opencode');
+
+function opencodeAccount(configDir: string): Account {
+  const account: Account = { id: OPENCODE_ACCOUNT_ID, provider: 'opencode', title: 'OpenCode', configDir };
+  const model = readOpencodeModel(path.join(configDir, 'opencode.json'));
+  if (model) account.defaultModel = model;
+  return account;
+}
+
+// opencode.json's `model` ("provider/model"), the one OpenCode starts a
+// session on. Only that key is read.
+export function readOpencodeModel(file: string): string | undefined {
+  try {
+    const m = (JSON.parse(fs.readFileSync(file, 'utf8')) as { model?: unknown }).model;
+    return typeof m === 'string' && m.includes('/') ? m : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 // "Codex · <email>", so an app that only shows titles can tell codex-main
 // from a Claude login with the same address.
 function codexTitle(email: string | undefined, id: string): string {
@@ -154,6 +179,7 @@ function codexTitle(email: string | undefined, id: string): string {
 // settings.json, Codex's config.toml.
 function settingsModel(account: Account): string | undefined {
   if (account.provider === 'codex') return readCodexConfig(path.join(account.configDir, 'config.toml')).model;
+  if (account.provider === 'opencode') return readOpencodeModel(path.join(account.configDir, 'opencode.json'));
   return readSettingsModel(path.join(account.configDir, 'settings.json'));
 }
 
@@ -232,7 +258,7 @@ export class AccountRegistry {
     const id = this.usage.identityFor(account);
     if (id.email) out.email = id.email;
     if (id.plan) out.plan = id.plan;
-    out.title = out.provider === 'codex' ? codexTitle(out.email, out.id) : (out.email ?? out.id);
+    out.title = out.provider === 'codex' ? codexTitle(out.email, out.id) : out.provider === 'opencode' ? 'OpenCode' : (out.email ?? out.id);
     const usage = this.usage.usageFor(out);
     if (usage) out.usage = usage;
     return out;

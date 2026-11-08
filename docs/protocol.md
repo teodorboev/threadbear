@@ -88,10 +88,10 @@ upgrade with an `Authorization` header that's wrong is turned away with HTTP
 ## Types
 
 ```ts
-type Provider = "claude" | "codex"
+type Provider = "claude" | "codex" | "opencode"  // tolerate unknown values
 
 type Account = {
-  id: string            // "claude-main", "claude-1", "codex-main", "codex-1", ...
+  id: string            // "claude-main", "claude-1", "codex-main", "codex-1", "opencode-main", ...
   provider: Provider
   title: string         // Claude: the email when known, else the id. Codex:
                         // "Codex · <email>", so an app that only reads title
@@ -1051,7 +1051,11 @@ still `-32602`.)
 
 - Claude models are `opus`, `sonnet`, `haiku` and anything starting
   `claude-`. Codex models are those in a Codex account's `models`, or
-  anything starting `gpt-` before the list is known.
+  anything starting `gpt-` before the list is known. OpenCode models are
+  `<provider>/<model>` ids (`opencode/claude-sonnet-5-5`,
+  `ollama-cloud/glm-5.3`): those in the OpenCode account's `models`, or any
+  id with a `/` before the list is known. OpenCode models have no
+  `effortLevels`, so any effort on an OpenCode thread is dropped.
 - A model of the other provider, or a Codex id that isn't in the account's
   `models` once they're known, is replaced by the provider's default, with a
   `system.note` ("sonnet isn't a Codex model, so this thread uses

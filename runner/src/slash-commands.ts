@@ -119,6 +119,12 @@ export function planCommand(provider: Provider, cmd: ParsedCommand, skills: Read
     // ("/x isn't available in this environment").
     return CLAUDE_ELSEWHERE.has(name) ? { kind: 'note', text: `/${name} is part of Claude Code's terminal app. ${ELSEWHERE[name]}` } : { kind: 'cli' };
   }
+  if (provider === 'opencode') {
+    // OpenCode runs its own commands (the ones it lists) from the prompt text.
+    if (name === 'clear' || name === 'new') return { kind: 'clear' };
+    if (name === 'status' || name === 'context' || name === 'cost' || name === 'usage') return { kind: 'status' };
+    return { kind: 'cli' };
+  }
   if (name === 'compact' || name === 'review') return { kind: 'cli' };
   if (name === 'clear' || name === 'new') return { kind: 'clear' };
   if (name === 'status' || name === 'context' || name === 'cost' || name === 'usage') return { kind: 'status' };
