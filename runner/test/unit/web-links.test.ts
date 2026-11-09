@@ -73,6 +73,19 @@ function cpuMs(work: () => void): number {
   return (used.user + used.system) / 1000;
 }
 
+// The best of up to three tries, each on what `fresh` makes (a page is
+// cached once read, so a try on the same one would cost nothing). A check
+// run at background priority on a busy Mac's efficiency cores took 104 and
+// 123 ms for what takes 60 (9 Nov); a quadratic search takes seconds every try.
+function bestCpuMs<T>(fresh: () => T, work: (t: T) => void, bound: number): number {
+  let best = Infinity;
+  for (let i = 0; i < 3 && best >= bound; i++) {
+    const t = fresh();
+    best = Math.min(best, cpuMs(() => work(t)));
+  }
+  return best;
+}
+
 test('a work link that quotes a closed link finds nothing, an unclosed one is just words', () => {
   const own = [
     { seq: 1, role: 'user' as const, text: 'Go' },
@@ -123,13 +136,16 @@ test('a page full of long rows and links has a bounded cost', () => {
   // The worst a page of 80 rows can be: 40 rows of the 8,000 characters the
   // mirror keeps that every search reads to the end, then 40 messages of as
   // many different links as fit.
-  const page: { seq: number; role: 'user' | 'assistant' | 'tool'; text: string }[] = [{ seq: 0, role: 'user', text: 'Go' }];
-  for (let i = 1; i <= 40; i++) page.push({ seq: i, role: 'tool', text: 'z '.repeat(4000) });
-  for (let i = 41; i <= 80; i++) page.push({ seq: i, role: 'assistant', text: '' });
+  const fresh = () => {
+    const page: { seq: number; role: 'user' | 'assistant' | 'tool'; text: string }[] = [{ seq: 0, role: 'user', text: 'Go' }];
+    for (let i = 1; i <= 40; i++) page.push({ seq: i, role: 'tool', text: 'z '.repeat(4000) });
+    for (let i = 41; i <= 80; i++) page.push({ seq: i, role: 'assistant', text: '' });
+    return page;
+  };
   let found = 0;
-  const ms = cpuMs(() => {
+  const ms = bestCpuMs(fresh, (page) => {
     for (let m = 41; m <= 80; m++) for (let l = 0; l < 700; l++) if (findStep(`z q${m}-${l}`, m, page) !== undefined) found++;
-  });
+  }, 100);
   assert.equal(found, 0);
   assert.ok(ms < 100, `took ${ms.toFixed(0)} ms`);
   // Links that do find their step still do, on a fresh page.
