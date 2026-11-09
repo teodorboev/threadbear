@@ -21,6 +21,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { parseArgs } from 'node:util';
 import { ConvexAdminError, convexEnv, prodArgs, readConvexAdmin } from '../src/convex-admin.ts';
+import { Fail, stepRetryingNetwork } from './deploy-steps.mjs';
 
 const HELP = `deploy-backend.mjs: deploy convex/ and web/ at a commit to the runner's Convex deployment, if they changed.
 
@@ -40,7 +41,6 @@ const FUNCTION_PATHS = ['convex', 'convex.json', 'package.json', 'package-lock.j
 const SITE_PATHS = ['web', 'package.json', 'package-lock.json'];
 const EXPORT_PATHS = ['convex', 'convex.json', 'web', 'package.json', 'package-lock.json'];
 
-class Fail extends Error {}
 const say = (msg) => console.log(msg);
 
 function git(repo, args) {
@@ -178,25 +178,9 @@ function waitForOldLock(home) {
   }
 }
 
-// Runs a step with its output in a log file, printed only if it fails.
-function step(name, cmd, args, opts) {
-  process.stdout.write(`${name}... `);
-  const started = Date.now();
-  const logFile = path.join(os.tmpdir(), `threadbear-backend-${process.pid}-${name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}.log`);
-  const fd = fs.openSync(logFile, 'w');
-  const r = spawnSync(cmd, args, { ...opts, stdio: ['ignore', fd, fd] });
-  fs.closeSync(fd);
-  const secs = `${((Date.now() - started) / 1000).toFixed(1)}s`;
-  if (r.status === 0) {
-    say(`ok (${secs})`);
-    fs.rmSync(logFile, { force: true });
-    return;
-  }
-  say(`failed (${secs})`);
-  const lines = fs.readFileSync(logFile, 'utf8').trim().split('\n');
-  console.error(lines.slice(-30).join('\n'));
-  throw new Fail(`${name} failed; the whole output is in ${logFile}`);
-}
+// deploy-steps.mjs's step (its output in a log, printed if it fails), and
+// tried again if the network dropped: every step here is safe to repeat.
+const step = (name, cmd, args, opts) => stepRetryingNetwork(name, cmd, args, opts);
 
 function main(argv) {
   const { values: v } = parseArgs({

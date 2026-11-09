@@ -66,6 +66,30 @@ export function step(name, cmd, args, opts, io = {}) {
   throw new StepFailed(`${name} failed (${why}); the whole output is in ${logFile}`, logFile);
 }
 
+// A step whose output says the network dropped (a connection timed out or
+// was reset, DNS didn't answer). On 9 Nov the website upload's connection to
+// Convex's storage timed out once and failed the whole backend deploy.
+const NETWORK_DROP = /fetch failed|UND_ERR_CONNECT_TIMEOUT|UND_ERR_SOCKET|ETIMEDOUT|ECONNRESET|ECONNREFUSED|EAI_AGAIN|ENOTFOUND|ENETUNREACH|EHOSTUNREACH|socket hang up/;
+export function networkDropped(text) {
+  return NETWORK_DROP.test(text);
+}
+
+// step, with two more goes when it failed because the network dropped. Only
+// for steps that are safe to run again (an upload, a deploy). io.sleep for
+// tests.
+export function stepRetryingNetwork(name, cmd, args, opts, io = {}, { tries = 3, waitMs = 15_000 } = {}) {
+  const { say = console.log, sleep = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms) } = io;
+  for (let i = 1; ; i++) {
+    try {
+      return step(name, cmd, args, opts, io);
+    } catch (e) {
+      if (!(e instanceof StepFailed) || i >= tries || !networkDropped(tail(e.logFile, 200))) throw e;
+      say(`  the network dropped; trying again in ${waitMs / 1000}s (try ${i + 1} of ${tries})`);
+      sleep(waitMs);
+    }
+  }
+}
+
 // The full suite runs files in parallel on a Mac that's usually busy with
 // threads, so a test with a timing assumption can fail for no real reason
 // and hold the runner back from main. Files that failed get one more go, one

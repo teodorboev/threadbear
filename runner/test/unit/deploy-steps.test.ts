@@ -110,3 +110,33 @@ test('the smoke test waits longer for a release to listen while the Mac is overl
   assert.equal(steps.smokeTimedOut(9 * 60_000, 5.2), false);
   assert.equal(steps.smokeTimedOut(10 * 60_000 + 1, 5.2), true);
 });
+
+// 9 Nov: the website upload's connection to Convex's storage timed out once
+// (UND_ERR_CONNECT_TIMEOUT), failed the whole backend deploy and held the
+// runner off main. A network drop gets two more goes; anything else fails at once.
+const BLIP = 'Upload failed: [TypeError: fetch failed] {\n  [cause]: ConnectTimeoutError: Connect Timeout Error\n    code: \'UND_ERR_CONNECT_TIMEOUT\'\n}\n';
+
+test('stepRetryingNetwork: a network drop is tried again, and passes once the network is back', () => {
+  const { io, said, calls } = fakeIo([{ status: 1, output: BLIP }, { status: 0 }]);
+  const waits: number[] = [];
+  steps.stepRetryingNetwork('Uploading the website', '/opt/node/bin/npx', ['static-hosting', 'upload'], {}, { ...io, sleep: (ms: number) => waits.push(ms) });
+  assert.equal(calls.length, 2);
+  assert.equal(waits.length, 1);
+  assert.ok(said.some((s) => /network dropped/.test(s)), said.join('\n'));
+  assert.ok(said.at(-1)!.startsWith('ok'), said.join('\n'));
+});
+
+test('stepRetryingNetwork: three drops in a row still fail, with the last log', () => {
+  const { io, calls } = fakeIo([{ status: 1, output: BLIP }, { status: 1, output: BLIP }, { status: 1, output: BLIP }]);
+  assert.throws(
+    () => steps.stepRetryingNetwork('Uploading the website', '/opt/node/bin/npx', [], {}, { ...io, sleep: () => {} }),
+    (e: Error & { logFile: string }) => /Uploading the website failed/.test(e.message) && /fetch failed/.test(fs.readFileSync(e.logFile, 'utf8')),
+  );
+  assert.equal(calls.length, 3);
+});
+
+test('stepRetryingNetwork: a failure that is not the network fails the first time', () => {
+  const { io, calls } = fakeIo([{ status: 1, output: 'convex/threads.ts:12: Type error: x is not assignable\n' }]);
+  assert.throws(() => steps.stepRetryingNetwork('Deploying the Convex functions', '/opt/node/bin/npx', [], {}, { ...io, sleep: () => assert.fail('no wait') }), /failed/);
+  assert.equal(calls.length, 1);
+});
