@@ -16,7 +16,14 @@ import { pathToFileURL } from 'node:url';
 
 const RUNNER = path.join(import.meta.dirname, '..', '..');
 const FAKE_LAUNCHCTL = path.join(import.meta.dirname, 'fake-launchctl.mjs');
-const NODE = process.execPath;
+// install-runner.sh pins a Homebrew Cellar node as its opt/ link, so the
+// plist names that one.
+function stableNode(p: string): string {
+  const m = /^(.*)\/Cellar\/([^/]+)\/[^/]+\/bin\/node$/.exec(p);
+  const opt = m && path.join(m[1]!, 'opt', m[2]!, 'bin', 'node');
+  return opt && fs.existsSync(opt) ? opt : p;
+}
+const NODE = stableNode(process.execPath);
 const LABEL = 'com.mikerosoft.threadbear.runner.devtest';
 const TARGET = `gui/${process.getuid!()}/${LABEL}`;
 const ID_RE = /^\d{8}T\d{6}Z-[0-9a-f]{7,}(-dirty)?$/;
@@ -993,6 +1000,25 @@ test('install-runner.sh guards: sandbox labels, and not from inside its own thre
   assert.equal(r.status, 1, out(r));
   setBusy([]);
   assert.equal(launchctl('print', TARGET), 0, 'still installed');
+});
+
+test('install-runner.sh pins a Homebrew Cellar node as its opt/ link, which outlives brew upgrade', () => {
+  const brew = fs.mkdtempSync(path.join(os.tmpdir(), 'tb-brew-'));
+  try {
+    const cellarBin = path.join(brew, 'Cellar', 'node', '26.12.1', 'bin');
+    fs.mkdirSync(cellarBin, { recursive: true });
+    fs.symlinkSync(process.execPath, path.join(cellarBin, 'node'));
+    fs.mkdirSync(path.join(brew, 'opt'));
+    fs.symlinkSync(path.join('..', 'Cellar', 'node', '26.12.1'), path.join(brew, 'opt', 'node'));
+    const r = sh('install-runner.sh', ['--home', home, '--label', LABEL, '--port', '0', '--path', '/usr/bin:/bin', '--print'], { THREADBEAR_NODE: path.join(cellarBin, 'node') });
+    assert.equal(r.status, 0, out(r));
+    const opt = path.join(brew, 'opt', 'node', 'bin', 'node');
+    assert.ok(r.stdout.includes(`<string>${opt}</string>`), out(r));
+    assert.ok(r.stdout.includes(`<string>${path.join(brew, 'opt', 'node', 'bin')}:`), out(r));
+    assert.ok(!r.stdout.includes('Cellar'), out(r));
+  } finally {
+    fs.rmSync(brew, { recursive: true, force: true });
+  }
 });
 
 test('reinstalling checks everything first, builds from HEAD, and puts the old setup back if the new one fails', { timeout: 240_000 }, async () => {

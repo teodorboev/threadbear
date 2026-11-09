@@ -43,7 +43,8 @@
 #                  8797). A sandbox next to the real runner needs its own
 #                  --home and --label; its port defaults to 0, a free one.
 #   --node PATH    Node 24 binary to pin in the plist
-#                  (default: $THREADBEAR_NODE, else ~/.nvm/versions/node/v24.22.1/bin/node)
+#                  (default: $THREADBEAR_NODE, else ~/.nvm/versions/node/v24.22.1/bin/node;
+#                  a Homebrew Cellar path is pinned as its opt/ link)
 #   --runner-app DIR  where Threadbear Runner.app goes (default:
 #                  $THREADBEAR_RUNNER_APP_DIR, else ~/Applications/Threadbear
 #                  Runner.app, or <home>/runner/Threadbear Runner.app for a
@@ -103,6 +104,14 @@ done
 
 case "$DATA_HOME" in /*) ;; *) DATA_HOME="$PWD/$DATA_HOME" ;; esac
 DATA_HOME="${DATA_HOME%/}"
+
+# A Homebrew Node under Cellar/<formula>/<version> is deleted by the next
+# `brew upgrade`, and a runner pinned to it can't start node again: no
+# backend deploy, no release build, no restart (9 Nov). Pin the formula's
+# opt/ link instead, which Homebrew moves to each new version.
+if [[ "$NODE" =~ ^(.*)/Cellar/([^/]+)/[^/]+/bin/node$ ]] && [ -x "${BASH_REMATCH[1]}/opt/${BASH_REMATCH[2]}/bin/node" ]; then
+  NODE="${BASH_REMATCH[1]}/opt/${BASH_REMATCH[2]}/bin/node"
+fi
 
 # Same folder, even through a symlink (/tmp is /private/tmp).
 same_dir() {
