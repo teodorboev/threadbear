@@ -1,0 +1,8 @@
+.gradle/
+build/
+local.properties
+*.apk
+.kotlin/
+/shots/
+# Firebase app config: kept out of this public repo (app/build.gradle.kts).
+google-services.json

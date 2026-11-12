@@ -52,7 +52,6 @@ struct KeyboardSettings: View {
             .padding(.top, 8)
             .padding(.bottom, 14)
         }
-        .frame(height: 620)
         .onDisappear { ShortcutRecorder.shared.cancel() }
     }
 
@@ -95,7 +94,7 @@ private struct ShortcutRow: View {
                 }
                 cap(listening: listening)
             }
-            if listening, let question = Question(recorder.outcome) {
+            if listening, let question = ShortcutQuestion(recorder.outcome) {
                 HStack(spacing: 8) {
                     Text(question.text)
                         .foregroundStyle(.orange)
@@ -142,8 +141,9 @@ private struct ShortcutRow: View {
     }
 }
 
-/// The line under a row when the key pressed can't simply be used.
-private struct Question {
+/// The line under a row when the key pressed can't simply be used (and the
+/// automation's dump says it too).
+struct ShortcutQuestion {
     let text: String
     let canTake: Bool
 

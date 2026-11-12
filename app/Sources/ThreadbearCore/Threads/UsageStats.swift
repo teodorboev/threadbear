@@ -377,3 +377,55 @@ public struct LimitPace: Sendable, Equatable {
         return value + (kind == "five_hour" ? "% an hour" : "% a day")
     }
 }
+
+// MARK: Rolling week
+
+/// The weekly charts' line: the last seven days of readings, whichever
+/// week they were in, rather than only the current week. Mike, 11 Nov: a
+/// login whose week hadn't started since its reset (100% left, no reset
+/// time yet) drew an empty box, though the runner had the week before.
+/// The line breaks at each reset, so a jump back to full isn't drawn as a
+/// slope across the hours between two readings.
+public enum RollingWeek {
+    public static let span: TimeInterval = 7 * 86400
+    /// A reading this many points over the one before it is a reset.
+    /// Smaller rises are a reading being revised, and stay joined.
+    public static let resetRise: Double = 5
+
+    /// The readings from `now` minus a week to `now`, ending on what's left
+    /// now, cut into runs at each reset. `windowStart` is when the current
+    /// week began (its reset less a week), if known: the line is full there
+    /// by definition, whatever the readings around it say.
+    public static func runs(samples: [LimitSample], current: Double, windowStart: Date?, now: Date) -> [[LimitSample]] {
+        let from = now.addingTimeInterval(-span)
+        var points = samples.filter { $0.at >= from && $0.at < now }.sorted { $0.at < $1.at }
+        var breakAt: Date?
+        if let start = windowStart, start > from, start < now {
+            points = points.filter { $0.at < start } + [LimitSample(at: start, remainingPercent: 100)] + points.filter { $0.at > start }
+            breakAt = start
+        }
+        points.append(LimitSample(at: now, remainingPercent: current))
+        var runs: [[LimitSample]] = []
+        for point in points {
+            if let last = runs.last?.last, point.at != breakAt, point.remainingPercent - last.remainingPercent < resetRise {
+                runs[runs.count - 1].append(point)
+            } else {
+                runs.append([point])
+            }
+        }
+        return runs
+    }
+
+    /// Each midnight from `from` to `to`, for the chart's day lines.
+    public static func midnights(from: Date, to: Date, calendar: Calendar = .current) -> [Date] {
+        var out: [Date] = []
+        var day = calendar.startOfDay(for: from)
+        if day < from, let next = calendar.date(byAdding: .day, value: 1, to: day) { day = next }
+        while day <= to {
+            out.append(day)
+            guard let next = calendar.date(byAdding: .day, value: 1, to: day) else { break }
+            day = next
+        }
+        return out
+    }
+}

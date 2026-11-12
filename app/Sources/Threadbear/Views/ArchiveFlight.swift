@@ -53,12 +53,51 @@ enum ArchiveFlight {
     /// How long the last flight's picture took, for the perf run.
     private(set) static var lastPictureMs = 0.0
 
+    /// The last flight, for scripts (the dump's `flight`): where it started
+    /// and aimed, in window points from the top left, and once it's landed,
+    /// where the heading's box was then.
+    struct Record: Encodable {
+        var to: String
+        var thread: String?
+        var start: Rect
+        var end: Point?
+        var onHeading: Bool
+        var landed: Bool
+        var landedBox: Rect?
+
+        struct Rect: Encodable { var x, y, width, height: Double }
+        struct Point: Encodable { var x, y: Double }
+    }
+    private(set) static var lastFlight: Record? {
+        get {
+            // A heading that only turns up as the page lands (the first
+            // thread to hibernate) is measured the first time it's drawn after.
+            guard var record = lastRecord, record.landed, record.landedBox == nil else { return lastRecord }
+            record.landedBox = boxFrame(record.to == "archive" ? .archive : .hibernate)
+            return record
+        }
+        set { lastRecord = newValue }
+    }
+    private static var lastRecord: Record?
+    private static var flightSerial = 0
+
+    private static func boxFrame(_ destination: Destination) -> Record.Rect? {
+        let box = destination == .archive ? archiveBox : hibernateBox
+        return box.flatMap { box in box.window.map { topDown(box.convert(box.bounds, to: nil), in: $0) } }
+    }
+
+    /// A rectangle in window coordinates (upwards) as the dump's, from the top.
+    private static func topDown(_ rect: CGRect, in window: NSWindow) -> Record.Rect {
+        let height = window.contentView?.bounds.height ?? window.frame.height
+        return Record.Rect(x: rect.minX.rounded(), y: (height - rect.maxY).rounded(), width: rect.width.rounded(), height: rect.height.rounded())
+    }
+
     /// Starts a flight from `view` as it looks now, and fades `view` back
     /// in for the thread that replaces it. Calls `landed` at the end.
     /// False, with nothing started, when there's nothing to picture.
     /// `headingThere` says, for a hibernate, whether the Hibernating heading
     /// is already in the list (another thread is asleep or on its way).
-    static func launch(from view: NSView, to destination: Destination = .archive, headingThere: Bool = true, landed: @escaping @MainActor () -> Void) -> Bool {
+    static func launch(from view: NSView, to destination: Destination = .archive, headingThere: Bool = true, thread: String? = nil, landed: @escaping @MainActor () -> Void) -> Bool {
         let pictureStart = CACurrentMediaTime()
         guard let window = view.window, !view.isHiddenOrHasHiddenAncestor, view.bounds.width > 1, view.bounds.height > 1,
               let picture = picture(of: view) else { return false }
@@ -78,14 +117,25 @@ enum ArchiveFlight {
         CATransaction.setDisableActions(true)
         card.frame = view.convert(view.bounds, to: nil)
         overlay.layer.addSublayer(card)
+        flightSerial += 1
+        let serial = flightSerial
         CATransaction.setCompletionBlock {
             MainActor.assumeIsolated {
                 card.removeFromSuperlayer()
                 overlay.flightEnded()
+                if serial == flightSerial, var record = lastRecord {
+                    record.landed = true
+                    record.landedBox = boxFrame(destination)
+                    lastFlight = record
+                }
                 landed()
             }
         }
         let target = Juice.reduceMotion ? nil : target(in: window, to: destination, headingThere: headingThere)
+        let windowHeight = window.contentView?.bounds.height ?? window.frame.height
+        lastFlight = Record(to: destination == .archive ? "archive" : "hibernate", thread: thread, start: topDown(card.frame, in: window),
+                            end: target.map { Record.Point(x: $0.point.x.rounded(), y: (windowHeight - $0.point.y).rounded()) },
+                            onHeading: target?.onHeading ?? false, landed: false, landedBox: nil)
         if let target {
             let path = ArchiveFlightPath(start: card.position, end: target.point, swing: zoomed(destination.swing), onHeading: target.onHeading, style: destination.style)
             card.add(flight(along: path, duration: destination.duration), forKey: "flight")
@@ -368,8 +418,24 @@ extension ArchiveFlight {
 extension EnvironmentValues {
     /// Set on the Archived heading only: how many flights have landed in
     /// it, so its box bounces at each, and where the flights aim.
-    @Entry var archiveLandings: Int? = nil
+    // Written out rather than @Entry: SwiftUI's macros ship with Xcode
+    // only, and this builds with the command line tools too.
+    var archiveLandings: Int? {
+        get { self[ArchiveLandingsKey.self] }
+        set { self[ArchiveLandingsKey.self] = newValue }
+    }
     /// The same for the Hibernating heading's moon, which also stirs when a
     /// row that wasn't open goes to sleep.
-    @Entry var hibernateLandings: Int? = nil
+    var hibernateLandings: Int? {
+        get { self[HibernateLandingsKey.self] }
+        set { self[HibernateLandingsKey.self] = newValue }
+    }
+}
+
+private struct ArchiveLandingsKey: EnvironmentKey {
+    static var defaultValue: Int? { nil }
+}
+
+private struct HibernateLandingsKey: EnvironmentKey {
+    static var defaultValue: Int? { nil }
 }

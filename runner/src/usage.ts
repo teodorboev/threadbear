@@ -546,8 +546,13 @@ export function usageLine(u: AccountUsage | undefined, now: number = Date.now())
 
 // ---- picking an account for a new thread ----
 
-// Under this much room an account isn't picked for a new thread.
-export const MIN_ROOM_PERCENT = 10;
+// Under this much room an account isn't picked for a new thread, and a
+// thread on it moves before its next turn. 1%, not more: what's left on a
+// login when its week resets is lost, and a turn that runs it dry moves to
+// another login and carries on by itself (runner/pools.ts, ranDry), so a
+// higher floor only stranded that much of every login each week. Mike, 12
+// Nov 2026: it was 10%, and that 10% was going to waste on each login.
+export const MIN_ROOM_PERCENT = 1;
 
 // The tighter of the 5-hour and weekly windows, or the only one there is.
 // undefined when neither is known.
@@ -559,7 +564,7 @@ export function accountRoom(account: Account): number | undefined {
 
 // Which account a new thread starts on when none is named: the one with the
 // most room, among the last-used account's provider so a Claude habit stays
-// on Claude. Skips blocked accounts, ones under 10%, and ones with a note
+// on Claude. Skips blocked accounts, ones under MIN_ROOM_PERCENT, and ones with a note
 // (a login noted "Work only" is kept for that work).
 // A tie, or a last-used account with no usage known, stays on the last-used
 // one; so does a list where every candidate is skipped. The app's

@@ -7,7 +7,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { tmpDir } from '../helpers/fakes.ts';
+import { makeHarness, tmpDir } from '../helpers/fakes.ts';
 import { wakeNote, WAKE_NOTE_MAX } from '../../src/wake-note.ts';
 import { toThreadDoc, toMessageDoc, WokeRows, type MessageDoc } from '../../src/sync.ts';
 import { redactSecrets, scrubDoc, scrubText } from '../../src/redaction.ts';
@@ -282,4 +282,22 @@ test("codex 8 Nov: spaces at the end of a check's output can't pull a password's
   fs.writeFileSync(path.join(dir, 'a'), `log\n{"password":"first-word ${PASSWORD}"}\n`);
   const s = await runCheck({ command: `cat a; for i in 1 2 3 4; do printf '%3990s' ''; sleep 0.05; done`, cwd: dir, home: dir, scheduleId: 'pad2', timeoutMs: 10_000 });
   assert.ok(!leaks(s.output), JSON.stringify(s.output));
+});
+
+// Daybreak, 10 Nov (finding 75): the librarian's brief was cut with a plain
+// slice(0, 600), so a cut just before a connection URL's "@" left the whole
+// password, where neither the URL rule nor a known value's cut-off check saw
+// it. setBrief's cut is secret-aware now.
+test("the librarian's brief is never cut through a secret", () => {
+  const h = makeHarness();
+  const { thread } = h.runner.create({ text: 'Go', accountId: 'claude-3' });
+  const known = new Scrubber({ env: {}, folders: false });
+  known.known.add(URL);
+  const at = URL.indexOf('@');
+  for (let shift = -3; shift <= 3; shift++) {
+    h.runner.setBrief(thread.id, `${'b'.repeat(600 - at + shift - 1)} ${URL} and more`);
+    const brief = h.runner.highlights(thread.id).brief!.text;
+    assert.ok(brief.length <= 600, 'the brief is still at most 600');
+    for (const sent of [scrubText(brief), scrubText(`${known.safeText(brief)}\n- more`)]) assert.ok(!leaks(sent), `shift ${shift}: ${sent.slice(-80)}`);
+  }
 });

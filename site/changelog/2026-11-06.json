@@ -1,0 +1,165 @@
+{
+  "release": "2026-11-06",
+  "highlights": [
+    {
+      "kind": "added",
+      "title": "Browse folders in the side pane",
+      "text": "A link to a folder now opens it in the side pane, as a list with sortable columns or as icons with thumbnails, much like the Finder. Double-click to go in or preview a file, press Space for Quick Look and ⌘↑ to go up, and drag files out to other apps.",
+      "media": {
+        "type": "clip",
+        "src": "folder-browser.mp4",
+        "poster": "folder-browser-2.webp",
+        "width": 640,
+        "height": 1640,
+        "alt": "The side pane opens a folder as a list, re-sorts it by date, folds open the img folder, goes into it and switches to icons showing thumbnails of the bear pictures, then goes back up to the parent folder."
+      }
+    },
+    {
+      "kind": "added",
+      "title": "A Runners panel on the left-hand rail",
+      "text": "With more than one runner, the rack icon near the foot of the rail lists each machine, whether it's online, the release it's on and the threads it's running. Click a runner's name for its CPU, memory and disk.",
+      "media": {
+        "type": "clip",
+        "src": "runners-panel.mp4",
+        "poster": "runners-panel-2.webp",
+        "width": 880,
+        "height": 840,
+        "alt": "The Runners panel opens on the left under the thread list, showing m5 and bruce online with their running threads; clicking bruce shows its CPU, memory (orange, 7.4 of 8 GB) and disk bars, then m5's open too."
+      }
+    },
+    {
+      "kind": "changed",
+      "title": "Paste a thread's id to link to it",
+      "text": "Use Copy thread id, then paste it into another thread's message box: it goes in as a chip with that thread's title, and clicking the chip in your sent message opens the thread.",
+      "media": {
+        "type": "clip",
+        "src": "paste-thread-chip.mp4",
+        "poster": "paste-thread-chip.webp",
+        "width": 1420,
+        "height": 1190,
+        "alt": "A thread's id pasted into the message box turns into a chip reading Tidy the imports in the uploader, and the sent message keeps the chip in its bubble."
+      }
+    },
+    {
+      "kind": "changed",
+      "title": "A cloned repo's hooks wait for you",
+      "text": "When a folder's own Claude Code settings bring hooks, MCP servers or a different API address, Claude starts without them until you trust them. A Hooks to trust chip above the message box opens Patches, which lists every file trusting would cover.",
+      "media": {
+        "type": "clip",
+        "src": "hooks-to-trust.mp4",
+        "poster": "hooks-to-trust.webp",
+        "width": 1676,
+        "height": 1640,
+        "alt": "A Hooks to trust chip sits above the message box; Patches opens in the side pane with the folder's Claude Code settings file, the hook script it also trusts, and a Trust button, and pressing Trust removes the chip."
+      }
+    },
+    {
+      "kind": "changed",
+      "title": "Logos in the model picker",
+      "text": "The model picker shows the Anthropic and Codex logos beside their models and over each pool, and the model chip under the message box leads with the logo too.",
+      "media": {
+        "type": "image",
+        "src": "model-picker-logos.webp",
+        "width": 904,
+        "height": 832,
+        "alt": "The model picker above the message box: a rail of pools with the Anthropic or Codex logo over each name, model rows each with the Anthropic logo in a tile, and the model chip below leading with the logo."
+      }
+    },
+    {
+      "kind": "changed",
+      "title": "Usage says what each pace means",
+      "text": "Each limit in the Usage panel now says how long before its reset it would run out at this rate, about how much of it will go unused, or that it's on track. The charts also fill the panel's width now.",
+      "media": {
+        "type": "image",
+        "src": "usage-pace.webp",
+        "width": 540,
+        "height": 1500,
+        "alt": "The Usage panel's Claude logins with full-width charts and pace lines, including About 60% will go unused, resets Sat 7:36 am, and Runs out Fri 9:38 am, 4 hours before it resets."
+      }
+    },
+    {
+      "kind": "added",
+      "title": "A card about pools",
+      "text": "The first time a pool gets a second login, a card by the message box explains what pools do.",
+      "media": {
+        "type": "clip",
+        "src": "pools-intro-card.mp4",
+        "poster": "pools-intro-card.webp",
+        "width": 1880,
+        "height": 620,
+        "alt": "A Pools card appears beside the highlighted message box, saying a thread moves to another login in its pool when the one it's on nears its limit, then closes with Done."
+      }
+    },
+    {
+      "kind": "added",
+      "title": "Headings in patch list panels",
+      "text": "A list panel from a patch can group its rows under headings, end a row with a date or count, and show two lines of detail.",
+      "media": {
+        "type": "clip",
+        "src": "list-panel-groups.mp4",
+        "poster": "list-panel-groups.webp",
+        "width": 644,
+        "height": 900,
+        "alt": "The side pane switches from Highlights to a Previews list panel with rows under This branch and Elsewhere, times such as 4m and 2d at the ends of rows, and Home's detail wrapping onto a second line."
+      }
+    },
+    {
+      "kind": "changed",
+      "title": "Zoom into a big picture when comparing",
+      "text": "In the window for comparing options, scroll or pinch to zoom, drag to move around, and jump about with a small map of the whole page.",
+      "media": {
+        "type": "clip",
+        "src": "compare-zoom-minimap.mp4",
+        "poster": "compare-zoom-minimap.webp",
+        "width": 1200,
+        "height": 1096,
+        "alt": "A full-length landing page in the compare window zooms in from fit to readable size, is dragged down, then jumps to the top and the bottom by clicking a small map of the whole page at the right."
+      }
+    },
+    {
+      "kind": "changed",
+      "title": "Settings explain themselves",
+      "text": "Each Settings section has an ⓘ that says what it's for and what to ask your agent if you want it changed.",
+      "media": {
+        "type": "clip",
+        "src": "settings-info-tips.mp4",
+        "poster": "settings-info-tips.webp",
+        "width": 1440,
+        "height": 1244,
+        "alt": "In Settings, General, clicking the ⓘ beside Notifications, New threads and Code review opens a note on what each does, ending with what to ask your agent."
+      }
+    }
+  ],
+  "added": [
+    "Archive on a done card asks how it went: Worked, Didn't work, Not needed, or Okey-dokey for a thread that's simply done (Mac, iPhone and website)",
+    "A thread that's waiting on other threads hibernates until they finish, then carries on with what they said, and its row says Waiting on and which",
+    "The Browser panel (the globe on a thread's right-hand rail) shows the pages an agent opens through BrowserBear in your own Chrome profile, and you can click and type in them there; when the agent needs you to sign in or approve something, the page opens in the panel with Your turn and Done",
+    "Run a schedule on a pool, so each run starts on whichever login has room",
+    "The website has a rail down the left for Threads, Scheduled, Projects, Runners and Usage, where you can see each runner's CPU, memory and disk, and Pause or Run now a schedule",
+    "Run Threadbear's runner on a Linux server, where it installs as a background service"
+  ],
+  "changed": [
+    "Threads on your other Macs and servers open from this Mac without pairing it with each one first",
+    "Pools are shared between all your runners, every machine sees each login's latest usage, and new threads start on the login whose week resets soonest, so less of each week goes unused",
+    "HTML files previewed in the side pane show as static pages: their scripts don't run, and they can load only the styles, pictures and fonts they name",
+    "A link to a Tandem project opens it in Tandem instead of the side pane",
+    "A thread's ... menu has Open on the web",
+    "Agents can change a scheduled thread's login, folder and model",
+    "The website's sidebar can be resized, every section folds and shows its count, the inbox sorts, and search and filters reach archived threads too",
+    "Pictures you paste into a message now show on the website, and a project's page there lists all its threads, archived ones too",
+    "Threadbear sends and reads far less in your Convex backend, and scrubs keys and passwords from what it sends",
+    "The homepage plays clips of the app, installing is copying one prompt into Claude Code or Codex, and the code is now public on GitHub"
+  ],
+  "fixed": [
+    "Icons now show in menus, which macOS had been hiding",
+    "Clicking a picture in the side pane no longer crashes the app",
+    "A thread whose last turn was very long no longer opens halfway down with nothing above it",
+    "A message sent while the runner restarts now waits and goes through, rather than bouncing back to the message box with an error",
+    "The app no longer freezes for several seconds while a card of questions or a long row of action buttons is showing",
+    "On the iPhone, very large pictures and long GIFs are scaled down and capped, so a thread full of them can't run the phone out of memory",
+    "A runner whose key the backend turns down now says so in the app and in `tb status`, and picks up a new key once you add one",
+    "Setting up a fork copes with an expired GitHub login, and the dry run lists your Convex teams",
+    "Closed several ways a cloned repo, a link, a shared page or another machine could get past an approval check or reach your files, and the iPhone now asks before any pairing or Quick Ask link changes which server it uses",
+    "A phone you've revoked stops getting notifications"
+  ]
+}

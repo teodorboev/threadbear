@@ -83,7 +83,7 @@ test('a tail past what is held asks for the gap; one that overlaps just merges',
 });
 
 type Call = { kind: string; fn: string; args: Record<string, unknown> };
-type HarnessOpts = { online?: boolean; row?: () => RelayThreadRow & { share?: unknown }; apiVersion?: number; queueFails?: boolean; uploadMs?: number };
+type HarnessOpts = { online?: boolean; row?: () => RelayThreadRow & { share?: unknown }; apiVersion?: number; queueFails?: boolean; uploadMs?: number; rows?: RelayRow[] };
 function harness(opts: HarnessOpts = {}) {
   const calls: Call[] = [];
   const subs = new Map<string, { args: Record<string, unknown>; onUpdate: (v: unknown) => void; closed: boolean }[]>();
@@ -101,7 +101,7 @@ function harness(opts: HarnessOpts = {}) {
   const relay = new Relay({
     source: () => ({
       key: 'owner',
-      apiVersion: opts.apiVersion ?? 63,
+      apiVersion: opts.apiVersion ?? 68,
       upload: async (url, bytes, mediaType) => {
         if (opts.uploadMs) clock.advance(opts.uploadMs);
         uploads.push([url, Buffer.from(bytes).toString(), mediaType]);
@@ -110,7 +110,7 @@ function harness(opts: HarnessOpts = {}) {
       post: async (kind, fn, args) => {
         calls.push({ kind, fn, args });
         if (fn === 'relay:remoteThread') return opts.row?.() ?? idle;
-        if (fn === 'relay:remoteMessages') return { messages: rows, hasMore: false };
+        if (fn === 'relay:remoteMessages') return { messages: opts.rows ?? rows, hasMore: false };
         if (fn === 'relay:queueCommand') {
           if (opts.queueFails) throw new Error('Convex is away');
           return `cmd${++commandN}`;
@@ -639,4 +639,96 @@ test('hibernating in words: done before the row has its time still answers it as
   assert.equal((h.relay as any).summary(T).snoozedUntilRestart, true);
   h.remote.threads[0]!.snoozedUntil = at(7200);
   assert.equal((h.relay as any).summary(T).snoozedUntil, at(7200));
+});
+
+// docs/parity.md showed reply buttons and slash commands working from the
+// phone and not from the Mac on a Hetzner or bruce thread. The relay answers
+// buttons.list from the rows' buttons (backend API 68), and presses and lists
+// with the commands the phone sends.
+test("a thread there's reply buttons come from its rows, and pressing one presses it there", async () => {
+  const withButtons: RelayRow[] = [
+    ...rows,
+    { seq: 16, role: 'assistant', text: '[Fix it](button:abcd1234) [Tell them](button:efgh5678)', turn: 'bbbb2222', at: at(22), buttons: [
+      { id: 'abcd1234', title: 'Fix it', kind: 'start', target: 'threadbear' },
+      { id: 'efgh5678', title: 'Tell them', kind: 'send', target: 'Deploy', failed: 'that thread has gone' },
+    ] },
+  ];
+  const h = harness({ rows: withButtons });
+  const listed = (await h.relay.call(T, 'buttons.list', { threadId: T })) as { buttons: Record<string, unknown>[] };
+  assert.deepEqual(listed.buttons.map((b) => [b.id, b.title, Boolean(b.start), Boolean(b.send), (b.failed as { error?: string } | undefined)?.error]), [
+    ['abcd1234', 'Fix it', true, false, undefined],
+    ['efgh5678', 'Tell them', false, true, 'that thread has gone'],
+  ]);
+  // Never the brief: the rows don't have it.
+  assert.equal((listed.buttons[0]!.start as { text: string }).text, '');
+  const press = h.relay.call(T, 'buttons.press', { threadId: T, buttonId: 'abcd1234' });
+  await new Promise((r) => setTimeout(r, 5));
+  assert.deepEqual(h.calls.find((c) => c.fn === 'relay:queueCommand')!.args, { key: 'owner', runnerId: 'bruce', threadId: T, kind: 'press', args: { buttonId: 'abcd1234' } });
+  h.subs.get('relay:commandState')!.at(-1)!.onUpdate({ state: 'taken' });
+  h.subs.get('relay:commandState')!.at(-1)!.onUpdate({ state: 'done', threadId: 'started1' });
+  const pressed = (await press) as { button: { id: string; pressed?: { threadId: string } } };
+  assert.equal(pressed.button.id, 'abcd1234');
+  assert.equal(pressed.button.pressed?.threadId, 'started1');
+  // A press that failed there says why.
+  const failing = h.relay.call(T, 'buttons.press', { threadId: T, buttonId: 'efgh5678' });
+  await new Promise((r) => setTimeout(r, 5));
+  h.subs.get('relay:commandState')!.at(-1)!.onUpdate({ state: 'failed', note: 'Thread not found' });
+  await assert.rejects(failing, /Thread not found/);
+});
+
+test("a thread there's slash commands are that runner's list", async () => {
+  const h = harness();
+  const list = h.relay.call(T, 'threads.commands', { threadId: T });
+  await new Promise((r) => setTimeout(r, 5));
+  assert.equal(h.calls.find((c) => c.fn === 'relay:queueCommand')!.args.kind, 'slashCommands');
+  h.subs.get('relay:commandState')!.at(-1)!.onUpdate({ state: 'done', result: [{ name: 'review', description: 'Review the diff' }] });
+  assert.deepEqual(await list, { commands: [{ name: 'review', description: 'Review the diff' }] });
+});
+
+test('an older backend says buttons and slash commands need it updated, and queues nothing', async () => {
+  const h = harness({ apiVersion: 67 });
+  await assert.rejects(h.relay.call(T, 'buttons.press', { threadId: T, buttonId: 'abcd1234' }), /backend is updated/);
+  await assert.rejects(h.relay.call(T, 'threads.commands', { threadId: T }), /backend is updated/);
+  assert.deepEqual(await h.relay.call(T, 'buttons.list', { threadId: T }), { buttons: [] });
+  assert.equal(h.calls.filter((c) => c.fn === 'relay:queueCommand').length, 0);
+});
+
+// The done card's loose ends ride on the thread's row in the remote list
+// (overlay), for the relay's own turn.completed seq, and only when the row
+// says they're from that turn: a newer turn's row can come before its
+// messages, and its loose ends aren't the older card's (Codex's review, 12 Nov).
+test("a thread's loose ends go on its row in the list, for its own turn's card only", async () => {
+  const ends = [{ kind: 'scheduled', text: 'Look at how the experiment went', at: '2026-11-15T01:30:00.000Z' }];
+  const doneRows: RelayRow[] = [
+    { seq: 3, role: 'user', text: 'Check it in', turn: 'aaaa1111', at: at(0) },
+    { seq: 6, role: 'assistant', text: 'Checked it in.', turn: 'aaaa1111', at: at(2) },
+  ];
+  for (const [cardTurn, shown] of [['aaaa1111', true], ['bbbb2222', false], [undefined, false]] as const) {
+    const h = harness({ rows: doneRows, row: () => ({ ...idle, looseEnds: ends, ...(cardTurn ? { cardTurn } : {}) }) });
+    const { events } = (await h.relay.call(T, 'threads.events', { threadId: T })) as { events: { seq: number; type: string }[] };
+    const end = events.filter((e) => e.type === 'turn.completed').at(-1)!;
+    const listed = h.relay.overlay(h.remote).threads.find((t) => t.threadId === T) as { looseEnds?: { seq: number; ends: unknown[] } };
+    if (shown) assert.deepEqual(listed.looseEnds, { seq: end.seq, ends }, String(cardTurn));
+    else assert.equal(listed.looseEnds, undefined, String(cardTurn));
+  }
+});
+
+// A plan answered while this Mac wasn't looking, with more than a tail's
+// rows since: its decision is on a row the tail doesn't cover, so it's read
+// again (Codex's review, 12 Nov).
+test("a waiting plan older than the tail is read again, and its decision reaches the app", async () => {
+  const plan: RelayRow = { seq: 4, role: 'assistant', text: '# Bots', plan: true, turn: 'aaaa1111', at: at(1) };
+  const held = [{ seq: 2, role: 'user' as const, text: 'Plan it', turn: 'aaaa1111', at: at(0) }, plan];
+  const backend = { rows: held as RelayRow[] };
+  const h = harness({ rows: backend.rows });
+  h.subscribed.add(T);
+  await h.relay.call(T, 'threads.subscribe', { threadId: T, afterSeq: 0 });
+  // Answered there: its row now says so, and twenty rows have come since.
+  backend.rows.splice(0, backend.rows.length, { ...plan, planDecision: 'go' });
+  const tail: RelayRow[] = Array.from({ length: 15 }, (_, i) => ({ seq: 30 + i, role: 'tool' as const, text: `step ${i}`, toolKind: 'read', turn: 'aaaa1111', at: at(10 + i) }));
+  const sub = h.subs.get('relay:remoteTail')![0]!;
+  sub.onUpdate({ messages: tail, hasMore: false });
+  await new Promise((r) => setTimeout(r, 10));
+  const sent = (h.published as { method: string; params: { event?: { type: string; decision?: string } } }[]).map((n) => n.params.event).filter(Boolean);
+  assert.ok(sent.some((e) => e!.type === 'plan.resolved' && e!.decision === 'go'), JSON.stringify(sent.map((e) => e!.type)));
 });

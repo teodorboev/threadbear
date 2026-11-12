@@ -45,4 +45,26 @@ final class TranscriptHostTests: XCTestCase {
         XCTAssertTrue(controller.scrollView.window === main)
         XCTAssertEqual(controller.scrollView.frame, host.bounds)
     }
+
+    /// Closing the Terminal (⌘J) rebuilds the dock: the new host takes the
+    /// transcript, the outgoing one takes it back on its last update, then
+    /// leaves the window. The transcript has to end up in the new host with
+    /// no further update, or the thread shows blank (11 Nov).
+    func testAHostLeavingTheWindowHandsTheTranscriptOn() {
+        let controller = TranscriptController()
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 600, height: 400))
+        let main = window(container)
+        let outgoing = TranscriptHost(controller: controller, ghost: false)
+        container.addSubview(outgoing)
+        let incoming = TranscriptHost(controller: controller, ghost: false)
+        container.addSubview(incoming)
+        XCTAssertTrue(controller.scrollView.superview === incoming)
+
+        outgoing.claim()
+        XCTAssertTrue(controller.scrollView.superview === outgoing)
+        outgoing.removeFromSuperview()
+
+        XCTAssertTrue(controller.scrollView.superview === incoming, "the transcript left with the outgoing host")
+        XCTAssertTrue(controller.scrollView.window === main)
+    }
 }

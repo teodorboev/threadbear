@@ -11,10 +11,11 @@ import { Projects } from '../projects.ts';
 import { threadEnv } from '../restart.ts';
 import { paths } from '../config.ts';
 import { isDirectory } from '../fsutil.ts';
-import { commandFiles, isPatchFile, namedPaths, patchHash, scanModule, type ClaudeVerdict, type PatchHash } from '../patch-trust.ts';
+import { commandFiles, commandFilesOutside, isPatchFile, namedPaths, patchHash, scanModule, type ClaudeVerdict, type PatchHash } from '../patch-trust.ts';
 import type { AgentWrite } from '../adapters/types.ts';
 import { CLAUDE_PATCH_ID, claudeCommands, claudeOptions, settingsCommands, settingsNamedPaths, type ClaudeOptions } from '../claude-trust.ts';
 import { canonicalPath, runsAsCodeByName, type CodeWrite } from '../code-writes.ts';
+import { patchCommands, sayValue } from '../patch-commands.ts';
 import type { PatchInfo } from '../protocol.ts';
 import { actionRunProblem, automaticTrust, isInside, EMPTY_PATCH_SET, PATCH_EXTENSIONS, patchDirs, projectRoots, hookApplies, loadPatchSet, applyLive, hasLive, projectPanels, renderListPanel, renderPanel, runCommand, type CommandOutcome, type PanelRender, type PatchSet, type ProjectFolder, projectPatchFiles } from '../patches.ts';
 import { liveCommandEnv } from '../shell-allowlist.ts';
@@ -28,10 +29,12 @@ import { safeStart } from '../safe-cut.ts';
 
 // What a patch that loads without a hash makes code, its commands run from
 // `from` (writeRunsAsCode): every file it reaches, as canonical lower-case
-// paths, and `all` when something it can run can't all be followed. Kept until
-// anything its hash was made from changes, and for a few seconds at most, as
-// what a command reaches from that folder isn't in that hash.
-type CodeScan = { at: number; h: PatchHash; all: boolean; files: Set<string> };
+// paths, and `all` when something it can run can't all be followed, with
+// `why` saying what, for the thread and Patches. Kept until anything its
+// hash was made from changes, and for a few seconds at most, as what a
+// command reaches from that folder isn't in that hash.
+export type UnsureWhy = { file: string; line?: number; command?: string; problem: string; fix?: string };
+type CodeScan = { at: number; h: PatchHash; all: boolean; files: Set<string>; why?: UnsureWhy };
 const scans = new Map<string, CodeScan>();
 // The files in a Claude login's folder that hold its user settings.
 const LOGIN_SETTINGS = /^(settings(\..*)?\.json|\.claude\.json)$/i;
@@ -40,9 +43,10 @@ const SCAN_TTL_MS = 10_000;
 // in the default export where `url` would say so. Run as a command it's one
 // file by that very name, which `files` has: only characters a shell neither
 // splits at nor expands, so no `?`, `[`, `;` or `$`, and no `..` to leave the
-// folder by (Codex's review).
+// folder by (Codex's review). Only for a file read the old way (patchCommands
+// couldn't read it), where every string is taken for a command.
 const PLAIN_WEB_ADDRESS = /^https?:\/\/(?!.*\.\.)[\w.~/%:-]*$/i;
-function codeOfUnhashedPatch(file: string, from: string, now: number): CodeScan {
+export function codeOfUnhashedPatch(file: string, from: string, now: number): CodeScan {
   const key = `${file}\0${from}`;
   const hit = scans.get(key);
   if (hit && now - hit.at < SCAN_TTL_MS && hit.h.looked.same()) return hit;
@@ -51,35 +55,111 @@ function codeOfUnhashedPatch(file: string, from: string, now: number): CodeScan 
   const add = (f: string) => files.add(canonicalPath(f).toLowerCase());
   // Code it can't follow: any edit might be what it runs.
   let all = Boolean(h.incomplete);
+  let why: UnsureWhy | undefined = h.incomplete ? { file, problem: h.incomplete } : undefined;
+  const unsure = (w: UnsureWhy) => {
+    all = true;
+    why ??= w;
+  };
   for (const f of [file, h.root, ...h.deps.map((d) => d.path), ...h.unnamed]) add(f);
   const worktreeReach = new Set<string>();
   // The folder holding its `.threadbear/patches`, as a worktree's commands run from there.
   const patchFolder = path.dirname(path.dirname(path.dirname(file)));
+  // Each file's commands; if any file can't be read that way, none is: a
+  // function it hands on (`export { execSync as run } from ...`) can be
+  // called from another by a name nothing here knows (Codex's review).
+  const reads = new Map<string, ReturnType<typeof patchCommands>>();
+  for (const [module, bytes] of h.code) {
+    const rootPath = canonicalPath(h.root);
+    const own = canonicalPath(module) === rootPath && ![...h.edges.values()].some((to) => [...to.values()].some((f) => canonicalPath(f) === rootPath));
+    try {
+      reads.set(module, patchCommands(bytes.toString('utf8'), module, own));
+    } catch (e) {
+      reads.set(module, { unknown: { line: 1, why: `Threadbear couldn't read it (${e instanceof Error ? e.message : String(e)})` } });
+    }
+  }
+  const oneUnknown = [...reads.entries()].find(([, r]) => 'unknown' in r);
+  for (const [module, r] of reads) {
+    if ('unknown' in r && r.unknown.hard) unsure({ file: module, line: r.unknown.line, problem: `${r.unknown.why}, so Threadbear can't tell what it runs`, fix: "Write the patch's actions, hooks and worktree out in its default export, so Threadbear can see their commands." });
+  }
   for (const [module, bytes] of h.code) {
     const text = bytes.toString('utf8');
     for (const n of namedPaths(text)) add(path.resolve(from, n));
-    // Each string in it as a command run from where its commands run: what
-    // that reaches, whatever it is. A problem means there may be more it
-    // runs, unless the patch file's own default export has it as something
-    // else (scanModule). A `worktree` setup and check don't count either. Setup
-    // runs what's committed, in a new worktree, and worktree-setup.sh won't
-    // install from an uncommitted package.json in the main checkout; the check
-    // runs when a land is asked for. So neither runs what an agent just wrote
-    // until it has got past a step that's asked about.
     const scan = scanModule(text, module);
     // Imported by anything it imports, its default export has a name after all.
     const rootPath = canonicalPath(h.root);
     const own = canonicalPath(module) === rootPath && ![...h.edges.values()].some((to) => [...to.values()].some((f) => canonicalPath(f) === rootPath));
-    const data = new Set(own ? scan.data : []);
-    const worktree = new Set(own ? scan.worktree : []);
+    // Every string as a command, for the files it would reach: only ever
+    // adds files, and never makes every edit ask by itself.
     for (const command of scan.strings) {
       if (!/\S/.test(command) || command.length > 2000) continue;
-      const reach = commandFiles(command, from);
-      reach.files.forEach(add);
-      if (worktree.has(command)) {
-        for (const f of commandFiles(command, patchFolder).files) worktreeReach.add(canonicalPath(f).toLowerCase());
-      } else if (PLAIN_WEB_ADDRESS.test(command)) add(path.resolve(from, command));
-      else if (reach.problem && !data.has(command)) all = true;
+      commandFiles(command, from).files.forEach(add);
+    }
+    // What it runs, where it runs it (patch-commands.ts). A `worktree` setup
+    // and check don't count: setup runs what's committed, in a new worktree,
+    // and worktree-setup.sh won't install from an uncommitted package.json in
+    // the main checkout; the check runs when a land is asked for. So neither
+    // runs what an agent just wrote until it has got past a step that's asked
+    // about.
+    // Anything it trips on is read the old way, never skipped.
+    const mine = reads.get(module)!;
+    // Read exactly where it can be, and the old way as well when any file
+    // of the patch can't be.
+    const old = 'unknown' in mine ? mine.unknown : oneUnknown && 'unknown' in oneUnknown[1] ? { ...oneUnknown[1].unknown, why: `${path.basename(oneUnknown[0])} ${oneUnknown[1].unknown.why}` } : undefined;
+    if ('commands' in mine) {
+      const read = mine;
+      for (const c of read.commands) {
+        if (c.text.length > 4000) {
+          unsure({ file: module, line: c.line, command: c.text, problem: 'the command is too long to follow.' });
+          continue;
+        }
+        if (c.worktree) {
+          for (const f of commandFiles(c.text, patchFolder).files) worktreeReach.add(canonicalPath(f).toLowerCase());
+          continue;
+        }
+        // Its scripts outside the folder too: a path built in code, from a
+        // constant, is in no word of the text.
+        const reach = commandFilesOutside(c.text, from);
+        reach.files.forEach(add);
+        // And every absolute or `~/` path in the command as it was worked
+        // out, there yet or not: the follow passes over a missing script
+        // outside the repo, which an agent could then write (Codex's review).
+        // A child_process call's runs from its cwd (patchCommands puts it as `cd '<dir>' && `).
+        const cd = /^cd '([^']*)' && /.exec(c.text);
+        const base = cd ? cd[1] : from;
+        for (const word of shellWords(c.text)) {
+          if (!word || word.includes('__threadbear_value') || word.length > 4096) continue;
+          if (word.startsWith('/') && word.length > 1) add(word);
+          else if (word.startsWith('~/')) add(path.join(os.homedir(), word.slice(2)));
+          // `../../other/go.mjs`, from where it runs: the follow passes over
+          // one outside the repo that isn't there yet, too.
+          else if (word.includes('/')) add(path.resolve(base, word));
+        }
+        if (reach.problem) unsure({ file: module, line: c.line, command: c.text, problem: sayValue(reach.problem) });
+      }
+    }
+    if (old) {
+      const read = { unknown: old };
+      // Read the old way: each string in it as a command run from where its
+      // commands run. A problem means there may be more it runs, unless the
+      // patch file's own default export has it as something else (scanModule).
+      const data = new Set(own ? scan.data : []);
+      const worktree = new Set(own ? scan.worktree : []);
+      for (const command of scan.strings) {
+        if (!/\S/.test(command) || command.length > 2000) continue;
+        const reach = commandFiles(command, from);
+        if (worktree.has(command)) {
+          for (const f of commandFiles(command, patchFolder).files) worktreeReach.add(canonicalPath(f).toLowerCase());
+        } else if (PLAIN_WEB_ADDRESS.test(command)) add(path.resolve(from, command));
+        else if (reach.problem && !data.has(command)) {
+          const at = text.indexOf(command);
+          const shown = commandShown(command);
+          unsure({
+            file: module,
+            problem: `${read.unknown.why} (line ${read.unknown.line}), so Threadbear reads every string in it as a command it might run, and can't follow \`${shown}\`${at >= 0 ? ` (line ${text.slice(0, at).split('\n').length})` : ''}: ${reach.problem.replace(/^the command (line \d+ )?/, 'it ')}`,
+            fix: "Take that out, or keep to `sh`, `run` fields, child_process and Node's own modules, so Threadbear can see what it runs.",
+          });
+        }
+      }
     }
     // Absolute and `~/` paths, there yet or not.
     for (const word of text.split(/[\s'"`;&|()<>=,[\]{}]+/)) {
@@ -90,12 +170,94 @@ function codeOfUnhashedPatch(file: string, from: string, now: number): CodeScan 
   // A script it names that runs something it can't follow, other than a
   // worktree's own (above). A hook or action that runs one is a problem as a
   // command too; this also catches what's named some other way.
-  if (Object.keys(h.blocked ?? {}).some((s) => !worktreeReach.has(canonicalPath(s).toLowerCase()))) all = true;
-  const scan = { at: now, h, all, files };
+  const stuck = Object.keys(h.blocked ?? {}).find((s) => !worktreeReach.has(canonicalPath(s).toLowerCase()));
+  if (stuck) unsure({ file: stuck, problem: h.blocked![stuck] });
+  const scan = { at: now, h, all, files, ...(why ? { why } : {}) };
   scans.set(key, scan);
   if (scans.size > 200) scans.delete(scans.keys().next().value!);
   return scan;
 }
+
+// A command's words roughly as a shell splits them, quotes taken off, so a
+// quoted path with a space is one word (Codex's review). Only for finding
+// paths in it: the follower is what reads it properly.
+export function shellWords(command: string): string[] {
+  const words: string[] = [];
+  let word = '';
+  let quote: string | undefined;
+  for (const ch of command) {
+    if (quote) {
+      if (ch === quote) quote = undefined;
+      else word += ch;
+    } else if (ch === "'" || ch === '"') quote = ch;
+    else if (/[\s;&|()<>=`]/.test(ch)) {
+      if (word) words.push(word);
+      word = '';
+    } else word += ch;
+  }
+  if (word) words.push(word);
+  return words;
+}
+
+// Credentials a note could carry: a URL's user and password, `key=value`
+// for a word like token, and long runs that look like a key.
+function redact(text: string): string {
+  return text
+    .replace(/:\/\/[^\s/@]*@/g, '://...@')
+    .replace(/((?:token|key|secret|pass|auth)[\w-]*=)[^\s&`'"]+/gi, '$1...')
+    .replace(/(?<![\w/.-])[A-Za-z0-9_+-]{32,}(?![\w/.-])/g, '...');
+}
+
+// What's said in the thread and Patches when a patch makes every edit ask.
+export function editsAskText(patch: string, why: UnsureWhy | undefined): string {
+  return redact(editsAskWords(patch, why));
+}
+
+function editsAskWords(patch: string, why: UnsureWhy | undefined): string {
+  const home = os.homedir();
+  const name = patch.startsWith(home + path.sep) ? `~${patch.slice(home.length)}` : patch;
+  const head = `Ask and Auto threads ask before every file edit while ${name} is loaded`;
+  if (!why) return `${head}, as Threadbear can't tell what it runs.`;
+  const real = (f: string) => canonicalPath(f).toLowerCase();
+  const where = real(why.file) !== real(patch) ? ` in ${path.basename(why.file)}` : '';
+  const line = why.line ? ` (line ${why.line}${where})` : where ? ` (${where.slice(1)})` : '';
+  const problem = why.problem
+    .trim()
+    .replace(/^the command (line \d+ )?/, '')
+    .replace(/,? which patch trust can't follow\.?$/, '')
+    .replace(/\.$/, '');
+  if (!why.command) return `${head}: ${problem}${line}.${why.fix ? ` ${why.fix}` : ''}`;
+  const shown = commandShown(why.command);
+  return `${head}: Threadbear can't follow \`${shown}\`${line}, as it ${problem}. ${EDITS_ASK_FIX}`;
+}
+
+// A command as the note shows it: its first few words, with anything after
+// a word like token or key, and anything long enough to be one, left out.
+// The note is kept in the transcript and goes to the phone, and a patch's
+// command can carry a credential (Codex's review).
+export function commandShown(command: string): string {
+  const words = command
+    .replace(/\$\{__threadbear_value\}/g, '${...}')
+    // A URL's user and password.
+    .replace(/:\/\/[^\s/@]*@/g, '://...@')
+    .split(/\s+/)
+    .filter(Boolean);
+  const out: string[] = [];
+  for (const [i, w] of words.entries()) {
+    if (out.length >= 4) {
+      out.push('...');
+      break;
+    }
+    const secretish =
+      (i > 0 && /token|key|secret|pass|auth|bearer|cookie/i.test(words[i - 1])) ||
+      /(token|key|secret|pass|auth)[^=]*=/i.test(w) ||
+      /^[A-Za-z0-9_+=-]{24,}$/.test(w.replace(/^['"]|['"]$/g, ''));
+    out.push(secretish ? '...' : w.length > 80 ? `${w.slice(0, 80)}...` : w);
+  }
+  return out.join(' ');
+}
+
+const EDITS_ASK_FIX = "Write the command as plain text, or build it only from constants in the file (like `node ${join(import.meta.dirname, 'x.mjs')}`), so Threadbear can see what it runs.";
 
 export const patchesPart = {
   // What the thread's folder gives it (see Runtime.patches): the last set
@@ -162,6 +324,7 @@ export const patchesPart = {
       // Claude threads only: a Codex thread doesn't read them.
       const claude = rec.provider === 'claude' ? this.claudePatchInfo(cwd, claudeOptions(rec)) : undefined;
       if (claude) base = { ...base, patches: [...base.patches, claude] };
+      base = this.withEditsAsk(base, cwd);
       set = await applyLive(base, { cwd, threadId: rec.id, run: (command, dir) => this.runLiveCommand(rec.id, command, dir), verify: (file, hash) => this.patchTrust.verify(file, hash) });
     } catch (e) {
       this.log.warn('could not read the folder for patches', { threadId: rec.id, cwd, error: String(e) });
@@ -419,7 +582,7 @@ export const patchesPart = {
         for (const d of patchDirs(root.folder, home)) if (!dirs.has(d.dir)) dirs.set(d.dir, { source: d.source, from: root.folder });
       }
       // Files one is sure of win over another's "can't tell", for the card.
-      let unsure = false;
+      let unsure: { patch: string; why?: UnsureWhy } | undefined;
       for (const [dir, { source, from }] of dirs) {
         if (source === 'project' && !this.patchTrust.loadsUnhashed(dir)) continue;
         for (const name of fs.readdirSync(dir)) {
@@ -433,13 +596,48 @@ export const patchesPart = {
             continue; // can't be read, so can't be loaded either
           }
           if (scan.files.has(real)) return true;
-          if (scan.all) unsure = true;
+          if (scan.all) unsure ??= { patch: p, ...(scan.why ? { why: scan.why } : {}) };
         }
       }
-      return unsure ? 'unsure' : false;
+      if (!unsure) return false;
+      this.noteEditsAsk(rec.id, unsure.patch, unsure.why);
+      return 'unsure';
     } catch {
       return 'unsure';
     }
+  },
+
+  // Says in the thread, once per patch and command, which patch makes every
+  // edit ask and what to change, the first time an edit asks for it: on 11
+  // Nov Ville's Auto threads asked about every edit and nothing said why.
+  noteEditsAsk(this: Runner, threadId: string, patch: string, why: UnsureWhy | undefined): void {
+    const st = this.threads.get(threadId);
+    if (!st) return;
+    const key = JSON.stringify([patch, why?.file, why?.line, why?.command]);
+    if (st.rt.editsAskNoted === key) return;
+    st.rt.editsAskNoted = key;
+    this.emit(st, { type: 'system.note', text: `${editsAskText(patch, why)} Patches shows this too.` }, st.rt.turn?.turnId);
+  },
+
+  // The patch list with `editsAsk` on each patch that loads without a hash
+  // and runs something it can't follow from where it runs (writeRunsAsCode).
+  withEditsAsk(this: Runner, set: PatchSet, cwd: string): PatchSet {
+    let changed = false;
+    const patches = set.patches.map((info) => {
+      if (!info.file || info.error || info.untrusted) return info;
+      const unhashed = info.source === 'home' || (info.source === 'project' && this.patchTrust.loadsUnhashed(path.dirname(info.file)));
+      if (!unhashed) return info;
+      let scan: CodeScan;
+      try {
+        scan = codeOfUnhashedPatch(info.file, info.source === 'home' ? cwd : (info.folder ?? cwd), this.clock.now());
+      } catch {
+        return info;
+      }
+      if (!scan.all) return info;
+      changed = true;
+      return { ...info, editsAsk: editsAskText(info.file, scan.why) };
+    });
+    return changed ? { ...set, patches } : set;
   },
 
   // The thread folder's Claude Code settings, as an entry in its patch
@@ -523,7 +721,9 @@ export const patchesPart = {
         // a folder that's gone
       }
     }
-    const done = this.patchTrust.trustCurrent([...files]);
+    // Not a worktree another runner's move brought work into: those wait
+    // for trust like any folder's (settleUnvouched has run by now).
+    const done = this.patchTrust.trustCurrent([...files].filter((f) => !this.patchTrust.isUnvouched?.(f)));
     this.patchTrust.save();
     this.log.info('patch trust seeded', { files: done.length });
   },

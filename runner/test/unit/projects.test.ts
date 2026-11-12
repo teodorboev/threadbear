@@ -7,7 +7,7 @@ import { checkSummary } from '../helpers/protocol-check.ts';
 import { Projects, drainProjectMethods, projectMethods, BRIEF_MAX, NOTES_LONG, type ProjectHost } from '../../src/projects.ts';
 import { projectRouter, type PrimaryLink } from '../../src/handover.ts';
 import type { PocketCardInput, PocketCardSummary } from '../../src/sync.ts';
-import { Librarian, type LibrarianPocket, librarianMethods, saysNoFit, mainCheckout, SETTLE_MS, CATCH_UP_MS, CATCH_UP_MIN_CHARS, FIRST_MESSAGE_MS, SWEEP_MS } from '../../src/librarian.ts';
+import { Librarian, type LibrarianPocket, librarianMethods, saysNoFit, disclaims, mainCheckout, PICK_CHECKS_PER_LOOK, SETTLE_MS, CATCH_UP_MS, CATCH_UP_MIN_CHARS, FIRST_MESSAGE_MS, SWEEP_MS, KEYWORDS_SYSTEM } from '../../src/librarian.ts';
 import { buildThreadbearTools } from '../../src/threadbear-mcp.ts';
 import { FakeClock } from '../../src/clock.ts';
 import { nullLogger, type Logger } from '../../src/log.ts';
@@ -16,7 +16,9 @@ import { commandFolders } from '../../src/tools.ts';
 import type { GenerateParams, ModelResult } from '../../src/models/index.ts';
 
 // A harness whose runner has projects, with a fake home holding repos.
-function setup(opts: { pocket?: () => LibrarianPocket | undefined; models?: (p: GenerateParams) => Promise<ModelResult<string>> | ModelResult<string>; log?: Logger; privateFolder?: (cwd: string) => boolean } = {}) {
+// `check` answers the second opinion on a pick (a `strong` call), kept apart
+// from `asked`; left out, it agrees.
+function setup(opts: { pocket?: () => LibrarianPocket | undefined; models?: (p: GenerateParams) => Promise<ModelResult<string>> | ModelResult<string>; check?: (p: GenerateParams) => ModelResult<string>; log?: Logger; privateFolder?: (cwd: string) => boolean } = {}) {
   const root = tmpDir();
   const repo = (rel: string, files: Record<string, string> = {}) => {
     const dir = path.join(root, rel);
@@ -32,9 +34,16 @@ function setup(opts: { pocket?: () => LibrarianPocket | undefined; models?: (p: 
   const home = tmpDir();
   const projects = new Projects({ home, clock: new FakeClock(), log: nullLogger, userHome: root });
   const asked: GenerateParams[] = [];
+  const checks: GenerateParams[] = [];
   const models = opts.models
     ? {
         generate: async (p: GenerateParams) => {
+          // The keyword sweep's batches (keywords.test.ts), apart from the looks.
+          if (p.system === KEYWORDS_SYSTEM) return { ok: true, value: '{}', model: 'haiku' } as ModelResult<string>;
+          if (p.strong) {
+            checks.push(p);
+            return opts.check ? opts.check(p) : ({ ok: true, value: '{"belongs":true}', model: 'opus' } as ModelResult<string>);
+          }
           asked.push(p);
           return opts.models!(p);
         },
@@ -56,7 +65,7 @@ function setup(opts: { pocket?: () => LibrarianPocket | undefined; models?: (p: 
     s.result('completed');
     await tick();
   };
-  return { h, root, misc, repo, projects, librarian, asked, create, finish };
+  return { h, root, misc, repo, projects, librarian, asked, checks, create, finish };
 }
 
 test("the librarian keeps why a thread is in each project, and takes it out of a wrong guess only when it says so", async () => {
@@ -179,6 +188,186 @@ test('the librarian leaves a thread unfiled when its pick has no reason, or one 
   h.clock.advance(CATCH_UP_MS + SETTLE_MS);
   await tick(8);
   assert.equal(librarian.status().recent[0].text, 'Put it in Walkies');
+});
+
+// Thread fa7d6abf, 9 Nov 2026: a Vue client for Convex went into an Expo app
+// whose state mentions a Convex video.
+const SLAVA = { why: 'Thread is about a Convex community module and docs decision' };
+const slavaAnswer = (id: string) => ({ projects: [id], reasons: { [id]: "Slava's Vue/Nuxt Convex module touches the docs and client packages" }, ...SLAVA });
+const again = async (s: ReturnType<typeof setup>, id: string) => {
+  s.h.runner.send(id, 'more on the module '.repeat(40));
+  await tick();
+  await s.finish(id);
+  s.h.clock.advance(CATCH_UP_MS + SETTLE_MS);
+  await tick(8);
+};
+
+test('a thread that only shares a subject with a project stays out of it, and later looks do not re-roll the answer', async () => {
+  let answer: unknown = {};
+  const s = setup({ models: () => reply(answer), check: () => reply({ belongs: false, why: 'Shares only Convex' }) });
+  const build = s.projects.create({ title: 'Lets Build It', folders: [s.repo('dev/lets-build-it')], state: 'Scripting a technical video for the Convex channel', by: 'mike' });
+  const { thread } = s.create('What do you make of this community Vue and Nuxt client for Convex?');
+  answer = slavaAnswer(build.id);
+  await s.finish(thread.id);
+  s.h.clock.advance(SETTLE_MS);
+  await tick(8);
+  assert.equal(s.h.runner.get(thread.id).projects?.length ?? 0, 0);
+  assert.equal(s.checks.length, 1);
+  assert.equal(s.checks[0].strong, true);
+  assert.equal(s.checks[0].feature, 'projects');
+  assert.match(s.checks[0].prompt, /Project "Lets Build It"/);
+  assert.match(s.checks[0].prompt, /community Vue and Nuxt/);
+  assert.doesNotMatch(s.checks[0].prompt, /catch-all|touches the docs/);
+  assert.equal(s.librarian.status().recent[0].outcome, 'nothing');
+  await again(s, thread.id);
+  assert.equal(s.checks.length, 1, 'refused once, not asked again');
+  assert.equal(s.h.runner.get(thread.id).projects?.length ?? 0, 0);
+  // Mike asking for a look gets a fresh answer.
+  s.librarian.run(thread.id);
+  await tick(8);
+  assert.equal(s.checks.length, 2);
+});
+
+test('an answer that argues against its own pick is dropped without a second opinion', async () => {
+  const s = setup({ models: () => reply({ projects: [build.id], reasons: { [build.id]: "Slava's module touches the docs" }, why: 'About a Convex community module, not Lets Build It' }) });
+  const build = s.projects.create({ title: 'Lets Build It', folders: [s.repo('dev/lets-build-it')], by: 'mike' });
+  const { thread } = s.create('What do you make of this module?');
+  await s.finish(thread.id);
+  s.h.clock.advance(SETTLE_MS);
+  await tick(8);
+  assert.equal(s.h.runner.get(thread.id).projects?.length ?? 0, 0);
+  assert.equal(s.checks.length, 0);
+});
+
+test('disclaims needs the project named after the not', () => {
+  assert.equal(disclaims('About a Convex module, not Lets Build It', 'Lets Build It'), true);
+  assert.equal(disclaims('No clear match, so kept out of Questions', 'Questions'), true);
+  assert.equal(disclaims('Not BrowserBear work', 'BrowserBear (Chrome browser control)'), true);
+  assert.equal(disclaims('Tandem feature work, not yet merged', 'Tandem'), false);
+  assert.equal(disclaims('Fixes a Threadbear bug, not the original error', 'Threadbear'), false);
+  assert.equal(disclaims('Thread is not about the Walkies app', 'Walkies'), true);
+  assert.equal(disclaims('Updates out of date Threadbear documentation', 'Threadbear'), false);
+  assert.equal(disclaims('Answers user questions, not questionnaires', 'Questions'), false);
+});
+
+test("a pick the check confirms is filed from a catch-all folder, and the look keeps why, past a restart", async () => {
+  let answer: unknown = {};
+  const s = setup({ models: () => reply(answer) });
+  const sentry = s.projects.create({ title: 'Sentry watch', folders: [s.repo('dev/sentry-watch')], by: 'mike' });
+  const { thread } = s.create('Triage this production error');
+  answer = { projects: [sentry.id], reasons: { [sentry.id]: 'Triages an error the watcher routed here' }, why: 'Sentry triage' };
+  await s.finish(thread.id);
+  s.h.clock.advance(SETTLE_MS);
+  await tick(8);
+  assert.deepEqual(s.h.runner.get(thread.id).projects?.map((m) => m.id), [sentry.id]);
+  assert.equal(s.checks.length, 1);
+  const entry = s.librarian.status().recent[0];
+  assert.equal(entry.outcome, 'joined');
+  assert.deepEqual(entry.reasons, { [sentry.id]: 'Triages an error the watcher routed here' });
+  assert.equal(entry.why, 'Sentry triage');
+  s.librarian.stop();
+  const saved = JSON.parse(fs.readFileSync(path.join(s.h.home, 'librarian.json'), 'utf8'));
+  assert.deepEqual(saved.recent[0].reasons, entry.reasons);
+});
+
+test('folder evidence files a thread with no second opinion', async () => {
+  let answer: unknown = {};
+  const s = setup({ models: () => reply(answer), check: () => reply({ belongs: false }) });
+  const dir = s.repo('dev/walkies');
+  const walkies = s.projects.create({ title: 'Walkies', folders: [dir], by: 'mike' });
+  answer = { projects: [walkies.id], reasons: { [walkies.id]: 'Works on the app' } };
+  // Runs in the project's repo.
+  const inRepo = s.create('Fix the map', dir).thread;
+  await s.finish(inRepo.id);
+  s.h.clock.advance(SETTLE_MS);
+  await tick(8);
+  assert.deepEqual(s.h.runner.get(inRepo.id).projects?.map((m) => m.id), [walkies.id]);
+  // Runs in a catch-all folder but edited the repo.
+  const fromMisc = s.create('Fix the map from here').thread;
+  await s.finish(fromMisc.id, [path.join(dir, 'src/map.ts')]);
+  s.h.clock.advance(SETTLE_MS);
+  await tick(8);
+  assert.deepEqual(s.h.runner.get(fromMisc.id).projects?.map((m) => m.id), [walkies.id]);
+  assert.equal(s.checks.length, 0);
+});
+
+test('a check that gets no answer keeps the thread out for now, and a later look asks again', async () => {
+  let answer: unknown = {};
+  let verdict: ModelResult<string> = { ok: false, reason: 'no-room', message: 'full' };
+  const s = setup({ models: () => reply(answer), check: () => verdict });
+  const build = s.projects.create({ title: 'Lets Build It', by: 'mike' });
+  const { thread } = s.create('Plan the next build video');
+  answer = { projects: [build.id], reasons: { [build.id]: 'Plans its next video' } };
+  await s.finish(thread.id);
+  s.h.clock.advance(SETTLE_MS);
+  await tick(8);
+  assert.equal(s.h.runner.get(thread.id).projects?.length ?? 0, 0);
+  verdict = { ok: true, value: '{"belongs":true}', model: 'opus' };
+  await again(s, thread.id);
+  assert.equal(s.checks.length, 2);
+  assert.deepEqual(s.h.runner.get(thread.id).projects?.map((m) => m.id), [build.id]);
+});
+
+test('a refused pick does not turn into a new project of the same name', async () => {
+  let answer: unknown = {};
+  const s = setup({ models: () => reply(answer), check: () => reply({ belongs: false }) });
+  const build = s.projects.create({ title: 'Lets Build It', by: 'mike' });
+  const { thread } = s.create('What do you make of this module?');
+  answer = { projects: [build.id], reasons: { [build.id]: 'Touches the docs' }, new: { title: 'Lets Build It', folders: [], goals: 'x', state: 'y', why: 'z' } };
+  await s.finish(thread.id);
+  s.h.clock.advance(SETTLE_MS);
+  await tick(8);
+  assert.equal(s.projects.list().length, 1);
+  assert.equal(s.h.runner.get(thread.id).projects?.length ?? 0, 0);
+});
+
+test('an asked look that confirms the last refused pick clears the refusal', async () => {
+  let answer: unknown = {};
+  let belongs = false;
+  const s = setup({ models: () => reply(answer), check: () => reply({ belongs }) });
+  const build = s.projects.create({ title: 'Lets Build It', by: 'mike' });
+  const { thread } = s.create('Plan the next build video');
+  answer = { projects: [build.id], reasons: { [build.id]: 'Plans its next video' } };
+  await s.finish(thread.id);
+  s.h.clock.advance(SETTLE_MS);
+  await tick(8);
+  const saved = () => JSON.parse(fs.readFileSync(path.join(s.h.home, 'librarian.json'), 'utf8')).looks[thread.id];
+  await tick();
+  assert.deepEqual(saved().refused, [build.id]);
+  belongs = true;
+  s.librarian.run(thread.id);
+  await tick(8);
+  assert.deepEqual(s.h.runner.get(thread.id).projects?.map((m) => m.id), [build.id]);
+  s.librarian.run(thread.id);
+  await tick(8);
+  assert.equal(saved().refused, undefined);
+});
+
+test('a thread deleted during one check is dropped quietly, with no check of the next pick', async () => {
+  const s = setup({ models: () => reply({ projects: [a.id, b.id], reasons: { [a.id]: 'Does its work', [b.id]: 'Does its work' } }), check: () => {
+    s.h.runner.delete(thread.id);
+    return reply({ belongs: true });
+  } });
+  const a = s.projects.create({ title: 'One', by: 'mike' });
+  const b = s.projects.create({ title: 'Two', by: 'mike' });
+  const { thread } = s.create('A thread that goes away');
+  await s.finish(thread.id);
+  s.h.clock.advance(SETTLE_MS);
+  await tick(8);
+  assert.equal(s.checks.length, 1);
+  assert.equal(s.librarian.status().recent.filter((e) => e.outcome === 'failed').length, 0);
+});
+
+test('a look asks about a few picks at most', async () => {
+  const made: string[] = [];
+  const s = setup({ models: () => reply({ projects: made, reasons: Object.fromEntries(made.map((id) => [id, 'Does its work'])) }) });
+  for (let i = 0; i < PICK_CHECKS_PER_LOOK + 2; i++) made.push(s.projects.create({ title: `Project ${i}`, by: 'mike' }).id);
+  const { thread } = s.create('A status email that lists every app');
+  await s.finish(thread.id);
+  s.h.clock.advance(SETTLE_MS);
+  await tick(8);
+  assert.equal(s.checks.length, PICK_CHECKS_PER_LOOK);
+  assert.equal(s.h.runner.get(thread.id).projects?.length, PICK_CHECKS_PER_LOOK);
 });
 
 test('saysNoFit spots reasons that say a thread does not belong', () => {
@@ -646,6 +835,92 @@ test('a git worktree counts as its main checkout, never as a folder of its own',
   await tick();
   await finish(thread.id, [path.join(wt, 'src/y.ts')]);
   assert.equal(librarian.status().queue[0].reason, 'catch-up');
+});
+
+test("the librarian never gives a project another project's repo, a folder holding others, or a worktree's subfolder", async () => {
+  let answer: unknown = {};
+  const s = setup({ models: () => reply(answer) });
+  const { h, repo, root, create, finish, librarian, projects } = s;
+  const tb = repo('dev/threadbear');
+  const videos = repo('dev/videos');
+  const interview = repo('dev/videos/interview');
+  const fresh = repo('dev/browserbear');
+  const wtMain = repo('dev/app');
+  const wt = path.join(root, 'dev/app-wt');
+  fs.mkdirSync(path.join(wtMain, '.git/worktrees/wt'), { recursive: true });
+  fs.mkdirSync(path.join(wt, 'ios'), { recursive: true });
+  fs.writeFileSync(path.join(wt, '.git'), `gitdir: ${path.join(wtMain, '.git/worktrees/wt')}\n`);
+  fs.writeFileSync(path.join(wt, 'ios/Package.swift'), '');
+  const threadbear = projects.create({ title: 'Threadbear', folders: [tb], by: 'mike' });
+  projects.create({ title: 'Interview', folders: [interview], by: 'mike' });
+  // A new project on another project's repo alone isn't made: the thread is
+  // that project's (Threadbear Android app, 10 Nov).
+  answer = { projects: [], new: { title: 'Threadbear Android', folders: ['~/dev/threadbear'], goals: 'x', state: 'y' } };
+  const one = create('Build the Android client').thread;
+  await finish(one.id);
+  h.clock.advance(SETTLE_MS);
+  await tick(8);
+  assert.equal(projects.list().length, 2);
+  assert.equal(h.runner.get(one.id).projects, undefined);
+  // One with a free repo is made, keeping only that: not the other
+  // project's repo, nor the folder holding Interview's.
+  answer = { projects: [], new: { title: 'BrowserBear', folders: ['~/dev/browserbear', '~/dev/threadbear', '~/dev/videos'], goals: 'x', state: 'y' } };
+  const two = create('A Chrome extension').thread;
+  await finish(two.id);
+  h.clock.advance(SETTLE_MS);
+  await tick(8);
+  const bb = projects.list().find((p) => p.title === 'BrowserBear')!;
+  assert.deepEqual(bb.folders, [fresh]);
+  // A project with no folders at all (a house job) is still made.
+  answer = { projects: [], new: { title: 'Crypto', folders: [], goals: 'x', state: 'y' } };
+  const three = create('Move the crypto').thread;
+  await finish(three.id);
+  h.clock.advance(SETTLE_MS);
+  await tick(8);
+  assert.ok(projects.list().some((p) => p.title === 'Crypto'));
+  // Nor one whose only folder is in a worktree of another project's repo
+  // (the main checkout's copy is Threadbear's), or reaches its repo by a
+  // symlink or another casing.
+  const tbWt = path.join(root, 'dev/tb-wt');
+  fs.mkdirSync(path.join(tb, '.git/worktrees/tw'), { recursive: true });
+  fs.mkdirSync(path.join(tbWt, 'android'), { recursive: true });
+  fs.writeFileSync(path.join(tbWt, '.git'), `gitdir: ${path.join(tb, '.git/worktrees/tw')}\n`);
+  fs.writeFileSync(path.join(tbWt, 'android/package.json'), '{}');
+  fs.symlinkSync(tb, path.join(root, 'dev/tb-link'));
+  const caseBlind = fs.existsSync(path.join(root, 'DEV/threadbear'));
+  // A worktree whose .git file names its main checkout through a symlink,
+  // and one of a repo no project has, with a folder only on its branch.
+  const viaLink = path.join(root, 'dev/link-wt');
+  fs.mkdirSync(path.join(viaLink, 'web'), { recursive: true });
+  fs.writeFileSync(path.join(viaLink, '.git'), `gitdir: ${path.join(root, 'dev/tb-link/.git/worktrees/tw')}\n`);
+  fs.writeFileSync(path.join(viaLink, 'web/package.json'), '{}');
+  const loose = repo('dev/loose');
+  const looseWt = path.join(root, 'dev/loose-wt');
+  fs.mkdirSync(path.join(loose, '.git/worktrees/lw'), { recursive: true });
+  fs.mkdirSync(path.join(looseWt, 'branch-only'), { recursive: true });
+  fs.writeFileSync(path.join(looseWt, '.git'), `gitdir: ${path.join(loose, '.git/worktrees/lw')}\n`);
+  fs.writeFileSync(path.join(looseWt, 'branch-only/package.json'), '{}');
+  for (const folder of ['~/dev/tb-wt/android', '~/dev/tb-link', '~/dev/link-wt/web', '~/dev/loose-wt/branch-only', ...(caseBlind ? ['~/dev/Threadbear'] : [])]) {
+    answer = { projects: [], new: { title: `Copy ${folder}`, folders: [folder], goals: 'x', state: 'y' } };
+    const t = create('More Threadbear work').thread;
+    await finish(t.id);
+    h.clock.advance(SETTLE_MS);
+    await tick(8);
+    assert.ok(!projects.list().some((p) => p.title === `Copy ${folder}`), `${folder} made a project`);
+  }
+  // addFolders: the same ones are refused (a repo cloned inside a worktree
+  // doesn't hide it), and a free repo is added.
+  const free = repo('dev/sentry-watch');
+  repo('dev/app-wt/vendor/tool');
+  answer = { projects: [bb.id], reasons: { [bb.id]: 'Works on the extension' }, addFolders: { [bb.id]: ['~/dev/threadbear', '~/dev/videos', '~/dev/app-wt/ios', '~/dev/app-wt/vendor/tool', '~/dev/tb-link', '~/dev/sentry-watch'] } };
+  h.runner.send(two.id, 'more');
+  await tick();
+  await finish(two.id, [path.join(fresh, 'x.ts')]);
+  h.clock.advance(CATCH_UP_MS + SETTLE_MS);
+  await tick(8);
+  assert.deepEqual(projects.record(bb.id)?.folders, [fresh, free]);
+  assert.deepEqual(projects.record(threadbear.id)?.folders, [tb]);
+  assert.ok(librarian.status().recent.some((e) => e.text.includes('Added ~/dev/sentry-watch to BrowserBear')));
 });
 
 test('the librarian keeps its line on where the thread is up to as the thread\'s brief', async () => {
@@ -1289,4 +1564,108 @@ test('a look from the first message alone leaves the Pocket to its agent, and a 
   await tick(8);
   assert.match(s.asked.at(-1)!.prompt, /The Pocket is not available/);
   assert.equal(fake.saved.length, 0);
+});
+
+// ------------------------------------------------------- parts
+
+test('parts: a project can be a part of another, one level only, and taken out again', () => {
+  const { projects } = setup();
+  const tb = projects.create({ title: 'Threadbear', goals: 'The app', by: 'mike' });
+  const gpui = projects.create({ title: 'GPUI port', by: 'mike' });
+  const android = projects.create({ title: 'Android app', parent: tb.id, by: 'mike' });
+  assert.equal(android.parentId, tb.id, 'made as a part');
+  assert.equal(projects.update(gpui.id, { parent: 'threadbear' }).parentId, tb.id, 'by title, any case');
+  assert.throws(() => projects.update(gpui.id, { parent: gpui.id }), /can't be a part of itself/);
+  assert.throws(() => projects.update(tb.id, { parent: gpui.id }), /has parts of its own/);
+  const other = projects.create({ title: 'Other', by: 'mike' });
+  assert.throws(() => projects.update(other.id, { parent: android.id }), /is a part of "Threadbear" already/);
+  assert.throws(() => projects.update(other.id, { parent: 'nope' }), /No project/);
+  assert.equal(projects.update(gpui.id, { parent: '' }).parentId, undefined, 'empty makes it its own project');
+  // Deleting the parent leaves its parts as projects of their own.
+  projects.delete(tb.id);
+  assert.equal(projects.record(android.id)?.parentId, undefined);
+});
+
+test('parts: merging moves a project\'s parts to the one kept, or frees them when that one is a part', () => {
+  const { projects } = setup();
+  const a = projects.create({ title: 'A', by: 'mike' });
+  const b = projects.create({ title: 'B', by: 'mike' });
+  const partOfA = projects.create({ title: 'A1', parent: a.id, by: 'mike' });
+  projects.merge(a.id, b.id);
+  assert.equal(projects.record(partOfA.id)?.parentId, b.id);
+  const c = projects.create({ title: 'C', by: 'mike' });
+  const partOfC = projects.create({ title: 'C1', parent: c.id, by: 'mike' });
+  projects.merge(c.id, partOfA.id);
+  assert.equal(projects.record(partOfC.id)?.parentId, undefined, 'a part has no parts');
+  // A part merged into its own parent goes, and nothing points at it.
+  projects.merge(partOfA.id, b.id);
+  assert.equal(projects.record(b.id)?.parentId, undefined);
+});
+
+test("parts: a thread in a part is told its parent's title and goals; one in the parent hears the parts' names", () => {
+  const { projects, create, h } = setup();
+  const tb = projects.create({ title: 'Threadbear', goals: 'One agent app for everything', state: 'Projects next', notes: 'LONG PARENT NOTES', by: 'mike' });
+  const port = projects.create({ title: 'GPUI port', goals: 'Rust desktop app', state: 'Settings next', parent: tb.id, by: 'mike' });
+  const { thread: inPart } = create('port work');
+  const { thread: inParent } = create('app work');
+  projects.changeMembership(inPart.id, { add: [port.id], by: 'mike' });
+  projects.changeMembership(inParent.id, { add: [tb.id], by: 'mike' });
+  const partBrief = projects.brief(rec(h, inPart.id))!;
+  assert.match(partBrief, /## GPUI port \(p_[0-9a-f]+\), a part of Threadbear \(p_[0-9a-f]+\)/);
+  assert.match(partBrief, /Threadbear's goals: One agent app for everything/);
+  assert.match(partBrief, /\nGoals: Rust desktop app\nState: Settings next/);
+  assert.doesNotMatch(partBrief, /Projects next|LONG PARENT NOTES/, "not the parent's state or notes");
+  const parentBrief = projects.brief(rec(h, inParent.id))!;
+  assert.match(parentBrief, /Parts: GPUI port \(p_[0-9a-f]+\)/);
+  assert.match(projects.joinedLine(projects.record(port.id)!), /a part of "Threadbear"/);
+});
+
+test('parts: the RPC sets and clears parentId, and the agent tools take parent and show parts', async () => {
+  const { h, projects, create } = setup();
+  const m = projectMethods(projects);
+  const { project: tb } = m['projects.create']({ title: 'Threadbear' }) as any;
+  const { project: port } = m['projects.create']({ title: 'GPUI port', parentId: tb.id }) as any;
+  assert.equal(port.parentId, tb.id);
+  assert.equal((m['projects.update']({ projectId: port.id, parentId: null }) as any).project.parentId, undefined);
+  assert.equal((m['projects.update']({ projectId: port.id, parentId: tb.id }) as any).project.parentId, tb.id);
+  assert.equal((m['projects.update']({ projectId: port.id, title: 'GPUI' }) as any).project.parentId, tb.id, 'left out leaves it');
+  const { thread } = create();
+  const tools = buildThreadbearTools(h.runner, thread.id, Date.now, undefined, projects);
+  const call = async (name: string, args: Record<string, unknown>) => {
+    const t = tools.find((x) => x.name === name)!;
+    const r = await t.handler(args as never, {} as never);
+    return { text: r.content.map((c: any) => c.text).join(''), error: Boolean(r.isError) };
+  };
+  const made = await call('create_project', { title: 'Android', parent: 'threadbear', join: false });
+  assert.match(made.text, /Made the project "Android" \(p_[0-9a-f]+\), a part of "Threadbear"\./);
+  const list = (await call('list_projects', {})).text.split('\n');
+  const at = list.findIndex((l) => l.includes('"Threadbear"'));
+  assert.ok(list[at + 1].startsWith('  ') && list.slice(at + 1, at + 3).some((l) => l.includes('"GPUI"')), 'parts under their parent, indented:\n' + list.join('\n'));
+  assert.match((await call('read_project', { project: 'GPUI' })).text, /\nPart of: Threadbear \(p_[0-9a-f]+\)\n/);
+  assert.match((await call('read_project', { project: 'Threadbear' })).text, /\nParts: .*GPUI \(p_[0-9a-f]+\)/);
+  assert.match((await call('update_project', { project: 'GPUI', parent: '' })).text, /^Updated "GPUI"/);
+  assert.equal(projects.record(port.id)?.parentId, undefined);
+  assert.equal((await call('update_project', { project: 'Threadbear', parent: 'Android' })).error, true, 'a part has no parts, said as an error');
+});
+
+test('parts: a projects.json with a cycle or three levels loads with nothing hidden', () => {
+  const home = tmpDir();
+  const at = { createdAt: '2026-11-01T00:00:00.000Z', updatedAt: '2026-11-01T00:00:00.000Z', createdBy: 'mike' };
+  fs.writeFileSync(path.join(home, 'projects.json'), JSON.stringify({ projects: [
+    { id: 'p_a', title: 'A', parentId: 'p_b' }, { id: 'p_b', title: 'B', parentId: 'p_a' },
+    { id: 'p_top', title: 'Top' }, { id: 'p_mid', title: 'Mid', parentId: 'p_top' }, { id: 'p_low', title: 'Low', parentId: 'p_mid' },
+    { id: 'p_self', title: 'Self', parentId: 'p_self' }, { id: 'p_lost', title: 'Lost', parentId: 'p_gone' },
+  ].map((p) => ({ ...at, ...p })) }));
+  const projects = new Projects({ home, clock: new FakeClock(), log: nullLogger });
+  const h = makeHarness(home, {}, { projects });
+  projects.start(h.runner);
+  const parentOf = Object.fromEntries(projects.list().map((p) => [p.id, p.parentId ?? null]));
+  assert.deepEqual(parentOf, { p_a: null, p_b: null, p_top: null, p_mid: 'p_top', p_low: null, p_self: null, p_lost: null });
+});
+
+test("parts: a session that joins a parent mid-way hears its parts' names too", () => {
+  const { projects } = setup();
+  const tb = projects.create({ title: 'Threadbear', by: 'mike' });
+  projects.create({ title: 'GPUI port', parent: tb.id, by: 'mike' });
+  assert.match(projects.joinedLine(projects.record(tb.id)!), /Parts: GPUI port \(p_[0-9a-f]+\)\./);
 });

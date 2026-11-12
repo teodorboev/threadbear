@@ -84,12 +84,17 @@ struct ThreadbearApp: App {
                         .disabled(zoom.isDefault)
                     Divider()
                     // The sidebar's panel, with the key other Mac apps use.
-                    Button(app.dock.layout.contains(WindowDock.threads) ? "Hide Threads" : "Show Threads", systemImage: "sidebar.left") { app.toggleThreadsPanel() }
+                    Button(app.threadsShowing ? "Hide Threads" : "Show Threads", systemImage: "sidebar.left") { app.toggleThreadsPanel() }
                         .shortcut(.toggleThreads)
+                    // Folds the panel away and back as it was; the activity bar stays.
+                    Button(app.threadsShowing ? "Collapse Threads" : "Expand Threads", systemImage: "sidebar.squares.left") { app.toggleThreadsCollapsed() }
+                        .shortcut(.collapseThreads)
                     // The pane sections (Highlights, a project's panels, Patches)
                     // open in the dock (WindowDock).
                     Button(app.panelsShown ? "Hide Panels" : "Show Panels", systemImage: "sidebar.right") { app.togglePanels() }
                         .shortcut(.togglePanels)
+                    Button(app.terminalShown ? "Hide Terminal" : "Show Terminal", systemImage: WindowDock.terminalSymbol) { app.toggleTerminal() }
+                        .shortcut(.toggleTerminal)
                     Button("Reset Panel Layout", systemImage: "rectangle.3.group") { app.dock.setLayout(WindowDock.defaultLayout) }
                         .shortcut(.resetPanelLayout)
                 }
@@ -108,6 +113,14 @@ struct ThreadbearApp: App {
                     Divider()
                     Button("Next Inbox Thread", systemImage: "chevron.down") { app.nextInboxThread() }
                         .shortcut(.nextInboxThread)
+                    // A project's page tabs (the projectDecisions experiment).
+                    Divider()
+                    Button("Show Previous Tab", systemImage: "chevron.backward.square") { app.stepProjectTab(by: -1) }
+                        .shortcut(.previousTab)
+                        .disabled(!app.canStepProjectTab(by: -1))
+                    Button("Show Next Tab", systemImage: "chevron.forward.square") { app.stepProjectTab(by: 1) }
+                        .shortcut(.nextTab)
+                        .disabled(!app.canStepProjectTab(by: 1))
                 }
             }
             // Help has no help book to open: the tour is what there is.
@@ -156,21 +169,23 @@ struct ThreadbearApp: App {
                     // ⌘1 to ⌘4 in the activity bar's order, as VS Code numbers
                     // its views. Hibernating and Archive are sections of the
                     // inbox now: these unfold them.
-                    Button("Show Inbox", systemImage: "tray") { app.sidebarMode = .inbox }
+                    // Each brings the Threads panel back if ⌘/ folded it
+                    // away, as the activity bar's icons do.
+                    Button("Show Inbox", systemImage: "tray") { app.threadsCollapsed = false; app.sidebarMode = .inbox }
                         .shortcut(.showInbox)
-                    Button("Show Scheduled", systemImage: "clock") { app.showSchedules() }
+                    Button("Show Scheduled", systemImage: "clock") { app.threadsCollapsed = false; app.showSchedules() }
                         .shortcut(.showScheduled)
                         .disabled(!app.schedulesSupported)
-                    Button("Show Projects", systemImage: "square.stack") { app.showProjects() }
+                    Button("Show Projects", systemImage: "square.stack") { app.threadsCollapsed = false; app.showProjects() }
                         .shortcut(.showProjects)
                         .disabled(!app.projectsSupported)
-                    Button("Show Librarian", systemImage: "books.vertical") { app.showLibrarian() }
+                    Button("Show Librarian", systemImage: "books.vertical") { app.threadsCollapsed = false; app.showLibrarian() }
                         .shortcut(.showLibrarian)
                         .disabled(!app.projectsSupported)
                     Divider()
-                    Button("Show Hibernating", systemImage: "moon.zzz") { app.showHibernating() }
+                    Button("Show Hibernating", systemImage: "moon.zzz") { app.threadsCollapsed = false; app.showHibernating() }
                         .shortcut(.showHibernating)
-                    Button("Show Archived", systemImage: "archivebox") { app.showArchive() }
+                    Button("Show Archived", systemImage: "archivebox") { app.threadsCollapsed = false; app.showArchive() }
                         .shortcut(.showArchived)
                 }
             }
@@ -192,6 +207,14 @@ struct ThreadbearApp: App {
                         .shortcut(.settings)
                 }
             }
+            // Quit Threadbear asks first, unless "Don't ask again" was ticked
+            // (QuitPrompt). The app's own quits don't come through here.
+            CommandGroup(replacing: .appTermination) {
+                IconMenuItems {
+                    Button("Quit Threadbear", systemImage: "xmark.square") { QuitPrompt.quit() }
+                        .shortcut(.quit)
+                }
+            }
         }
     }
 }
@@ -202,6 +225,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         MainActor.assumeIsolated {
+            Self.current = self
             let app = AppModel.shared
             let arguments = CommandLine.arguments
             // Before any window draws. Automation's --appearance comes later and wins.
@@ -251,6 +275,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { Tour.shared.startIfNew() }
                 }
             }
+            // What was in each box when the app last quit (DraftStore).
+            // A handover's incoming app reads them only once the outgoing
+            // one has saved its own at "go" (Handover.takeDrafts).
+            if !perf && !screenshots {
+                let store = DraftStore(url: DraftStore.url(dataDir: app.dataDir))
+                if Handover.incomingFrom != nil {
+                    Handover.shared.pendingDraftStore = store
+                } else {
+                    store.restore(into: app)
+                    app.draftStore = store
+                }
+            }
             app.start()
             MouseNavigation.install(app: app)
             SwipeNavigation.shared.install(app: app)
@@ -282,7 +318,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     func applicationWillTerminate(_ notification: Notification) {
         MainActor.assumeIsolated {
             ActivityRecorder.shared.quit()
+            // A handover's outgoing app has given its store up at "go" (the
+            // file is the incoming one's); one that never got that far
+            // still saves here.
+            let app = AppModel.shared
+            app.draftStore?.save(app, leaving: true)
             AppUpdater.shared.applyAtQuit()
+            Terminals.shared.endAllNow()
         }
     }
 
@@ -312,11 +354,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     /// does from a notification. Opening BrowserBear's pill on an agent's
     /// Chrome tab sends one.
     func application(_ application: NSApplication, open urls: [URL]) {
-        MainActor.assumeIsolated {
-            guard let threadId = urls.lazy.compactMap(ThreadLink.threadId(from:)).last else { return }
-            NSApp.activate()
-            if AppModel.shared.threadsLoaded { show(threadId: threadId) } else { linkedThread = threadId }
-        }
+        MainActor.assumeIsolated { openLinks(urls, activate: true) }
+    }
+
+    /// The app's delegate, for the automation's `open-url`, which hands a
+    /// link over as macOS does.
+    @MainActor static weak var current: AppDelegate?
+
+    /// The last thread link's thread, in front (a scripted run's window
+    /// stays behind, so it isn't brought forward).
+    @MainActor func openLinks(_ urls: [URL], activate: Bool) {
+        guard let threadId = urls.lazy.compactMap(ThreadLink.threadId(from:)).last else { return }
+        if activate { NSApp.activate() }
+        if AppModel.shared.threadsLoaded { show(threadId: threadId) } else { linkedThread = threadId }
     }
 
     @MainActor private func show(threadId: String) {

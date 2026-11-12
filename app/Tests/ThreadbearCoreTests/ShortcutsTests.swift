@@ -80,11 +80,11 @@ final class ShortcutsTests: XCTestCase {
     func testTheDefaultsAreTheKeysPeopleAlreadyKnow() {
         let expected: [ShortcutCommand: String] = [
             .newThread: "⌘N", .archive: "⌘E", .stop: "⌘.", .copyTranscript: "⇧⌘C",
-            .back: "⌘[", .forward: "⌘]", .nextInboxThread: "⌥⌘↓",
+            .back: "⌘[", .forward: "⌘]", .nextInboxThread: "⌥⌘↓", .previousTab: "⇧⌘[", .nextTab: "⇧⌘]",
             .showInbox: "⌘1", .showScheduled: "⌘2", .showProjects: "⌘3", .showLibrarian: "⌘4",
             .zoomIn: "⌘=", .zoomOut: "⌘-", .actualSize: "⌘0",
-            .toggleThreads: "⌃⌘S", .togglePanels: "⌥⌘P",
-            .settings: "⌘,",
+            .toggleThreads: "⌃⌘S", .togglePanels: "⌥⌘P", .collapseThreads: "⌘/",
+            .settings: "⌘,", .toggleTerminal: "⌘J", .quit: "⌘Q",
         ]
         for command in ShortcutCommand.allCases {
             XCTAssertEqual(command.defaultKey?.display, expected[command], command.title)

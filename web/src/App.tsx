@@ -12,6 +12,7 @@ import { api } from '../../convex/_generated/api';
 import type { Id } from '../../convex/_generated/dataModel';
 import { go, threadPath, useRoute } from './route';
 import { useToken } from './token';
+import { RunCommand } from './run-command';
 import { MessageText, Pictures, picturesByRow, ToolRun, Worked, type PageMessage } from './messages';
 import { ReplyButton } from './reply-button';
 import { CommandState } from './command-state';
@@ -24,6 +25,8 @@ import { NewThread, ProjectPage, ProjectsList, RunnerPage, RunnersList, Schedule
 import { duration, fold, splitTurns, type Item } from './turns';
 import { folderName, sender } from './format';
 import * as Icon from './icons';
+import { ReviewRow } from './review-row';
+import { reviewSeq, type LabReviewLedger } from './lab-review';
 
 type Approval = NonNullable<Row['pendingApproval']>;
 type Ask = NonNullable<Row['asks']>[number];
@@ -197,6 +200,9 @@ function ThreadView({ token, threadId }: { token: string; threadId: string }) {
   const after = picturesByRow(messages, pictures);
   const linkTo = (id: string) => threadPath(inbox?.find((r) => r.threadId.startsWith(id))?.threadId ?? id);
   const act = async (change: Parameters<typeof update>[0]['change']) => setPending(await update({ token, threadId, change }));
+  // Another lab's review goes over its turn's reply, as on the Mac (backend API 76).
+  const review = t.review as LabReviewLedger | undefined;
+  const reviewAt = review ? reviewSeq(messages, t.cardTurn) : undefined;
 
   // The meta line under the last reply: how long its turn took and what the
   // thread has cost, as on the Mac.
@@ -231,11 +237,14 @@ function ThreadView({ token, threadId }: { token: string; threadId: string }) {
     const m = item.m;
     const from = sender(m);
     return (
-      <div key={m.seq} className={`msg ${m.role}`}>
+      <Fragment key={m.seq}>
+      {m.seq === reviewAt && review ? <ReviewRow review={review} threadPath={linkTo} /> : null}
+      <div className={`msg ${m.role}`}>
         {from ? <div className="origin">{from.who}</div> : m.role === 'user' && m.origin && m.origin !== 'user' && m.origin !== 'phone' ? <div className="origin">{originLabel(m.origin)}</div> : null}
         {from ? <MessageText text={from.body} pictures={inText} seq={m.seq} rows={messages} threadPath={linkTo} /> : <MessageText text={m.text} pictures={inText} seq={m.seq} rows={messages} threadPath={linkTo} pictureChips={m.role === 'user'} pasted={m.role === 'user' ? pastedOf(pictures, m.seq, m.text).byNumber : undefined} button={m.role === 'assistant' ? buttonFor(m) : undefined} />}
         <Pictures items={[...(after.get(m.seq) ?? []), ...(m.role === 'user' ? pastedOf(pictures, m.seq, m.text).unplaced : [])]} />
       </div>
+      </Fragment>
     );
   };
 
@@ -323,16 +332,41 @@ function MoreMenu({ items }: { items: ({ label: string; icon: ReactNode; run: ()
 // What sits at the bottom, in one rounded box as on the Mac: an approval or
 // question the CLI is waiting on, else the end_turn card of asks, else the
 // done card's follow-ups, then the composer under it.
+// "Fri 13 Nov, 9:30 am", for when a booked check-in comes back.
+function bookedWhen(at: string): string {
+  const d = new Date(at);
+  if (Number.isNaN(d.getTime())) return at;
+  return d.toLocaleString(undefined, { weekday: 'short', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' });
+}
+
 function Dock({ token, thread: t, lastSeq, onSent, onArchive }: { token: string; thread: Row; lastSeq?: number; onSent: (id: Id<'commands'>) => void; onArchive: () => void }) {
   const send = useMutation(api.phone.send);
+  const interrupt = useMutation(api.phone.interrupt);
   const [text, setText] = useState('');
+  // Stop pressed: a spinner in its place until the turn has stopped (or the
+  // press failed), so it can't be pressed twice meanwhile.
+  const [stopping, setStopping] = useState(false);
+  useEffect(() => {
+    if (!busy(t)) setStopping(false);
+  }, [t.status]);
+  const stop = async () => {
+    setStopping(true);
+    try {
+      await interrupt({ token, threadId: t.threadId });
+    } catch {
+      setStopping(false);
+    }
+  };
   // Picks on the card of asks: ask index to choice index, for one card.
   const [picks, setPicks] = useState<{ card?: number; by: Record<number, number> }>({ by: {} });
   const [ticked, setTicked] = useState<{ seq?: number; set: Set<number> }>({ set: new Set() });
   const asks = !busy(t) && !t.pendingApproval ? (t.asks ?? []) : [];
   const by = picks.card === t.asksSeq ? picks.by : {};
-  const done = !busy(t) && !t.needsYou && !t.pendingApproval && !asks.length && !t.archivedAt && !t.working && (t.next?.length ?? 0) > 0;
-  const next = done ? (t.next ?? []) : [];
+  const finished = !busy(t) && !t.needsYou && !t.pendingApproval && !asks.length && !t.archivedAt && !t.working;
+  const next = finished ? (t.next ?? []) : [];
+  // What the runner found still open (docs/protocol.md, "Loose ends"), as
+  // on the Mac and the phone: open ones first, then booked check-ins.
+  const ends = finished ? [...(t.looseEnds ?? []).filter((e) => e.kind !== 'scheduled'), ...(t.looseEnds ?? []).filter((e) => e.kind === 'scheduled')] : [];
   const follow = ticked.seq === lastSeq ? [...ticked.set].sort().map((i) => next[i]).filter((x): x is string => !!x) : [];
 
   const submit = async () => {
@@ -363,6 +397,7 @@ function Dock({ token, thread: t, lastSeq, onSent, onArchive }: { token: string;
               </div>
             ) : null}
           </div>
+          {a.run ? <RunCommand token={token} threadId={t.threadId} run={a.run} /> : null}
           {a.links?.length ? (
             <div className="ask-links">
               {a.links.map((l) => (
@@ -379,7 +414,10 @@ function Dock({ token, thread: t, lastSeq, onSent, onArchive }: { token: string;
                   <span className="radio" />
                   <span>
                     {c}
-                    {a.suggested === n ? <span className="pick">my pick</span> : null}
+                    {a.suggested === n ? <span className="pick"><span className="star" aria-hidden>★</span> Recommended</span> : null}
+                    {/* What the answer does, under it as on the Mac and the phone. The
+                        parity run's first look at the website found it missing (9 Nov). */}
+                    {a.options?.length && a.optionNotes?.[n]?.trim() ? <span className="desc">{a.optionNotes[n]}</span> : null}
                   </span>
                 </button>
               ))}
@@ -388,7 +426,7 @@ function Dock({ token, thread: t, lastSeq, onSent, onArchive }: { token: string;
         </Fragment>
       ))}
     </section>
-  ) : next.length ? (
+  ) : next.length || ends.length ? (
     <section className="card">
       <h2>
         Done
@@ -396,7 +434,30 @@ function Dock({ token, thread: t, lastSeq, onSent, onArchive }: { token: string;
           Archive
         </button>
       </h2>
-      <div className="choices">
+      {ends.length ? (
+        <div className="loose-ends">
+          <div className="loose-label">{ends.some((e) => e.kind !== 'scheduled') ? 'Still open' : 'Coming back'}</div>
+          {ends.map((e, i) => (
+            <div key={i} className={`loose ${e.kind === 'scheduled' ? 'booked' : 'open'}`}>
+              <span className="loose-mark" aria-label={e.kind === 'scheduled' ? 'Booked' : 'Still open'}>{e.kind === 'scheduled' ? '🕘' : '!'}</span>
+              {e.threadId ? (
+                <a
+                  href={threadPath(e.threadId)}
+                  onClick={(ev) => {
+                    ev.preventDefault();
+                    go(threadPath(e.threadId!));
+                  }}
+                >
+                  {e.text}
+                </a>
+              ) : (
+                <span>{e.kind === 'scheduled' && e.at ? `${bookedWhen(e.at)}: ${e.text}` : e.text}</span>
+              )}
+            </div>
+          ))}
+        </div>
+      ) : null}
+      {next.length ? <div className="choices">
         {next.map((n, i) => {
           const on = ticked.seq === lastSeq && ticked.set.has(i);
           return (
@@ -415,7 +476,7 @@ function Dock({ token, thread: t, lastSeq, onSent, onArchive }: { token: string;
             </button>
           );
         })}
-      </div>
+      </div> : null}
     </section>
   ) : null;
 
@@ -446,9 +507,23 @@ function Dock({ token, thread: t, lastSeq, onSent, onArchive }: { token: string;
         />
         <div className="tools-row">
           <span className="grow" />
-          <button className="send" disabled={!ready} aria-label="Send" title="Send">
-            <Icon.Up />
-          </button>
+          {busy(t) && !ready ? (
+            // Stop only while nothing's typed, as on the Mac: a message
+            // typed during a turn goes into it.
+            stopping ? (
+              <button type="button" className="send" disabled aria-label="Stopping" title="Stopping">
+                <span className="spinner" />
+              </button>
+            ) : (
+              <button type="button" className="send" onClick={() => void stop()} aria-label="Stop" title="Stop">
+                <Icon.Stop />
+              </button>
+            )
+          ) : (
+            <button className="send" disabled={!ready} aria-label="Send" title="Send">
+              <Icon.Up />
+            </button>
+          )}
         </div>
       </form>
     </div>

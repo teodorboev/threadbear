@@ -139,14 +139,17 @@ public struct ApprovalRequest: Sendable, Hashable, Decodable {
     public var title: String
     public var input: JSONValue
     public var options: [ApprovalOption]
+    /// Why the CLI asked (Auto's safety check, a rule, a hook), when it said.
+    public var reason: String?
 
-    public init(approvalId: String, itemId: String? = nil, name: String, title: String, input: JSONValue = .object([:]), options: [ApprovalOption] = [.allow, .allowAlways, .deny]) {
+    public init(approvalId: String, itemId: String? = nil, name: String, title: String, input: JSONValue = .object([:]), options: [ApprovalOption] = [.allow, .allowAlways, .deny], reason: String? = nil) {
         self.approvalId = approvalId
         self.itemId = itemId
         self.name = name
         self.title = title
         self.input = input
         self.options = options
+        self.reason = reason
     }
 
     public init(from decoder: Decoder) throws {
@@ -157,11 +160,15 @@ public struct ApprovalRequest: Sendable, Hashable, Decodable {
         title = (try? c.decodeIfPresent(String.self, forKey: .title)) ?? name
         input = (try? c.decodeIfPresent(JSONValue.self, forKey: .input)) ?? .object([:])
         // Unknown option strings are dropped rather than failing the event.
+        // A card left with none (a newer runner's names only) still gets
+        // Allow and Deny, which every runner takes, rather than no buttons.
         let raw = (try? c.decodeIfPresent(LossyArray<String>.self, forKey: .options))??.elements ?? ["allow", "deny"]
-        options = raw.compactMap(ApprovalOption.init(rawValue:))
+        let known = raw.compactMap(ApprovalOption.init(rawValue:))
+        options = known.isEmpty ? [.allow, .deny] : known
+        reason = try? c.decodeIfPresent(String.self, forKey: .reason)
     }
 
-    enum CodingKeys: String, CodingKey { case approvalId, itemId, name, title, input, options }
+    enum CodingKeys: String, CodingKey { case approvalId, itemId, name, title, input, options, reason }
 }
 
 public struct QuestionOption: Sendable, Hashable, Codable {
@@ -408,11 +415,14 @@ public struct TurnCompletion: Sendable, Hashable, Decodable {
     /// With needs "nothing": follow-ups the agent suggested, each the
     /// message that would start it, as buttons on the done card.
     public var next: [String]
+    /// Review by another lab's ledger, on the turn that answered a round.
+    public var review: LabReview?
 
     public init(
         turnId: String, outcome: TurnOutcome, durationMs: Double, costUsd: Double? = nil, usage: JSONValue? = nil, error: String? = nil,
-        errorKind: TurnErrorKind? = nil, needs: String? = nil, asks: [Ask] = [], next: [String] = []
+        errorKind: TurnErrorKind? = nil, needs: String? = nil, asks: [Ask] = [], next: [String] = [], review: LabReview? = nil
     ) {
+        self.review = review
         self.needs = needs
         self.asks = asks
         self.next = next
@@ -436,6 +446,7 @@ public struct TurnCompletion: Sendable, Hashable, Decodable {
         needs = (try? c.decodeIfPresent(String.self, forKey: .needs)) ?? nil
         asks = c.lossyArray(Ask.self, forKey: .asks)
         next = c.lossyArray(String.self, forKey: .next)
+        review = (try? c.decodeIfPresent(LabReview.self, forKey: .review)) ?? nil
         // `error` may be a string or an object depending on the runner version.
         if let text = try? c.decodeIfPresent(String.self, forKey: .error) {
             error = text
@@ -446,7 +457,7 @@ public struct TurnCompletion: Sendable, Hashable, Decodable {
         }
     }
 
-    enum CodingKeys: String, CodingKey { case turnId, outcome, durationMs, costUsd, usage, error, errorKind, needs, asks, next }
+    enum CodingKeys: String, CodingKey { case turnId, outcome, durationMs, costUsd, usage, error, errorKind, needs, asks, next, review }
 }
 
 /// A command action that ran (`action.run`): what it printed, outside any

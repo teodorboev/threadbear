@@ -21,7 +21,7 @@ function store() {
   const usage = new UsageStore({ limitsFile: path.join(dir, 'none', 'limits.json'), dataDir: dir, clock, log: nullLogger });
   return { usage, clock };
 }
-const GMAIL = { id: 'claude-main', provider: 'claude' as const, configDir: '/tmp/x', email: 'mike.cann@gmail.com' };
+const GMAIL = { id: 'claude-main', provider: 'claude' as const, configDir: '/tmp/x', email: 'mike@example.net' };
 const weekly = (u: AccountUsage | undefined) => u?.windows.find((w) => w.kind === 'weekly')?.remainingPercent;
 const reading = (mins: number, week: number, extra: Partial<AccountUsage> = {}): AccountUsage => ({
   windows: [{ kind: 'weekly', title: 'Weekly', remainingPercent: week, resetsAt: iso(3 * 24 * 60) }], readAt: iso(mins), source: 'tokenStats', ...extra,
@@ -35,7 +35,7 @@ test("the Mac's newer reading of the same login wins over the server's old one",
   let heard: string[] = [];
   usage.onChange((ids) => (heard = ids));
   usage.usageFor(GMAIL);
-  usage.setShared([{ runnerId: 'm5', provider: 'claude', email: 'Mike.Cann@gmail.com', usage: reading(55, 32), byOwnerKey: true }]);
+  usage.setShared([{ runnerId: 'm5', provider: 'claude', email: 'Mike@Example.net', usage: reading(55, 32), byOwnerKey: true }]);
   const u = usage.usageFor(GMAIL);
   assert.equal(weekly(u), 32);
   assert.equal(u?.source, 'shared');
@@ -51,10 +51,10 @@ test('an older reading from elsewhere, another login, or a stale one changes not
   clock.advance(60 * 60_000);
   usage.record('claude-main', { windows: [{ kind: 'weekly', title: 'Weekly', remainingPercent: 50, resetsAt: iso(3 * 24 * 60) }] });
   usage.setShared([
-    { runnerId: 'm5', provider: 'claude', email: 'mike.cann@gmail.com', usage: reading(10, 5), byOwnerKey: true },
-    { runnerId: 'm5', provider: 'claude', email: 'mike@gangbusters.io', usage: reading(70, 1), byOwnerKey: true },
-    { runnerId: 'm5', provider: 'codex', email: 'mike.cann@gmail.com', usage: reading(70, 1), byOwnerKey: true },
-    { runnerId: 'bruce', provider: 'claude', email: 'mike.cann@gmail.com', usage: reading(70, 2, { stale: true }), byOwnerKey: true },
+    { runnerId: 'm5', provider: 'claude', email: 'mike@example.net', usage: reading(10, 5), byOwnerKey: true },
+    { runnerId: 'm5', provider: 'claude', email: 'mike@example.org', usage: reading(70, 1), byOwnerKey: true },
+    { runnerId: 'm5', provider: 'codex', email: 'mike@example.net', usage: reading(70, 1), byOwnerKey: true },
+    { runnerId: 'bruce', provider: 'claude', email: 'mike@example.net', usage: reading(70, 2, { stale: true }), byOwnerKey: true },
   ]);
   const u = usage.usageFor(GMAIL);
   assert.equal(weekly(u), 50);
@@ -66,7 +66,7 @@ test('a login another machine found at its limit counts as blocked here until it
   usage.usageFor(GMAIL);
   const atLimit: AccountUsage = { windows: [{ kind: 'weekly', title: 'Weekly', remainingPercent: 0, resetsAt: iso(120) }], readAt: iso(5), source: 'live', blocked: true };
   clock.advance(10 * 60_000);
-  usage.setShared([{ runnerId: 'm5', provider: 'claude', email: 'mike.cann@gmail.com', usage: atLimit, byOwnerKey: true }]);
+  usage.setShared([{ runnerId: 'm5', provider: 'claude', email: 'mike@example.net', usage: atLimit, byOwnerKey: true }]);
   assert.equal(usage.usageFor(GMAIL)?.blocked, true);
   clock.advance(121 * 60_000);
   assert.notEqual(usage.usageFor(GMAIL)?.blocked, true, 'its reset has passed');
@@ -75,7 +75,7 @@ test('a login another machine found at its limit counts as blocked here until it
 test('a login with no email known takes nothing from elsewhere', () => {
   const { usage } = store();
   const noEmail = { ...GMAIL, email: undefined };
-  usage.setShared([{ runnerId: 'm5', provider: 'claude', email: 'mike.cann@gmail.com', usage: reading(0, 10), byOwnerKey: true }]);
+  usage.setShared([{ runnerId: 'm5', provider: 'claude', email: 'mike@example.net', usage: reading(0, 10), byOwnerKey: true }]);
   assert.equal(usage.usageFor(noEmail), undefined);
 });
 
@@ -93,7 +93,7 @@ test("F1: a runner key's reading never blocks a login, nor wins over this runner
   usage.record('claude-main', { windows: [{ kind: 'weekly', title: 'Weekly', remainingPercent: 70, resetsAt: iso(3 * 24 * 60) }] });
   clock.advance(10 * 60_000);
   usage.usageFor(GMAIL);
-  usage.setShared([{ provider: 'claude', email: 'mike.cann@gmail.com', usage: FAKE() }]);
+  usage.setShared([{ provider: 'claude', email: 'mike@example.net', usage: FAKE() }]);
   const u = usage.usageFor(GMAIL);
   assert.notEqual(u?.blocked, true);
   assert.equal(weekly(u), 70, 'its own reading stands');
@@ -107,13 +107,13 @@ test("F1: a runner key's reading doesn't fill in a window nothing else has read,
   // A Max plan's login: weekly only.
   usage.record('claude-main', { windows: [{ kind: 'weekly', title: 'Weekly', remainingPercent: 80, resetsAt: iso(3 * 24 * 60) }] });
   clock.advance(60_000);
-  usage.setShared([{ provider: 'claude', email: 'mike.cann@gmail.com', usage: { windows: [{ kind: 'five_hour', title: '5-hour', remainingPercent: 0 }], readAt: iso(1), source: 'live' } }]);
+  usage.setShared([{ provider: 'claude', email: 'mike@example.net', usage: { windows: [{ kind: 'five_hour', title: '5-hour', remainingPercent: 0 }], readAt: iso(1), source: 'live' } }]);
   const u = usage.usageFor(GMAIL)!;
   assert.deepEqual(u.windows.map((w) => w.kind), ['weekly']);
   assert.equal(loginOk(acct(u)), true);
   // Nor says a login nobody has read here is full.
   const { usage: fresh } = store();
-  fresh.setShared([{ provider: 'claude', email: 'mike.cann@gmail.com', usage: { windows: [{ kind: 'weekly', title: 'Weekly', remainingPercent: 100 }], readAt: iso(0), source: 'live' } }]);
+  fresh.setShared([{ provider: 'claude', email: 'mike@example.net', usage: { windows: [{ kind: 'weekly', title: 'Weekly', remainingPercent: 100 }], readAt: iso(0), source: 'live' } }]);
   assert.equal(fresh.usageFor(GMAIL), undefined);
 });
 
@@ -123,8 +123,8 @@ test("the main Mac's key's reading still counts, and an unmarked one beside it d
   clock.advance(10 * 60_000);
   const atLimit: AccountUsage = { windows: [{ kind: 'weekly', title: 'Weekly', remainingPercent: 0, resetsAt: iso(120) }], readAt: iso(5), source: 'live', blocked: true };
   usage.setShared([
-    { provider: 'claude', email: 'mike.cann@gmail.com', usage: atLimit, byOwnerKey: true },
-    { provider: 'claude', email: 'mike.cann@gmail.com', usage: { ...FAKE(), blocked: undefined, readAt: iso(9), windows: [{ kind: 'weekly', title: 'Weekly', remainingPercent: 100, resetsAt: iso(3 * 24 * 60) }] } },
+    { provider: 'claude', email: 'mike@example.net', usage: atLimit, byOwnerKey: true },
+    { provider: 'claude', email: 'mike@example.net', usage: { ...FAKE(), blocked: undefined, readAt: iso(9), windows: [{ kind: 'weekly', title: 'Weekly', remainingPercent: 100, resetsAt: iso(3 * 24 * 60) }] } },
   ]);
   const u = usage.usageFor(GMAIL);
   assert.equal(u?.blocked, true);

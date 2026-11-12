@@ -107,8 +107,8 @@ public struct InboxSections: Sendable, Equatable {
     /// the sidebar agree on what's in the inbox; change both together.
     /// Running: a turn is underway, or background work is still going.
     /// Scheduled: idle with a schedule due to message it (`wakes`), and
-    /// nothing for Mike: no question, no design review, no unread reply
-    /// that didn't say "nothing", no open asks, not waiting for a login
+    /// nothing for Mike: no question, no design review, no reply wanting
+    /// him (one that said "nothing" doesn't), no open asks, not waiting for a login
     /// with room. Inbox: everything else. Starred takes a starred thread
     /// from all of these, whatever it's doing.
     public static func build(_ threads: some Sequence<PhoneThread>, now: Date, wakes: [String: PhoneSchedule] = [:]) -> InboxSections {
@@ -176,13 +176,12 @@ public struct InboxSections: Sendable, Equatable {
         return soonest
     }
 
-    /// Lowest first. 0: stuck on his answer. 1: finished unread with a
-    /// failure. 2: finished unread. 3: read but failed or stopped. 4: done.
+    /// How much an inbox thread wants Mike, lowest first (InboxUrgency,
+    /// the Mac's rule too). Unread alone isn't wanting him: a turn that
+    /// said "nothing" is done, as on the Mac.
     public static func urgency(_ thread: PhoneThread) -> Int {
-        let broken = thread.status == .error || thread.status == .stopped
-        if thread.reviewWaiting || needsAnswer(thread) { return 0 }
-        if thread.needsYou || thread.unread { return broken ? 1 : 2 }
-        return broken ? 3 : 4
+        InboxUrgency.of(answerWaiting: thread.reviewWaiting || needsAnswer(thread), needsYou: thread.needsYou,
+                        broken: thread.status == .error || thread.status == .stopped)
     }
 
     public static func needsAnswer(_ thread: PhoneThread) -> Bool {
@@ -206,11 +205,12 @@ public struct InboxSections: Sendable, Equatable {
         a.lastActivityAt != b.lastActivityAt ? a.lastActivityAt > b.lastActivityAt : a.threadId < b.threadId
     }
 
-    /// The badge: threads waiting on an answer or not read yet. A star doesn't
-    /// take one out of it, unless it's hibernating, which isn't counted either.
+    /// The badge: threads waiting on an answer or wanting him (InboxUrgency),
+    /// as the Mac's Dock badge. A star doesn't take one out of it, unless
+    /// it's hibernating, which isn't counted either.
     public var needsYouCount: Int {
         let awake = starred.filter { $0.snoozedUntil == nil && $0.snoozedUntilRestart != true }
-        return (awake + inbox).filter { Self.urgency($0) <= 2 }.count
+        return (awake + inbox).filter { InboxUrgency.counts(Self.urgency($0)) }.count
     }
 
     public var isEmpty: Bool { starred.isEmpty && inbox.isEmpty && running.isEmpty && scheduled.isEmpty }
@@ -228,17 +228,20 @@ public struct ThreadSearch: Sendable, Equatable {
     public var hibernating: [PhoneThread] = []
     public var archived: [PhoneThread] = []
 
-    /// `olderArchived` is what phone:search found past the den's newest 100:
-    /// matched by Convex on whole words, so kept as it comes, after the
-    /// archived threads the phone has.
+    /// `olderArchived` is what phone:search found: matched by Convex on
+    /// whole words, so kept as it comes. One the phone has stays in its own
+    /// section, as a word said in one of its messages (backend API 74)
+    /// finds it there too; the rest go after the archived threads the phone
+    /// has, as ones past the den's newest 100.
     public init(_ query: String, sections: InboxSections, hibernating: [PhoneThread], archived: [PhoneThread],
                 olderArchived: [PhoneThread] = [], wakes: [String: PhoneSchedule] = [:]) {
         let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        let found = Set(olderArchived.map(\.threadId))
         // A thread can sit in two lists for a moment while the runner moves
         // it (snoozed but not yet out of the inbox view): show it once.
         var seen = Set<String>()
         let keep: ([PhoneThread]) -> [PhoneThread] = { threads in
-            threads.filter { Self.matches($0, query) && seen.insert($0.threadId).inserted }
+            threads.filter { (Self.matches($0, query) || found.contains($0.threadId)) && seen.insert($0.threadId).inserted }
         }
         starred = keep(sections.starred)
         inbox = keep(sections.inbox)
@@ -247,12 +250,13 @@ public struct ThreadSearch: Sendable, Equatable {
         self.archived = keep(archived) + olderArchived.filter { seen.insert($0.threadId).inserted }
     }
 
-    /// Part of the title or the last reply, as on the Mac, or the project
-    /// or folder, which on the phone's narrow rows is often all you can
-    /// remember a thread by.
+    /// Part of the title or the last reply, as on the Mac, the librarian's
+    /// search words ("dentist" for a wisdom tooth appointment), or the
+    /// project or folder, which on the phone's narrow rows is often all you
+    /// can remember a thread by.
     public static func matches(_ thread: PhoneThread, _ query: String) -> Bool {
         let options: String.CompareOptions = [.caseInsensitive, .diacriticInsensitive]
-        return [thread.title, thread.preview, thread.placeText].contains { $0.range(of: query, options: options) != nil }
+        return [thread.title, thread.preview, thread.placeText, thread.keywords ?? ""].contains { $0.range(of: query, options: options) != nil }
     }
 
     public var isEmpty: Bool { starred.isEmpty && inbox.isEmpty && running.isEmpty && hibernating.isEmpty && archived.isEmpty }

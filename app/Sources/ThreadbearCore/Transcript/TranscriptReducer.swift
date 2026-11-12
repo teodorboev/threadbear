@@ -994,14 +994,14 @@ public struct TranscriptModel: Sendable {
                 // picked there and sent from the composer (Mike, 28 Oct).
                 if completion.outcome == .completed, completion.needs == "you", !completion.asks.isEmpty {
                     let cardId = "ak:\(seq)"
-                    append(TranscriptRow(id: cardId, seq: seq, turnId: turnId ?? completion.turnId, content: .asks(AsksCard(seq: seq, asks: completion.asks, ticked: Set(completion.asks.indices.filter { completion.asks[$0].ticked }), picks: askPicks[seq] ?? [:], notes: askNotes[seq] ?? [:]))))
+                    append(TranscriptRow(id: cardId, seq: seq, turnId: turnId ?? completion.turnId, content: .asks(AsksCard(seq: seq, asks: completion.asks, ticked: Set(completion.asks.indices.filter { completion.asks[$0].ticked }), picks: askPicks[seq] ?? [:], notes: askNotes[seq] ?? [:], review: completion.review))))
                     asksRowForSeq[seq] = cardId
                     openAsksRow = cardId
                 } else if completion.outcome == .completed, completion.needs == "nothing" {
                     // The done card: goes, as an asks card does, once Mike
                     // replies or the next turn ends.
                     let cardId = "ak:\(seq)"
-                    append(TranscriptRow(id: cardId, seq: seq, turnId: turnId ?? completion.turnId, content: .asks(AsksCard(seq: seq, asks: [], next: completion.next, pickedNext: nextPicks[seq] ?? [], explainNext: nextExplains[seq] ?? [], looseEnds: looseEnds?.seq == seq ? looseEnds?.ends : nil))))
+                    append(TranscriptRow(id: cardId, seq: seq, turnId: turnId ?? completion.turnId, content: .asks(AsksCard(seq: seq, asks: [], next: completion.next, pickedNext: nextPicks[seq] ?? [], explainNext: nextExplains[seq] ?? [], looseEnds: looseEnds?.seq == seq ? looseEnds?.ends : nil, review: completion.review))))
                     asksRowForSeq[seq] = cardId
                     openAsksRow = cardId
                 }
@@ -1555,6 +1555,8 @@ public struct TranscriptModel: Sendable {
                             done.durationMs = worked
                             let costs = footers.compactMap(\.done.costUsd)
                             done.costUsd = costs.isEmpty ? nil : costs.reduce(0, +)
+                            let tokens = footers.compactMap { TurnTokens(usage: $0.done.usage) }
+                            done.usage = tokens.isEmpty ? nil : tokens.dropFirst().reduce(tokens[0], +).usage
                             out.append(derived(row.id, seq: row.seq, turnId: row.turnId, .footer(done)))
                         } else {
                             out.append(row)

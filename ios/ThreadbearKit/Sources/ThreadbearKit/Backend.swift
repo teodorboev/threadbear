@@ -35,7 +35,9 @@ public protocol Backend: Sendable {
     /// Archived threads with these words in their title or last reply
     /// (backend API 16), for the search to find ones older than the den's
     /// newest 100. Once, not live: it runs again as the words change.
-    func search(_ text: String) async throws -> [PhoneThread]
+    /// `everywhere` (API 74): threads in any list, by their search words
+    /// or a word in any message as well.
+    func search(_ text: String, everywhere: Bool) async throws -> [PhoneThread]
     /// Every runner's schedules whole, for a backend older than API 45.
     func schedules() -> AsyncThrowingStream<[PhoneSchedule], Error>
     /// The active schedules, for the inbox's Hibernating section: which
@@ -71,6 +73,9 @@ public protocol Backend: Sendable {
     /// Asks the thread's runner for the slash commands it can run (backend
     /// API 62). The list comes back as the command's `commands`.
     func slashCommands(threadId: String) async throws -> String
+    /// Stop (backend API 69): ends the thread's running turn, as Stop on
+    /// the Mac does, through an `interrupt` command for its runner.
+    func interrupt(threadId: String) async throws -> String
     /// Answers keyed by question text, several choices joined with ", ",
     /// as the Mac app sends them. `summary` goes in the transcript.
     func answer(threadId: String, approvalId: String, answers: [String: String], summary: String) async throws -> String
@@ -94,6 +99,9 @@ public protocol Backend: Sendable {
     /// API 2: up to `limit` messages and tool lines before `beforeSeq`, once,
     /// for scrolling back past what the live page holds (MessageHistory).
     func olderMessages(_ threadId: String, beforeSeq: Int, limit: Int) async throws -> MessagePage
+    /// API 37: a thread's pictures from `from` on, live. It re-runs only when
+    /// a picture row changes, so it covers rows read once (MessageHistory).
+    func images(_ threadId: String, from: Int) -> AsyncThrowingStream<[MessageImage], Error>
     /// For a backend before API 2: asks the runner for up to 50 text messages older than `beforeSeq`;
     /// they turn up in `thread(_:)` once it has written them.
     func loadEarlier(threadId: String, beforeSeq: Int) async throws -> String
@@ -144,7 +152,13 @@ public final class ConvexBackend: Backend, @unchecked Sendable {
     }
 
     private static func decode<T: Decodable>(_ type: T.Type, _ data: Data) throws -> T {
-        do { return try JSONDecoder().decode(T.self, from: data) } catch {
+        do {
+            // Every list the backend answers (threads, projects, schedules,
+            // accounts...) is read item by item, so one row this build
+            // can't read is skipped rather than failing the whole answer.
+            if let list = T.self as? LossyListDecodable.Type, let value = try list.decodeLossily(data) as? T { return value }
+            return try JSONDecoder().decode(T.self, from: data)
+        } catch {
             throw TransportError.server("Couldn't read the server's answer: \(error)")
         }
     }
@@ -237,8 +251,11 @@ public final class ConvexBackend: Backend, @unchecked Sendable {
         }
     }
 
-    public func search(_ text: String) async throws -> [PhoneThread] {
-        try Self.decode([PhoneThread].self, try await transport.query("phone:search", args(["text": .string(text)])))
+    public func search(_ text: String, everywhere: Bool) async throws -> [PhoneThread] {
+        // Only when asked: an older backend's validator refuses the argument.
+        var fields: [String: JSONValue] = ["text": .string(text)]
+        if everywhere { fields["everywhere"] = .bool(true) }
+        return try Self.decode([PhoneThread].self, try await transport.query("phone:search", args(fields)))
     }
 
     public func pocket() -> AsyncThrowingStream<[PocketCard], Error> {
@@ -291,6 +308,10 @@ public final class ConvexBackend: Backend, @unchecked Sendable {
         return try Self.decode(MessagePage.self, answer)
     }
 
+    public func images(_ threadId: String, from: Int) -> AsyncThrowingStream<[MessageImage], Error> {
+        live("phone:images", ["threadId": .string(threadId), "from": .number(Double(from))], as: [MessageImage].self)
+    }
+
     public func command(_ commandId: String) -> AsyncThrowingStream<CommandStatus?, Error> {
         live("phone:command", ["commandId": .string(commandId)], as: CommandStatus?.self, missing: .some(nil))
     }
@@ -335,6 +356,10 @@ public final class ConvexBackend: Backend, @unchecked Sendable {
 
     public func slashCommands(threadId: String) async throws -> String {
         try await command("phone:slashCommands", ["threadId": .string(threadId)])
+    }
+
+    public func interrupt(threadId: String) async throws -> String {
+        try await command("phone:interrupt", ["threadId": .string(threadId)])
     }
 
     public func respond(threadId: String, approvalId: String, decision: ApprovalOption) async throws -> String {

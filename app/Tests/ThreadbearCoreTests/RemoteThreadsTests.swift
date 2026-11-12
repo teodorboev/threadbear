@@ -18,6 +18,14 @@ final class RemoteThreadsTests: XCTestCase {
         XCTAssertNil(try decode(["runners": [], "threads": [], "order": "nonsense"]).order)
     }
 
+    /// Daybreak 87: a compromised extra Mac's row under an id with shell or
+    /// markdown in it never reaches the sidebar, so never Copy debug info.
+    func testARowWhoseIdIsntAThreadIdsShapeIsLeftOut() throws {
+        let ids = ["remote$(printf TB_ID_EXECUTED >&2)", "deadbeef) ![local](/tmp/private.png", "../x", "é", String(repeating: "a", count: 65), "0cf430ac-f429-4b2e-9c1d-2f6a8b7c9d0e", "demo_upload"]
+        let list = try decode(["runners": [], "threads": ids.map { ["runnerId": "r_bruce", "threadId": $0] }])
+        XCTAssertEqual(list.threads.map(\.threadId), ["0cf430ac-f429-4b2e-9c1d-2f6a8b7c9d0e", "demo_upload"])
+    }
+
     func testDecodesTolerantly() throws {
         let list = try decode([
             "runners": [

@@ -72,7 +72,11 @@ struct DockPane: View {
                 ConvexPanel(threadId: thread.id, panelId: panel.id, convex: convex)
                     .id("\(thread.id) \(panel.id) \(convex.deployment)")
             } else if let url = panel.pageURL {
-                WebPanel(url: url)
+                // A link to another site leaves the patch's page where it
+                // is and opens as a link from a highlight would: the browser,
+                // or a page over this panel with Back (Mike, 11 Nov: a click
+                // on a video loaded YouTube in the panel, with no way back).
+                WebPanel(url: url, leaving: { link in app.openLink(link, overPanel: panel.id, in: thread) })
             } else {
                 PaneNote(text: "This panel has no page to show.")
             }
@@ -108,7 +112,13 @@ struct DockPaneButtons: View {
                             if let target = pool.convexBrowserURL(convex) { OpenGate.openWeb(target) }
                         }
                     } else {
-                        PaneHeaderButton(symbol: "arrow.clockwise", help: "Reload panel") { WebPanelPool.shared.reloadIfLoaded(url) }
+                        // Its own page moved on to another (a same-site link,
+                        // a script's window.open): back a page at a time.
+                        // Reload goes back to the panel's own page.
+                        if pool.canGoBack(url) {
+                            PaneHeaderButton(symbol: "chevron.left", help: "Back") { pool.goBack(url) }
+                        }
+                        PaneHeaderButton(symbol: "arrow.clockwise", help: "Reload the panel's own page") { WebPanelPool.shared.reloadIfLoaded(url) }
                         // The panel's page is the patch's or a runner's to say:
                         // a web page opens, another Mac's file is fetched
                         // from it, anything else asks (OpenGate).
@@ -268,6 +278,9 @@ struct PanelRail: View {
         .padding(.bottom, zoomed(10))
         .frame(width: ActivityBar.width)
         .frame(maxHeight: .infinity)
+        // Opaque: in a narrow window the dock can be wider than its room
+        // and run under the rail, and its text showed through (Wayne, 9 Nov).
+        .background(Color(nsColor: .windowBackgroundColor))
         .overlay(alignment: .leading) {
             Rectangle().fill(.separator).frame(width: 0.5).padding(.vertical, zoomed(4))
         }
@@ -444,6 +457,13 @@ struct PatchesList: View {
                         .foregroundStyle(Color(nsColor: Theme.failed))
                         .textSelection(.enabled)
                 }
+                // Why threads in Ask and Auto ask before every edit.
+                if let editsAsk = patch.editsAsk {
+                    Text(editsAsk)
+                        .font(.system(size: TypeScale.detail))
+                        .foregroundStyle(Color(nsColor: Theme.needsYou))
+                        .textSelection(.enabled)
+                }
             }
             // A tool patch: why it's here, when it came from another repo.
             if let matched = patch.matched, !matched.isEmpty {
@@ -545,6 +565,9 @@ struct WebPanel: NSViewRepresentable {
     let url: URL
     /// A local page's digest Mike let run its scripts (LocalPagePreview).
     var scriptsFor: String?
+    /// A patch's panel: where a link to another site goes instead of
+    /// loading over the page (WebPanelPool.leavesPanel).
+    var leaving: ((URL) -> Void)?
     @Environment(\.isDockGhost) private var isGhost
 
     func makeNSView(context: Context) -> WebPanelContainer { WebPanelContainer() }
@@ -552,7 +575,11 @@ struct WebPanel: NSViewRepresentable {
     func updateNSView(_ container: WebPanelContainer, context: Context) {
         // The dock's drag ghost would take the page out of its panel.
         if isGhost { return }
-        container.show(WebPanelPool.shared.webView(for: url, scriptsFor: scriptsFor))
+        let pool = WebPanelPool.shared
+        let view = pool.webView(for: url, scriptsFor: scriptsFor)
+        // Set each time: the same page's view may be another thread's panel next.
+        pool.setLeaving(leaving.map { (url, $0) }, for: view)
+        container.show(view)
     }
 }
 
@@ -828,6 +855,10 @@ final class WebPanelPool: NSObject, ObservableObject, WKNavigationDelegate, WKUI
     static let shared = WebPanelPool()
     private var views: [URL: WKWebView] = [:]
     private var order: [URL] = []
+    /// A patch panel's view: its own page, and where links off its site go.
+    private var leavers: [ObjectIdentifier: (home: URL, open: (URL) -> Void)] = [:]
+    /// canGoBack watched on each view, so the panel's Back shows and hides.
+    private var backWatches: [ObjectIdentifier: NSKeyValueObservation] = [:]
     static let capacity = 4
     private let defaults: UserDefaults
     @Published private var convexSelections: [String: String]
@@ -1001,7 +1032,7 @@ final class WebPanelPool: NSObject, ObservableObject, WKNavigationDelegate, WKUI
     /// ask the runner for a fresh one.
     func renewConvex(_ deployment: String) {
         let slot = Self.convexSlot(deployment)
-        views.removeValue(forKey: slot)?.removeFromSuperview()
+        if let gone = views.removeValue(forKey: slot) { forget(gone) }
         order.removeAll { $0 == slot }
         pendingRenewals.insert(deployment)
         convexRenewals[deployment, default: 0] += 1
@@ -1012,12 +1043,126 @@ final class WebPanelPool: NSObject, ObservableObject, WKNavigationDelegate, WKUI
     }
 
     private func makeView(_ config: WKWebViewConfiguration, sealed: Bool = false) -> WKWebView {
+        // A page's own script opens no window without a click. WebKit lets
+        // one on a Mac by default, and every window a panel's page asks for
+        // goes to the browser or loads over it, so a compromised script
+        // could open a browser tab a second (Codex review, 11 Nov).
+        config.preferences.javaScriptCanOpenWindowsAutomatically = false
         let view = sealed ? SealedPreviewWebView(frame: .zero, configuration: config) : FirstClickWebView(frame: .zero, configuration: config)
         view.navigationDelegate = self
         view.uiDelegate = self
         view.allowsBackForwardNavigationGestures = true
         view.underPageBackgroundColor = .windowBackgroundColor
+        backWatches[ObjectIdentifier(view)] = view.observe(\.canGoBack) { [weak self] _, _ in
+            MainActor.assumeIsolated { self?.objectWillChange.send() }
+        }
         return view
+    }
+
+    func setLeaving(_ leaving: (home: URL, open: (URL) -> Void)?, for view: WKWebView) {
+        leavers[ObjectIdentifier(view)] = leaving
+    }
+
+    func canGoBack(_ url: URL) -> Bool { views[url]?.canGoBack ?? false }
+
+    func goBack(_ url: URL) { views[url]?.goBack() }
+
+    /// Whether the dashboard's own navigation off its site goes to the
+    /// browser: only a link or a form, and only one someone clicked
+    /// (`userInitiated`, checked beside this, as a script can make either
+    /// type). One a script started, or a redirect, is cancelled without
+    /// opening anything, or a compromised dashboard script could open a
+    /// browser tab a second (Codex review, 11 Nov).
+    nonisolated static func convexSendsOut(_ type: WKNavigationType) -> Bool {
+        type == .linkActivated || type == .formSubmitted
+    }
+
+    /// Whether a click in a patch's panel should open somewhere else rather
+    /// than load over its page: a link, a form or a window.open (not a
+    /// script's `location` change or a server's redirect, so a sign-in that
+    /// goes through another site and back still works) in the page itself,
+    /// to a web page on another site than the panel's own.
+    nonisolated static func leavesPanel(_ target: URL?, home: URL, linkClick: Bool, mainFrame: Bool) -> Bool {
+        guard linkClick, mainFrame, let target, PreviewRules.isWebPage(target) else { return false }
+        return !sameSite(target, home)
+    }
+
+    /// Same scheme, host and port.
+    nonisolated static func sameSite(_ a: URL, _ b: URL) -> Bool {
+        func port(_ url: URL) -> Int? { url.port ?? (url.scheme?.lowercased() == "https" ? 443 : url.scheme?.lowercased() == "http" ? 80 : nil) }
+        return a.scheme?.lowercased() == b.scheme?.lowercased() && a.host?.lowercased() == b.host?.lowercased() && port(a) == port(b)
+    }
+
+    private func forget(_ view: WKWebView) {
+        view.removeFromSuperview()
+        leavers.removeValue(forKey: ObjectIdentifier(view))
+        backWatches.removeValue(forKey: ObjectIdentifier(view))?.invalidate()
+        lastOut.removeValue(forKey: ObjectIdentifier(view))
+    }
+
+    /// A link or a form, or anything asking for a new window (window.open,
+    /// which WebKit calls `.other`), that a person clicked or typed.
+    private static func isClick(_ action: WKNavigationAction) -> Bool {
+        (action.navigationType == .linkActivated || action.navigationType == .formSubmitted || action.targetFrame == nil) && userInitiated(action)
+    }
+
+    /// Whether a person's click or key is behind a navigation. Its type
+    /// isn't enough: a script's own `form.submit()` is `.formSubmitted` and
+    /// its `a.click()` `.linkActivated`, so a page could send a tab to the
+    /// browser over and over (Codex review, 11 Nov). WebKit keeps the real
+    /// answer in `_isUserInitiated`, which it doesn't publish; without it
+    /// nothing counts as a click, so nothing goes out.
+    static func userInitiated(_ action: WKNavigationAction) -> Bool {
+        guard action.responds(to: NSSelectorFromString("_isUserInitiated")) else { return false }
+        return (action.value(forKey: "_isUserInitiated") as? Bool) ?? false
+    }
+
+    /// Uses up the click behind a navigation that's about to open a page, so
+    /// it opens only that one: a click handler that keeps running (a busy
+    /// loop between `a.click()`s) still has its gesture a second later, past
+    /// `allowOut` (Codex review, 11 Nov). WebKit's `_userInitiatedAction`,
+    /// which it doesn't publish either, can be used up; false if it already
+    /// was. Without it, only `userInitiated` and `allowOut` hold.
+    static func takeClick(_ action: WKNavigationAction) -> Bool {
+        guard userInitiated(action) else { return false }
+        guard action.responds(to: NSSelectorFromString("_userInitiatedAction")),
+              let gesture = action.value(forKey: "_userInitiatedAction") as? NSObject,
+              gesture.responds(to: NSSelectorFromString("isConsumed")), gesture.responds(to: NSSelectorFromString("consume"))
+        else { return true }
+        if (gesture.value(forKey: "consumed") as? Bool) == true { return false }
+        gesture.perform(NSSelectorFromString("consume"))
+        return true
+    }
+
+    /// When each view last sent a page out, for `allowOut`.
+    private var lastOut: [ObjectIdentifier: Date] = [:]
+
+    /// One page a second at most from a panel to the browser or over it,
+    /// however fast its clicks come: each is a person's, but a page can make
+    /// every click a new window (Codex review, 11 Nov). The GPUI app's
+    /// LeaveGate does the same.
+    private func allowOut(_ view: WKWebView) -> Bool {
+        let now = Date()
+        if let last = lastOut[ObjectIdentifier(view)], now.timeIntervalSince(last) < 1 { return false }
+        lastOut[ObjectIdentifier(view)] = now
+        return true
+    }
+
+    /// The address the pool loaded in `view`: its slot, or for a Convex
+    /// view the embedded dashboard.
+    private func ownURL(of view: WKWebView) -> URL? {
+        guard let slot = views.first(where: { $0.value === view })?.key else { return nil }
+        return slot.scheme == "threadbear-convex" ? Self.convexEmbedded : slot
+    }
+
+    /// A link out of a patch's panel, if this is one (leavesPanel). It
+    /// leaves the page where it is even when it's one too many to open.
+    private func sendOut(_ webView: WKWebView, _ action: WKNavigationAction) -> Bool {
+        guard let leaver = leavers[ObjectIdentifier(webView)], let url = action.request.url,
+              Self.leavesPanel(url, home: leaver.home, linkClick: Self.isClick(action),
+                               mainFrame: action.targetFrame?.isMainFrame ?? true) else { return false }
+        if Self.takeClick(action), allowOut(webView) { leaver.open(url) }
+        return true
     }
 
     private func keep(_ view: WKWebView, as url: URL) {
@@ -1026,7 +1171,7 @@ final class WebPanelPool: NSObject, ObservableObject, WKNavigationDelegate, WKUI
         while order.count > Self.capacity, let oldest = order.first {
             // Never drop the one just asked for; the oldest unused goes.
             order.removeFirst()
-            if let gone = views.removeValue(forKey: oldest) { gone.removeFromSuperview() }
+            if let gone = views.removeValue(forKey: oldest) { forget(gone) }
         }
     }
 
@@ -1046,10 +1191,25 @@ final class WebPanelPool: NSObject, ObservableObject, WKNavigationDelegate, WKUI
             decisionHandler(allowed ? .allow : .cancel)
             return
         }
+        // Only a web page loads as a panel's page: a script's blob: or data:
+        // page, or anything else, is cancelled (Codex review, 11 Nov). Its
+        // own address (the mock runner's data: pages) and a blank page do
+        // load; an iframe's are WebKit's to rule on.
+        if navigationAction.targetFrame?.isMainFrame ?? true, let url = navigationAction.request.url,
+           LinkPolicy.web(url) == nil, url.absoluteString != "about:blank", url != ownURL(of: webView) {
+            decisionHandler(.cancel)
+            return
+        }
         if isConvexView(webView), navigationAction.targetFrame?.isMainFrame ?? true,
            let url = navigationAction.request.url, url.host != Self.convexEmbedded.host,
            LinkPolicy.web(url) != nil {
-            OpenGate.openWeb(url)
+            if Self.convexSendsOut(navigationAction.navigationType), Self.takeClick(navigationAction), allowOut(webView) {
+                OpenGate.openWeb(url)
+            }
+            decisionHandler(.cancel)
+            return
+        }
+        if sendOut(webView, navigationAction) {
             decisionHandler(.cancel)
             return
         }
@@ -1096,13 +1256,35 @@ final class WebPanelPool: NSObject, ObservableObject, WKNavigationDelegate, WKUI
     func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration,
                  for navigationAction: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
         if isPreviewView(webView) { return nil }
-        guard let url = navigationAction.request.url else { return nil }
-        // A page's window.open goes to the browser only as a web page: the
-        // page chose the address (OpenGate refuses anything else).
-        if isConvexView(webView) { OpenGate.openWeb(url) } else { webView.load(URLRequest(url: url)) }
+        // Only a window someone clicked for, and only a web page: WebKit
+        // already holds back a script's own (javaScriptCanOpenWindowsAutomatically
+        // is off), and this is the second lock on it.
+        guard let url = navigationAction.request.url, Self.userInitiated(navigationAction), LinkPolicy.web(url) != nil else { return nil }
+        // A target="_blank" link off a patch panel's site, if WebKit didn't
+        // already ask about it above.
+        if sendOut(webView, navigationAction) { return nil }
+        if isConvexView(webView) {
+            if Self.takeClick(navigationAction), allowOut(webView) { OpenGate.openWeb(url) }
+        } else {
+            webView.load(URLRequest(url: url))
+        }
         return nil
     }
 }
+
+#if DEBUG
+/// What a list or image panel last drew, for the scripted app (AppDump's
+/// `pane`): their rows and pictures live in the views' own state.
+enum PanelDebug {
+    nonisolated(unsafe) static var renders: [String: PanelRender] = [:]
+    nonisolated(unsafe) static var images: [String: NSImage] = [:]
+
+    static func note(_ id: String, _ render: PanelRender?, image: NSImage?) {
+        renders[id] = render
+        images[id] = image
+    }
+}
+#endif
 
 // MARK: - Image panels
 
@@ -1142,6 +1324,9 @@ private struct ImagePanel: View {
                 let result = await app.renderPanel(threadId: threadId, panelId: panel.id, failure: "Couldn't get a picture from the runner.")
                 if Task.isCancelled { return }
                 render = result
+                #if DEBUG
+                PanelDebug.note(panel.id, result, image: result?.image.flatMap { NSImage(contentsOfFile: $0.path) })
+                #endif
                 // A new NSImage each time: the file's name doesn't change.
                 // Another Mac's picture is that Mac's file, fetched from it,
                 // never this Mac's file at that path (Codex review, 7 Nov).
@@ -1200,6 +1385,9 @@ private struct ListPanel: View {
                 let result = await app.renderPanel(threadId: thread.id, panelId: panel.id, failure: "Couldn't get this list from the runner.")
                 if Task.isCancelled { return }
                 render = result ?? PanelRender(note: "Not connected to the runner.")
+                #if DEBUG
+                PanelDebug.note(panel.id, render, image: nil)
+                #endif
                 try? await Task.sleep(for: .seconds(15))
             }
         }

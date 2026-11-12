@@ -5,7 +5,9 @@
 // where it's "Mac17,9" for a laptop and a desktop alike. `sync.icon` in
 // runner.json overrides it.
 import os from 'node:os';
+import path from 'node:path';
 import { execFile } from 'node:child_process';
+import { atomicWriteFileSync, readJsonSync } from './fsutil.ts';
 
 // Not a Mac (a cloud sandbox, later): a cloud.
 export const NOT_A_MAC_ICON = 'cloud';
@@ -36,4 +38,32 @@ export function detectMachineIcon(timeoutMs = 3000): Promise<string> {
       }
     });
   });
+}
+
+// detectMachineIcon, remembered in <run>/machine-icon.json: system_profiler
+// held each restart up 0.3 to 1 s (12 Nov) to learn what never changes. A
+// remembered icon is used straight away and checked again in the
+// background, for the next start; it's per host name, so a data dir
+// carried to another Mac works it out again before using it.
+export async function machineIcon(runDir: string, detect: () => Promise<string> = detectMachineIcon): Promise<string> {
+  const file = path.join(runDir, 'machine-icon.json');
+  const host = os.hostname();
+  const remember = (icon: string) => {
+    try {
+      atomicWriteFileSync(file, JSON.stringify({ host, icon }) + '\n');
+    } catch {
+      // worked out again next time
+    }
+  };
+  const saved = readJsonSync<{ host?: unknown; icon?: unknown }>(file);
+  if (saved && saved.host === host && typeof saved.icon === 'string' && saved.icon) {
+    const icon = saved.icon;
+    void detect().then((now) => {
+      if (now !== icon) remember(now);
+    });
+    return icon;
+  }
+  const icon = await detect();
+  remember(icon);
+  return icon;
 }

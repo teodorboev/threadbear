@@ -52,6 +52,8 @@ export class FakeSession implements AgentSession {
   }
   // Only on an adapter that moves folders (FakeAdapter sets it up).
   setCwd?: (cwd: string) => Promise<void>;
+  // Set by a test of the context breakdown (Claude's getContextUsage).
+  contextUsage?: () => Promise<Omit<import('../../src/protocol.ts').ContextUsage, 'at'> | undefined>;
   async end(opts: { hard?: boolean } = {}): Promise<void> {
     this.ended = true;
     this.endedHard = Boolean(opts.hard);
@@ -176,6 +178,10 @@ export function testConfig(home: string, extra: Partial<Config> = {}): Config {
     followMain: false,
     bulletReplies: true,
     oneReply: false,
+    // On for real runners (config.ts); off here so a test's code change
+    // doesn't start a review it isn't about. lab-review.test.ts turns it on.
+    labReview: false,
+    keepAwake: true,
     models: { pool: 'claude', privateFolders: [] },
     // Never the real Convex project from a test (sync.test.ts passes a fake).
     sync: { enabled: false },
@@ -267,6 +273,11 @@ export function makeHarness(home = tmpDir(), cfgExtra: Partial<Config> = {}, dep
     defer: (fn) => fn(),
     // Patch trust has its own tests; the rest load every patch file.
     patchTrust: TRUST_ALL,
+    // Never the real ~/.threadbear/patches: trusted as above, a home patch
+    // would run its live commands (gh and the like) in every test's runner.
+    // Tyler Lusk's fork found it: a Mac with a few home patches took over 40
+    // minutes on the quick check and failed its timing tests (9 Nov 2026).
+    panelsRoot: tmpDir(),
     // Never touch a real Claude config dir from a test.
     copyTranscript: () => false,
     subagentTranscript: () => null,

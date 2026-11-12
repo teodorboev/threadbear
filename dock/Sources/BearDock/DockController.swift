@@ -206,7 +206,7 @@ public final class DockController {
             stopWatchingForEscape()
             windows.showOutline(panel: d.panel, frame: nil)
             windows.focusNext = d.panel
-            withAnimation(Self.settle) {
+            settle {
                 drag = nil
                 let home = home(of: d.panel)
                 layout.float(d.panel, frame: frame, home: home.drop, share: home.share)
@@ -237,7 +237,7 @@ public final class DockController {
         if cancelled, let from = d.window {
             window?.setFrame(from, display: true, animate: true)
         }
-        withAnimation(Self.settle) {
+        settle {
             drag = nil
             if !cancelled, let drop = d.target?.drop {
                 layout.move(d.panel, drop)
@@ -254,7 +254,7 @@ public final class DockController {
         let size = d.sourceFrame.size
         if let drop, let to = d.target?.land ?? d.target?.preview {
             landing = Landing(panel: d.panel, sourceSize: size, to: to)
-            withAnimation(Self.settle) {
+            settle {
                 drag = nil
                 layout.move(d.panel, drop)
                 landing?.done = true
@@ -262,7 +262,7 @@ public final class DockController {
         } else {
             // Nowhere to go, or cancelled: fly home.
             landing = Landing(panel: d.panel, sourceSize: size, to: frames[d.sourceGroup] ?? d.sourceFrame)
-            withAnimation(Self.settle) {
+            settle {
                 drag = nil
                 landing?.done = true
             }
@@ -317,7 +317,7 @@ public final class DockController {
         guard let screen = screenRect(at) else { return }
         windows.focusNext = panel
         let home = home(of: panel)
-        withAnimation(Self.settle) { layout.float(panel, frame: screen, home: home.drop, share: home.share) }
+        settle { layout.float(panel, frame: screen, home: home.drop, share: home.share) }
     }
 
     /// A panel that isn't in the layout, straight into a window of its own
@@ -335,7 +335,7 @@ public final class DockController {
         next.add(panel, .window(.right))
         next.float(panel, frame: screen, home: .window(.right))
         windows.focusNext = panel
-        withAnimation(Self.settle) { layout = next }
+        settle { layout = next }
     }
 
     /// From a window of its own back into the dock, where it came from if
@@ -343,7 +343,7 @@ public final class DockController {
     public func putBack(_ panel: PanelID) {
         guard let float = layout.floating.first(where: { $0.panel == panel }) else { return }
         let drop = float.home.flatMap { layout.canDrop(panel, $0) ? $0 : nil } ?? .window(.right)
-        withAnimation(Self.settle) { layout.move(panel, drop) }
+        settle { layout.move(panel, drop) }
     }
 
     /// Where Put Back docks a panel: as a tab of the group it's leaving if
@@ -396,8 +396,25 @@ public final class DockController {
 
     // MARK: Other changes
 
+    /// Where each panel's group was drawn when the layout last changed with
+    /// its glide, by the panel showing in it, for scripts: `panelFrames`
+    /// says where they went.
+    @ObservationIgnored public private(set) var motionFrom: [PanelID: CGRect]?
+
+    /// Each group's frame in the dock, by the panel showing in it.
+    public var panelFrames: [PanelID: CGRect] {
+        Dictionary(layout.groups.compactMap { g in frames[g.id].map { (g.selected, $0) } }, uniquingKeysWith: { a, _ in a })
+    }
+
+    /// A layout change, with the groups gliding to their new places
+    /// (`matchedGeometryEffect` in GroupView), noting where they were first.
+    private func settle(_ change: () -> Void) {
+        motionFrom = panelFrames
+        withAnimation(Self.settle, change)
+    }
+
     public func close(_ panel: PanelID) {
-        withAnimation(Self.settle) { layout.close(panel) }
+        settle { layout.close(panel) }
     }
 
     public func setTitleHidden(_ panel: PanelID, _ hidden: Bool) {
@@ -436,11 +453,11 @@ public final class DockController {
 
     /// Opens a panel that isn't in the layout, along the right of the window.
     public func open(_ panel: PanelID, _ drop: DockDrop = .window(.right)) {
-        withAnimation(Self.settle) { layout.add(panel, drop) }
+        settle { layout.add(panel, drop) }
     }
 
     public func setLayout(_ layout: DockLayout) {
-        withAnimation(Self.settle) { self.layout = layout }
+        settle { self.layout = layout }
     }
 
     // MARK: Hit testing

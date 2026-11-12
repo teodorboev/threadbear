@@ -106,6 +106,10 @@ final class ActivityRecorder {
         var e = ActivityEvent(kind: .click)
         e.target = Tips.shared.text(at: point, in: window).flatMap { ActivityEvent.label($0) }
         if e.target == nil { e.view = Self.viewName(at: point, in: window) }
+        // A transcript card's button has no tooltip: name the kind, so the
+        // done card's Archive can be counted (the looseEnds check-in of
+        // 11 Nov couldn't tell it from any other click on the transcript).
+        if e.target == nil, let action = Self.transcriptAction(at: point, in: window) { e.target = "Card button: \(action)" }
         e.window = Self.name(of: window)
         let panel = app?.dock.panel(at: point, in: window)
         e.panel = panel.map(Self.panelName)
@@ -254,6 +258,17 @@ final class ActivityRecorder {
         if type.contains("Popover") { return "popover" }
         if type.contains("Menu") { return "menu" }
         return ActivityEvent.label(window.title) ?? type
+    }
+
+    /// The kind of card button a click in the transcript's text landed on.
+    static func transcriptAction(at point: NSPoint, in window: NSWindow) -> String? {
+        guard let content = window.contentView else { return nil }
+        var view = content.hitTest(content.superview?.convert(point, from: nil) ?? point)
+        while let v = view {
+            if let text = v as? TranscriptTextView { return text.activityAction(atWindow: point) }
+            view = v.superview
+        }
+        return nil
     }
 
     /// For a click on something without a tooltip: the nearest of the

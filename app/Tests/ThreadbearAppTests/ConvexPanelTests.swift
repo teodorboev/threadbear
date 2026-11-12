@@ -48,6 +48,31 @@ final class ConvexPanelTests: XCTestCase {
         XCTAssertEqual(got, "none")
     }
 
+    /// Codex review, 11 Nov: a compromised dashboard script setting
+    /// `location` once a second opened a browser tab a second. Only a click
+    /// or a form goes out; the rest is cancelled.
+    func testOnlyAClickSendsTheDashboardToTheBrowser() {
+        XCTAssertTrue(WebPanelPool.convexSendsOut(.linkActivated))
+        XCTAssertTrue(WebPanelPool.convexSendsOut(.formSubmitted))
+        for type: WKNavigationType in [.other, .reload, .backForward, .formResubmitted] {
+            XCTAssertFalse(WebPanelPool.convexSendsOut(type), "navigation type \(type.rawValue)")
+        }
+    }
+
+    /// And a script's own window.open, which WebKit allows on a Mac unless
+    /// told not to, opens nothing: not from the dashboard, not from a
+    /// patch's page.
+    func testPanelPagesOpenNoWindowsOnTheirOwn() {
+        let suite = "ConvexPanelTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let pool = WebPanelPool(defaults: defaults)
+        let page = pool.webView(for: URL(string: "http://127.0.0.1:9/")!)
+        XCTAssertFalse(page.configuration.preferences.javaScriptCanOpenWindowsAutomatically)
+        let dashboard = pool.convexView(for: key)
+        XCTAssertFalse(dashboard.configuration.preferences.javaScriptCanOpenWindowsAutomatically)
+    }
+
     func testDeploymentChoiceIsRememberedPerConfiguredDeploymentAndUsedByBrowserLink() {
         let suite = "ConvexPanelTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suite)!

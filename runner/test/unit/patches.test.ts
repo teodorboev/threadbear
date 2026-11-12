@@ -396,7 +396,8 @@ test('a panel with an items function is a list panel, filled by renderListPanel 
   const ctx = {
     cwd: app,
     threadId: 't1',
-    timeoutMs: 10_000,
+    // Not the runner's 10 s: see liveRepo in patch-hash-binding.test.ts.
+    timeoutMs: 120_000,
     run: async (command: string, cwd: string) => {
       commands.push({ command, cwd });
       return runCommand(command, { cwd, env: process.env });
@@ -474,7 +475,7 @@ test('live state: when hides, badge counts, label retitles, a shared command run
   const base = await loadPatchSet(app, home);
   assert.equal(hasLive(base), true);
   const commands: string[] = [];
-  const ctx = { cwd: app, threadId: 't1', run: async (command: string, cwd: string) => { commands.push(command); return runCommand(command, { cwd, env: process.env }); } };
+  const ctx = { cwd: app, threadId: 't1', timeoutMs: 120_000, run: async (command: string, cwd: string) => { commands.push(command); return runCommand(command, { cwd, env: process.env }); } };
   const set = await applyLive(base, ctx);
   assert.deepEqual(set.actions.map((a) => [a.title, a.badge]), [['Your turn', 3], ['Plain', undefined], ['Zero', undefined], ['Merge #3', undefined], ['Blank', undefined], ['a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a', undefined]]);
   assert.deepEqual(set.actions.map((a) => a.id).slice(-3), ['review.merge', 'review.blank', 'review.lines']);
@@ -527,4 +528,18 @@ test("a patch's icon can be a picture or an app, relative to the patch file; act
   assert.equal(err('./notes.txt'), 'icon "./notes.txt" should be a .png, .svg, .icns, .pdf, .jpg, .jpeg, .app file.');
   assert.equal(err(''), 'icon should be an SF Symbol name like "film", or a path to a picture or an app.');
   assert.equal(err('film'), undefined);
+});
+
+test("a url panel's {threadId} is the thread it's beside", async () => {
+  const { withThreadId } = await import('../../src/patches.ts');
+  const panels = [
+    { id: 'yt.videos', title: 'Videos', kind: 'url' as const, url: 'http://127.0.0.1:6427/?thread={threadId}', patch: 'yt' },
+    { id: 'yt.docs', title: 'Docs', kind: 'url' as const, url: 'https://x.dev', patch: 'yt' },
+  ];
+  const shown = withThreadId(panels, 'ab12 cd');
+  assert.equal(shown[0].url, 'http://127.0.0.1:6427/?thread=ab12%20cd');
+  assert.equal(shown[1], panels[1]);
+  assert.equal(panels[0].url, 'http://127.0.0.1:6427/?thread={threadId}', "the folder's shared set is left as it was");
+  const plain = panels.slice(1);
+  assert.equal(withThreadId(plain, 'x'), plain, 'nothing to fill in: the same list');
 });

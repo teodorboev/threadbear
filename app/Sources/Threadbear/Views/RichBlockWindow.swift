@@ -9,6 +9,9 @@ final class RichBlockWindowController: NSWindowController, NSWindowDelegate {
     /// One window per block: opening it again brings that one forward.
     private static var open: [String: RichBlockWindowController] = [:]
 
+    /// The blocks open full size, for the scripted app's dump.
+    static var openIds: [String] { open.keys.sorted() }
+
     static func show(_ page: URL, id: String, title: String, subtitle: String?) {
         if let existing = open[id] {
             existing.refresh.count += 1

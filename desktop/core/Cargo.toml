@@ -1,0 +1,52 @@
+[package]
+name = "threadbear-core"
+version = "0.1.0"
+description = "Threadbear's desktop logic with no UI in it: protocol types, inbox rules, the transcript reducer"
+edition = "2021"
+publish = false
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# Local times for the sidebar's words and the Hibernate presets. Already in the
+# build through gpui-kit, at this exact version.
+chrono = { version = "=0.4.45", default-features = false, features = ["clock"] }
+# The web runtime's checks (src/web_runtime.rs): a download is held to the
+# SHA-1 Spotify publishes for it and a SHA-256 of our own before anything is
+# unpacked. Both already in the build at these versions (the client's sha2,
+# tungstenite's sha1).
+sha1 = "=0.10.7"
+sha2 = "=0.10.9"
+# CEF's builds are .tar.bz2, read in-process an entry at a time so each name
+# and link is checked before anything is written. bzip2 0.6 decodes with
+# libbz2-rs-sys, which is all Rust, so there's no C library to find; tar
+# without its xattr support, as nothing it would set is wanted.
+bzip2 = "=0.6.1"
+tar = { version = "=0.4.46", default-features = false }
+# The pairing code Settings › Phone & browser shows the iPhone app (devices.rs,
+# `pairing_qr`). Exactly this version: Project Nayuki's encoder, pure Rust with
+# no dependencies of its own, and the code a phone scans has to stay right.
+qrcodegen = "=1.8.0"
+# The app's own frames in a hang watch sample or a crash report, which
+# macOS's `sample` and ReportCrash leave in Rust's v0 mangling
+# (hang_sample.rs, `tidy`). Already in the build through std's backtrace
+# crate, at this version.
+rustc-demangle = "=0.1.28"
+# The Swift app's settings, brought across once (swift_import.rs): the XML
+# property list `defaults export` writes, and its data values. Both already
+# in the build, at these versions (roxmltree through usvg, base64 through
+# alacritty_terminal and usvg).
+roxmltree = "=0.21.2"
+base64 = "=0.22.1"
+# Selected words in a reply as HTML for the clipboard (selection_copy.rs):
+# the kit hands the selection over as Markdown. The version gpui-kit parses
+# with, already in the build.
+markdown = "=1.0.0"
+# canonicalize without Windows' `\\?\` prefix; on Mac and Linux it is just
+# std::fs::canonicalize. Already in the Windows build through gpui, at this version.
+dunce = "1.0.5"
+
+# renamex_np and renameat2 for swapping an update in at once, and O_NOFOLLOW
+# for private_file's appends.
+[target.'cfg(unix)'.dependencies]
+libc = "=0.2.191"

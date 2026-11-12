@@ -57,7 +57,7 @@ public enum UsageGroups {
     }
 
     static func providerTitle(_ provider: String) -> String {
-        ModelPicker.providerTitle(provider)
+        Providers.info(provider).name
     }
 
     // MARK: The icon's tooltip

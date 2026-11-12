@@ -55,6 +55,11 @@ private struct ScheduleSectionView: View {
         if !collapsed {
             ForEach(schedules) { schedule in
                 ScheduleRowView(schedule: schedule)
+                    // A row that moves to another heading (Pause, Resume) is
+                    // a new row there. Matched by its schedule's id alone, the
+                    // lazy stack kept drawing the old one: paused, it still
+                    // offered Pause and read as active (11 Nov).
+                    .id("\(section.rawValue):\(schedule.id)")
                     .transition(Juice.row)
             }
         }

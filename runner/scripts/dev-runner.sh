@@ -2,10 +2,18 @@
 # Runs this working tree's runner in the foreground on a throwaway data dir,
 # to try a change without touching the installed runner.
 #
-#   scripts/dev-runner.sh [--home DIR] [--port N] [--keep]
+#   scripts/dev-runner.sh [--home DIR | --clone-real [FROM]] [--port N] [--keep]
 #
-#   --home DIR   data dir (default: a new temp folder). The real one, and any
-#                data dir an installed runner uses, are refused.
+#   --home DIR   data dir (default: a new temp folder). The real one, any
+#                data dir an installed runner uses, and one holding threads
+#                from real folders (a copy of the real one) are refused.
+#   --clone-real [FROM]
+#                a new temp data dir with a copy of the real one's threads
+#                and projects (FROM: another data dir), for trying a change
+#                on real-sized data. Every copied thread is idle, has no
+#                session and its folder is under <home>/work, and the runner
+#                never runs one (src/real-copy.ts). Nothing else comes:
+#                no accounts' settings, schedules, secrets or backend keys.
 #   --port N     port (default 0: a free one, written to <home>/runner.json
 #                where tb and the app find it)
 #   --keep       keep the temp data dir when it stops (it holds the threads'
@@ -32,33 +40,40 @@ set -euo pipefail
 # THREADBARE_* was the old name for these variables: each stands in for its new name.
 for v in $(compgen -e | grep '^THREADBARE_' || true); do n="THREADBEAR_${v#THREADBARE_}"; [ -n "${!n+x}" ] || export "$n=${!v}"; done
 RUNNER_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-NODE="${THREADBEAR_NODE:-$HOME/.nvm/versions/node/v24.22.1/bin/node}"
+# Node: THREADBEAR_NODE, else the node on PATH, else nvm's newest
+# Node 24 or newer, else Homebrew's (runner/scripts/find-node.sh).
+. "$RUNNER_DIR/scripts/find-node.sh"
+NODE="$(threadbear_find_node)" || exit 1
 DEFAULT_HOME="$HOME/Library/Application Support/Threadbear"
 DATA_HOME=""
 PORT=0
 KEEP=0
+CLONE_FROM=""
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --home) DATA_HOME="${2:?--home needs a folder}"; shift ;;
     --port) PORT="${2:?--port needs a number}"; shift ;;
     --keep) KEEP=1 ;;
+    --clone-real)
+      CLONE_FROM="$DEFAULT_HOME"
+      case "${2:-}" in ''|-*) ;; *) CLONE_FROM="$2"; shift ;; esac ;;
     -h|--help) awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0"; exit 0 ;;
     *) echo "Unknown option: $1" >&2; exit 1 ;;
   esac
   shift
 done
 
-if [ ! -x "$NODE" ]; then
-  echo "No Node binary at $NODE. Set THREADBEAR_NODE to a Node 24 binary." >&2
-  exit 1
-fi
 
 # The folder with symlinks resolved, or as given if it doesn't exist yet.
 real_dir() {
   if [ -d "$1" ]; then (cd "$1" && pwd -P); else printf '%s' "${1%/}"; fi
 }
 
+if [ -n "$CLONE_FROM" ] && [ -n "$DATA_HOME" ]; then
+  echo "--clone-real makes its own data dir; leave --home out." >&2
+  exit 1
+fi
 MADE_HOME=0
 if [ -z "$DATA_HOME" ]; then
   TMP_ROOT="${TMPDIR:-/tmp}"
@@ -77,6 +92,30 @@ DATA_HOME="$(real_dir "$DATA_HOME")"
 if [ -e "$DATA_HOME/runner/launch.mjs" ]; then
   echo "$DATA_HOME belongs to an installed runner. Use another --home." >&2
   exit 1
+fi
+# A data dir with threads from somewhere real is most likely a copy of the
+# real one, whose threads name Mike's real sessions and folders: on 11 Nov
+# 2026 a dev runner on one carried on a thread that had been mid-turn, in
+# his real session. Dev threads live under $TMPDIR, and --clone-real's are
+# marked copied; any other thread's folder means real ones.
+if [ -z "$CLONE_FROM" ] && [ ! -e "$DATA_HOME/copy-of-real.json" ] && [ -d "$DATA_HOME/threads" ]; then
+  REAL_ONE="$("$NODE" -e 'const fs = require("fs"), path = require("path");
+  const [dir, ...tmps] = process.argv.slice(1);
+  const inTmp = (p) => tmps.some((t) => t && p.startsWith(t.replace(/\/+$/, "") + "/"));
+  for (const id of fs.readdirSync(dir)) {
+    let r; try { r = JSON.parse(fs.readFileSync(path.join(dir, id, "thread.json"), "utf8")); } catch { continue; }
+    if (r.copied) continue;
+    const cwd = typeof r.cwd === "string" ? r.cwd : "";
+    let real = cwd; try { real = fs.realpathSync(cwd); } catch {}
+    if (!inTmp(real) && !inTmp(cwd)) { console.log(`${id} (in ${cwd})`); break; }
+  }' "$DATA_HOME/threads" "$(real_dir "${TMPDIR:-/tmp}")" "${TMPDIR:-/tmp}")"
+  if [ -n "$REAL_ONE" ]; then
+    echo "$DATA_HOME has a thread from a real folder, $REAL_ONE: a copy of a real data dir?" >&2
+    echo "Its sessions and folders are real ones, so it won't start on it. For real-sized data use" >&2
+    echo "  scripts/dev-runner.sh --clone-real [FROM]" >&2
+    echo "which copies the threads with nothing that runs." >&2
+    exit 1
+  fi
 fi
 
 if [ ! -d "$RUNNER_DIR/node_modules/@anthropic-ai/claude-agent-sdk" ] || [ ! -d "$RUNNER_DIR/node_modules/ws" ]; then
@@ -101,13 +140,26 @@ esac
 # whether tb or a debug app's composer starts it. (The account and model
 # are the ones the end-to-end tests use.)
 IN_WORK=""
+if [ -n "$CLONE_FROM" ]; then
+  [ "$(real_dir "$CLONE_FROM")" != "$DATA_HOME" ] || { echo "Can't clone a data dir into itself." >&2; exit 1; }
+  (cd "$RUNNER_DIR" && "$NODE" src/real-copy.ts "$CLONE_FROM" "$DATA_HOME" "$WORK") || exit 1
+fi
 if [ ! -e "$DATA_HOME/runner.json" ]; then
   mkdir -p "$WORK"
-  "$NODE" -e 'require("fs").writeFileSync(process.argv[1], JSON.stringify({
+  # With CLI updates off, the runner takes the codex beside its Node's real
+  # file (process.execPath, past links: Homebrew's bin/node is in its
+  # Cellar), which isn't there when Codex was installed elsewhere: then the
+  # one on PATH, as codexPath (Codex's review, 9 Nov 2026).
+  DEV_CODEX=""
+  [ -n "${THREADBEAR_CODEX_PATH:-}" ] || DEV_CODEX="$(command -v codex 2>/dev/null || true)"
+  "$NODE" -e 'const fs = require("fs"), path = require("path");
+  const beside = fs.existsSync(path.join(path.dirname(process.execPath), "codex"));
+  fs.writeFileSync(process.argv[1], JSON.stringify({
     defaults: { cwd: process.argv[2], accountId: process.argv[3], keepAccount: true, model: "claude-haiku-5-5", models: { codex: "gpt-6-luna" }, efforts: { codex: "low" } },
     cliUpdates: { claude: "off", codex: "off" },
+    ...(process.argv[4] && !beside ? { codexPath: process.argv[4] } : {}),
   }, null, 2) + "\n")' \
-    "$DATA_HOME/runner.json" "$WORK" "${TB_E2E_ACCOUNT:-claude-main}"
+    "$DATA_HOME/runner.json" "$WORK" "${TB_E2E_ACCOUNT:-claude-main}" "$DEV_CODEX"
   IN_WORK="   (in $(printf '%q' "$WORK"), on claude-haiku-5-5)"
 fi
 # THREADBEAR_PORT and THREADBEAR_URL go too: tb then reads the port this

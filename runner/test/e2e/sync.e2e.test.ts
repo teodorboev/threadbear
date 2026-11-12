@@ -643,6 +643,12 @@ describe('convex mirror e2e', { skip: LOCAL ? false : 'no local Convex deploymen
       return found.some((r) => r.threadId === made.id && r.view === 'den') || undefined;
     });
     assert.deepEqual(await api('query', 'phone:search', { token: issued.token, text: 'nothingmatchesthis' }), []);
+    // With `everywhere` (API 74), a word said in one of its messages finds
+    // it too: "hello" is only in the first message.
+    await until('phone:search everywhere', async () => {
+      const found = (await api('query', 'phone:search', { token: issued.token, text: 'hello', everywhere: true })) as any[];
+      return found.some((r) => r.threadId === made.id) || undefined;
+    });
     const one = (await api('query', 'phone:thread', { token: issued.token, threadId: made.id })) as any;
     assert.equal(one.thread.title, 'Renamed from the e2e');
     await assert.rejects(api('query', 'phone:threads', { token: 'tb_wrong', view: 'inbox' }), /auth|token/);

@@ -103,12 +103,7 @@ public enum ModelPicker {
 
     /// How a provider id reads in the rail and its tooltip.
     public static func providerTitle(_ id: String) -> String {
-        switch id {
-        case "claude": return "Claude"
-        case "codex": return "Codex"
-        case "opencode": return "OpenCode"
-        default: return id.isEmpty ? "Claude" : id.prefix(1).uppercased() + id.dropFirst()
-        }
+        Providers.info(id).name
     }
 
     /// The SF Symbol that stands for a provider where the app has no logo
@@ -142,6 +137,7 @@ public enum ModelPicker {
     /// alias would be the wrong provider's model. OpenCode reads as Codex
     /// does: its "provider/model" ids are all main rows, in its order.
     public static func rows(choices: [ModelChoice], defaultId: String?, selected: String?, query: String = "", provider: String = "claude") -> [Row] {
+        // Only Claude's CLI takes these aliases: anyone else lists its own.
         let codex = provider != "claude" && !provider.isEmpty
         let fallback: [ModelChoice] = codex
             ? [defaultId].compactMap { $0 }.filter { !$0.isEmpty }.map { ModelChoice(id: $0, model: $0, title: ComposerChips.model($0)) }
@@ -183,6 +179,7 @@ public enum ModelPicker {
     /// ones. There's no "default" level any more: the picker remembers the
     /// last one chosen instead.
     public static func effortLevels(for model: String?, in choices: [ModelChoice], provider: String = "claude") -> [String] {
+        if Providers.info(provider).effort == "none" { return [] }
         guard let model, let levels = ComposerChips.choice(for: model, in: choices)?.effortLevels, !levels.isEmpty else {
             return ComposerChips.effortLevels(provider: provider)
         }

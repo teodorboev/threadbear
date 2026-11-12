@@ -8,9 +8,13 @@ struct PendingCard: View {
     let threadId: String
     let runnerId: String
     let pending: PendingApproval
+    /// The plan this card approves, when it's a Plan first plan and the
+    /// plan itself has reached the phone (backend API 72).
+    var plan: PhoneMessage? = nil
     var onSent: (String) -> Void
     @State private var chosen: [Int: Set<String>] = [:]
     @State private var typed = ""
+    @Environment(\.openPlan) private var openPlan
 
     private enum Tapped: Equatable {
         case option(ApprovalOption)
@@ -37,13 +41,21 @@ struct PendingCard: View {
     private var card: some View {
         VStack(alignment: .leading, spacing: 12) {
             switch pending {
-            case let .approval(id, name, title, options, inputSummary):
+            case let .approval(id, _, _, options, _, _) where plan != nil:
+                planCard(id, plan: plan!, options: options)
+            case let .approval(id, name, title, options, inputSummary, _):
                 Label(title, systemImage: "hand.raised")
                     .font(.headline)
                 if let inputSummary, !inputSummary.isEmpty {
+                    // Never cut short: Allow allows all of it. The runner only
+                    // offers Allow here for a line of 160 characters or fewer
+                    // that draws as written (runner/src/tools.ts,
+                    // remoteCardShowsAll), but wide or blank characters, or a
+                    // large text size, could still push its end past a line
+                    // limit (security review, 9 Nov 2026).
                     Text(inputSummary)
                         .font(.system(.footnote, design: .monospaced))
-                        .lineLimit(6)
+                        .fixedSize(horizontal: false, vertical: true)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(10)
                         .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 8))
@@ -138,6 +150,38 @@ struct PendingCard: View {
         }
         .buttonStyle(.plain)
         .disabled(tapped != nil)
+    }
+
+    /// A plan waiting for Go ahead: its title, the whole plan a tap away, and
+    /// Go ahead. Anything written in the box sends it back with those words,
+    /// as on the Mac.
+    @ViewBuilder private func planCard(_ id: String, plan: PhoneMessage, options: [ApprovalOption]) -> some View {
+        Label("The plan is ready", systemImage: "list.bullet.clipboard")
+            .font(.headline)
+        Text(Plans.title(of: plan.text))
+            .font(.subheadline)
+            .foregroundStyle(.secondary)
+            .lineLimit(2)
+        HStack {
+            Button { openPlan(plan) } label: {
+                Text("Read plan").frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.bordered)
+            if options.contains(.allow) {
+                let spins = tapped == .option(.allow)
+                Button { respond(id, .allow) } label: {
+                    Text("Go ahead")
+                        .frame(maxWidth: .infinity)
+                        .spinning(spins, tint: .white)
+                }
+                .buttonStyle(.borderedProminent)
+                .allowsHitTesting(tapped == nil)
+                .accessibilityLabel(spins ? "Go ahead, sending" : "Go ahead")
+            }
+        }
+        Text(options.contains(.allow) ? "Or write below to ask for changes." : "Read it here, then go ahead on the Mac or write below to ask for changes.")
+            .font(.footnote)
+            .foregroundStyle(.secondary)
     }
 
     private func label(_ option: ApprovalOption) -> String {

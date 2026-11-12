@@ -11,7 +11,7 @@ final class ChromeProfilesTests: XCTestCase {
       "last_active_profiles": ["Profile 5", "Default", "Profile 9"],
       "info_cache": {
         "Default": {"name": "Michael", "gaia_picture_file_name": "Google Profile Picture.png"},
-        "Profile 4": {"name": "cannstudios.com"},
+        "Profile 4": {"name": "studio.example"},
         "Profile 5": {"name": "convex.dev", "gaia_picture_file_name": ""}
       }
     }}

@@ -163,3 +163,12 @@ test('pin with show asks the app to open that highlight, again on a second pin o
   assert.match(await call({ path: 'page.html' }), /^Pinned \(file:.*\)\.$/);
   assert.equal(h.runner.get(thread.id).panelRequest, undefined);
 });
+
+test('reload goes on the request, for the app to load the page afresh', async () => {
+  const h = makeHarness();
+  const { thread } = h.runner.create({ text: 'hi', accountId: 'claude-3', cwd: tmpDir() });
+  void h.runner.showPanel(thread.id, { panel: 'usage', reload: true });
+  assert.equal(h.runner.get(thread.id).panelRequest!.reload, true);
+  void h.runner.showPanel(thread.id, { panel: 'usage' });
+  assert.equal(h.runner.get(thread.id).panelRequest!.reload, undefined, 'only when asked');
+});

@@ -103,8 +103,8 @@ test('pool: it stays on the login it used last while that has room, then moves',
   s.setAccounts([acct('claude-main', { room: 95 }), acct('claude-1', { room: 40 })]);
   await s.models.generate({ feature: 'titles', prompt: 'b' });
   assert.equal(s.cli[1].account.id, 'claude-1');
-  // Under 10%: move.
-  s.setAccounts([acct('claude-main', { room: 95 }), acct('claude-1', { room: 5 })]);
+  // Under 1%: move.
+  s.setAccounts([acct('claude-main', { room: 95 }), acct('claude-1', { room: 0.5 })]);
   await s.models.generate({ feature: 'titles', prompt: 'c' });
   assert.equal(s.cli[2].account.id, 'claude-main');
 });
@@ -120,7 +120,7 @@ test('pool: a login that answers it is out of room counts as run dry, and the ne
 });
 
 test('pool: with every login out of room it says no-room, though a pool is there', async () => {
-  const s = setup({ accounts: [acct('claude-main', { room: 3 }), acct('claude-1', { blocked: true })] });
+  const s = setup({ accounts: [acct('claude-main', { room: 0.3 }), acct('claude-1', { blocked: true })] });
   const r = await s.models.generate({ feature: 'projects', prompt: 'a' });
   assert.equal(r.ok ? 'sent' : r.reason, 'no-room');
   assert.match(r.ok ? '' : r.message, /Every login in Claude is out of room/);

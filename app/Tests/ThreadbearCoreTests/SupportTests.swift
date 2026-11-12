@@ -455,6 +455,13 @@ final class ThreadSectionsTests: XCTestCase {
         XCTAssertEqual(sections.matching(""), sections)
         XCTAssertEqual(sections.matching("upload").inbox.map(\.id), ["inbox"])
         XCTAssertTrue(sections.matching("nothing like it").isEmpty)
+
+        // The librarian's search words find a thread neither its title nor
+        // its last reply has the word for.
+        var tooth = thread("tooth", minutesAgo: 1)
+        tooth.title = "Wisdom tooth meeting location"
+        tooth.keywords = "dentist dental appointment"
+        XCTAssertEqual(ThreadSections.build([tooth, other], now: now).matching("Dentist").inbox.map(\.id), ["tooth"])
     }
 
     func testRelativeTime() {
@@ -481,6 +488,23 @@ final class ThreadSectionsTests: XCTestCase {
         XCTAssertEqual(CostText.format(0.0004), "<$0.001")
         XCTAssertNil(CostText.format(0))
         XCTAssertNil(CostText.format(nil))
+    }
+
+    func testTurnTokens() {
+        let claude = TurnTokens(usage: .object(["inputTokens": .number(16), "outputTokens": .number(1661),
+                                                "cacheReadTokens": .number(337_191), "cacheWriteTokens": .number(44033)]))
+        XCTAssertEqual(claude?.read, 381_240)
+        XCTAssertEqual(claude?.tip(costUsd: 0.453),
+                       "1.7k tokens out, 381k in (337k cache reads, 44k cache writes, 16 uncached). $0.45 at API prices, not what a subscription charges.")
+        // Codex's input includes its cached part; no cost, no dollars.
+        let codex = TurnTokens(usage: .object(["inputTokens": .number(24177), "cachedInputTokens": .number(12032), "outputTokens": .number(310)]))
+        XCTAssertEqual(codex, TurnTokens(input: 12145, output: 310, cacheRead: 12032))
+        XCTAssertEqual(codex?.tip(costUsd: nil), "310 tokens out, 24k in (12k cache reads, 12k uncached).")
+        // What a merged footer stores reads back the same.
+        let sum = claude! + codex!
+        XCTAssertEqual(TurnTokens(usage: sum.usage), sum)
+        XCTAssertNil(TurnTokens(usage: nil))
+        XCTAssertNil(TurnTokens(usage: .object(["inputTokens": .number(0), "outputTokens": .number(0)])))
     }
 }
 

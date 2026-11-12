@@ -12,6 +12,8 @@ export type TurnMessage = {
   origin?: string;
   toolKind?: string;
   summary?: boolean;
+  // A Plan first plan in full (API 72).
+  plan?: boolean;
   turn?: string;
   // The reply buttons its text links (API 59, reply-buttons.ts).
   buttons?: MessageButton[];
@@ -59,7 +61,11 @@ export function fold<M extends TurnMessage>(messages: M[], busy: boolean): Item<
       out.push(...group(body));
       return;
     }
-    const reply = replies(body);
+    // A plan stays out of the fold wherever it is in the turn, as on the
+    // phone: it's what Go ahead approves, and a sent-back one is what Mike
+    // asked to change.
+    const replyOnly = replies(body);
+    const reply = replyOnly.length ? [...new Set([...replyOnly, ...body.flatMap((m, j) => (m.plan ? [j] : []))])] : [];
     if (!reply.length) {
       out.push(...group(body));
       return;

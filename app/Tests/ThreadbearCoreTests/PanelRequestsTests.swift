@@ -17,6 +17,9 @@ final class PanelRequestsTests: XCTestCase {
         XCTAssertEqual(t.panelRequest, PanelRequest(id: "r1", panel: "convex.dashboard", title: "Convex", where: "right", at: "2026-10-28T08:01:00Z"))
         let again = try JSONDecoder().decode(ThreadSummary.self, from: JSONEncoder().encode(t))
         XCTAssertEqual(again.panelRequest, t.panelRequest)
+        XCTAssertNil(t.panelRequest?.reload)
+        let reload = try thread(#","panelRequest":{"id":"r2","panel":"yt.videos","title":"Videos","reload":true,"at":"2026-10-28T08:01:00Z"}"#)
+        XCTAssertEqual(reload.panelRequest?.reload, true)
         // A malformed one is as good as none, rather than losing the thread.
         XCTAssertNil(try thread(#","panelRequest":{"panel":3}"#).panelRequest)
         XCTAssertNil(try thread("").panelRequest)

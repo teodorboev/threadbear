@@ -106,4 +106,13 @@ final class TurnGapTests: XCTestCase {
         XCTAssertEqual(gap(60, [BackgroundTask(kind: .agent, description: "A"), BackgroundTask(kind: .agent, description: "B")]), "1 min later · A and B finished")
         XCTAssertEqual(gap(60, [BackgroundTask(kind: .agent, description: "A"), BackgroundTask(kind: .agent, description: "B"), BackgroundTask(kind: .agent, description: "C")]), "1 min later · A and 2 more finished")
     }
+
+    /// A command with a commit message in it shows only its first line.
+    func testALabelIsOneLine() {
+        let t0 = Date(timeIntervalSince1970: 0)
+        func line(_ description: String) -> String { TurnGap(from: t0, to: t0.addingTimeInterval(180), wokeBy: [BackgroundTask(kind: .shell, description: description)]).labelLine }
+        XCTAssertEqual(line("git commit -qm \"Fix it\n\nWhy: it broke\""), "3 min later · git commit -qm \"Fix it…")
+        XCTAssertEqual(line("npm test"), "3 min later · npm test finished")
+        XCTAssertEqual(line("npm test\n"), "3 min later · npm test finished")
+    }
 }

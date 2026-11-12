@@ -20,14 +20,19 @@ public struct PendingMessage: Sendable, Hashable, Identifiable {
     /// running turn (docs/protocol.md, `threads.send`), and its
     /// `user.message` comes when its own turn starts.
     public var queued: Bool
+    /// Held in the app until a restarting runner is back: sent while it
+    /// was down (or turned away as it went), it goes once the new one
+    /// connects, and says so under the bubble (Mike, 9 Nov).
+    public var waitingForRunner: Bool
 
-    public init(id: String = UUID().uuidString, text: String, images: [ImageRef] = [], answers: [AskAnswer] = [], afterSeq: Int, queued: Bool = false) {
+    public init(id: String = UUID().uuidString, text: String, images: [ImageRef] = [], answers: [AskAnswer] = [], afterSeq: Int, queued: Bool = false, waitingForRunner: Bool = false) {
         self.id = id
         self.text = text
         self.images = images
         self.answers = answers
         self.afterSeq = afterSeq
         self.queued = queued
+        self.waitingForRunner = waitingForRunner
     }
 
     /// Whether `event` is the runner showing this message. Matched on the
@@ -45,7 +50,7 @@ public struct PendingMessage: Sendable, Hashable, Identifiable {
 
     /// How the bubble shows it.
     public var row: TranscriptRow {
-        let message = UserMessage(text: text, images: images, answers: answers, pending: queued ? .queued : .sending)
+        let message = UserMessage(text: text, images: images, answers: answers, pending: waitingForRunner ? .waitingForRunner : queued ? .queued : .sending)
         return TranscriptRow(id: "p:" + id, seq: afterSeq, content: .user(message))
     }
 

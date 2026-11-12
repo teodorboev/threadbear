@@ -604,10 +604,24 @@ export class ThreadRouter implements ThreadControl {
     return this.runner.openSubagentCards(threadId);
   }
 
+  // Always this runner's, for the session it runs itself, as above.
+  reviewOwes(threadId: string): ReturnType<Runner['reviewOwes']> {
+    return this.runner.reviewOwes(threadId);
+  }
+
+  // A failure to reach the other runner leaves its threads out: list_threads
+  // still shows this runner's.
   async list(include: Bucket[] = ['inbox']): Promise<ThreadSummary[]> {
+    return this.listEverywhere(include).catch(() => this.runner.list(include));
+  }
+
+  // Throws instead, for matching a short id (threadbear-mcp.ts, allForIds):
+  // a list without the other runner's threads said "No thread" for one of
+  // them (12 Nov).
+  async listEverywhere(include: Bucket[] = ['inbox']): Promise<ThreadSummary[]> {
     const local = this.runner.list(include);
     const e = this.elsewhere();
-    return e ? mergeSummaries(local, await e.list(include).catch(() => [])) : local;
+    return e ? mergeSummaries(local, await e.list(include)) : local;
   }
 
   async search(query: string, limit = 50): Promise<ThreadSummary[]> {
@@ -739,6 +753,7 @@ export function phoneCommands(runner: Runner, remote?: Pick<Peers, 'owns' | 'cal
     interrupt: (id) => at(id, 'threads.interrupt', {}, () => runner.interrupt(id, { byMike: true })),
     quickAsk: (p) => runner.quickAsk(p),
     pressButton: (id, buttonId) => at(id, 'buttons.press', { buttonId }, () => runner.pressButton(id, buttonId)),
+    listButtons: (id) => at(id, 'buttons.list', {}, () => runner.listButtons(id)),
     threadCommands: (id) => at(id, 'threads.commands', {}, () => runner.threadCommands(id)),
   };
 }

@@ -105,7 +105,7 @@ export function reviewInput(raw: unknown, cwd: string): { title: string; note?: 
   });
   if (images > maxReviewImages) bad(`A review can have at most ${maxReviewImages} images in all; this has ${images}.`);
   if (mediaBytes > maxReviewMediaBytes) bad(`A review's videos and pages can be at most 500 MB in all; these are ${Math.ceil(mediaBytes / 1024 / 1024)} MB.`);
-  // The agent's own pick, which the window marks "my pick" as an asks card
+  // The agent's own pick, which the window marks with a star and "Recommended" as an asks card
   // does (Mike, 7 Nov: agents wrote "I'd pick C" in the middle of the note,
   // where it was hard to find).
   const recommended = text(p.recommended, 'recommended', 200) || undefined;
@@ -115,6 +115,59 @@ export function reviewInput(raw: unknown, cwd: string): { title: string; note?: 
     if (option.reference) bad('recommended cannot be a reference option.');
   }
   return { title, ...(note ? { note } : {}), ...(recommended ? { recommended } : {}), options };
+}
+
+// A stored review cut to what reviewInput and reviewDraft take, for one this
+// runner didn't make: a moved thread's reviews are the other runner's word
+// (runner/moves.ts fitMovedReviews). Its words are cut rather than refused,
+// so a review that fits is kept exactly. Undefined for something that isn't
+// a review.
+export function fitReview(raw: unknown): DesignReview | undefined {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+  const r = { ...(raw as Record<string, any>) };
+  if (typeof r.id !== 'string' || !Array.isArray(r.options)) return undefined;
+  const cut = (v: unknown, max: number) => (typeof v === 'string' ? cutText(v, max) : undefined);
+  const set = (o: Record<string, any>, key: string, max: number) => {
+    if (o[key] === undefined) return;
+    const fitted = cut(o[key], max);
+    if (fitted === undefined) delete o[key];
+    else o[key] = fitted;
+  };
+  set(r, 'title', 200);
+  set(r, 'note', 4000);
+  set(r, 'recommended', 200);
+  r.options = r.options.slice(0, 12).flatMap((raw: unknown) => {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return [];
+    const o = { ...(raw as Record<string, any>) };
+    set(o, 'title', 200);
+    set(o, 'note', 4000);
+    set(o, 'url', 2000);
+    if (Array.isArray(o.shots)) o.shots = o.shots.slice(0, maxReviewShots);
+    return [o];
+  });
+  for (const key of ['draft', 'response'] as const) {
+    const d = r[key];
+    if (!d || typeof d !== 'object' || Array.isArray(d)) continue;
+    const draft = { ...d };
+    set(draft, 'reply', 8000);
+    if (draft.notes && typeof draft.notes === 'object' && !Array.isArray(draft.notes)) {
+      const notes: Record<string, string> = Object.create(null);
+      for (const [id, note] of Object.entries(draft.notes).slice(0, 12)) {
+        const fitted = cut(note, 4000);
+        if (fitted !== undefined) notes[id] = fitted;
+      }
+      draft.notes = { ...notes };
+    }
+    r[key] = draft;
+  }
+  return r as DesignReview;
+}
+
+// At most `max` UTF-16 units, never ending on half a surrogate pair.
+function cutText(text: string, max: number): string {
+  if (text.length <= max) return text;
+  const end = /[\uD800-\uDBFF]/.test(text[max - 1] ?? '') ? max - 1 : max;
+  return text.slice(0, end);
 }
 
 export function reviewDraft(review: DesignReview, raw: unknown, answer = false): ReviewDraft {
@@ -162,9 +215,18 @@ export function sameDraft(a: ReviewDraft | undefined, b: ReviewDraft): boolean {
   return ids.length === Object.keys(b.notes).length && ids.every(id => a.notes[id] === b.notes[id]);
 }
 
+// The end of the "Passed over:" line, which the Mac, phone and GPUI bubbles
+// look for to leave the line out (ReviewAnswer), so change them with it.
+export const PASSED_OVER_TAIL = "Don't offer one of these later (a next step, a follow-up) as if it were new: say it's one they passed over.";
+
 // What the agent reads. "Picked A." with one, "Picked A + D." with more, as
 // the window's Send button says. The Mac and the phone read it back
 // (ReviewAnswer) for Mike's bubble, so change them with it.
+//
+// With a pick, the last line names the options he passed over. On 10 Nov an
+// agent's done card offered the option he'd turned down, in neutral words,
+// as a follow-up; he ticked it without recognising it and got the big card
+// he hadn't wanted. The agent writing follow-ups needs this in front of it.
 export function reviewReply(review: DesignReview, draft: ReviewDraft): string {
   const lines = [`Review: ${review.title} (${review.id})`];
   const picks = draft.pickedIds ?? (draft.pickedId ? [draft.pickedId] : []);
@@ -172,5 +234,7 @@ export function reviewReply(review: DesignReview, draft: ReviewDraft): string {
   if (draft.none) lines.push('Picked none of them.');
   if (draft.reply) lines.push(draft.reply);
   for (const o of review.options) if (Object.hasOwn(draft.notes, o.id) && draft.notes[o.id]) lines.push(`Notes on ${o.id} (${o.title}): ${draft.notes[o.id]}`);
+  const passed = picks.length ? review.options.filter(o => !o.reference && !picks.includes(o.id)) : [];
+  if (passed.length) lines.push(`Passed over: ${passed.map(o => `${o.id}. ${o.title}`).join('; ')}. ${PASSED_OVER_TAIL}`);
   return lines.join('\n\n');
 }

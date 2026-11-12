@@ -14,8 +14,21 @@ export const clisPart = {
     rt.idleTimer?.cancel();
     rt.idleTimer = undefined;
     if (!rt.session || rt.closing || rt.turn || rec.queue.length || rt.approvals.size) return;
-    if (rt.releaseWhenIdle || this.bucket(rec) !== 'inbox') {
+    // Snoozed or archived: the CLI goes now, stopping any background work
+    // (with a note), as Mike or the agent put the thread away.
+    if (this.bucket(rec) !== 'inbox') {
       this.releaseSession(st);
+      return;
+    }
+    // A fresh CLI is wanted (another login or folder, /clear, a setting
+    // the live one couldn't take), which the next message would get anyway.
+    // Never at the cost of background work, or of the turn the CLI is about
+    // to start to read a finished task's result: the tasks list emptying
+    // and the wake grace ending both come back here. Releasing it as the
+    // turn ended killed a sub-agent seconds into its work (thread 8a971407,
+    // 12 Nov 2026).
+    if (rt.releaseWhenIdle) {
+      if (rt.tasks.length === 0 && !rt.wakeTimer) this.releaseSession(st);
       return;
     }
     // A CLI update is waiting for this session to be idle. Never at the
@@ -43,6 +56,11 @@ export const clisPart = {
     const { rt, rec } = st;
     rt.idleTimer?.cancel();
     rt.idleTimer = undefined;
+    // No CLI to let go of: nothing is due to be released, or the flag would
+    // outlive this release and take the next CLI as its first turn ended
+    // (a hibernation after the idle release, thread 8a971407). A CLI still
+    // leaving is going anyway; the one after it starts with what it's asked.
+    if (!rt.session) rt.releaseWhenIdle = false;
     if (!rt.session || rt.closing) return;
     const session = rt.session;
     const hard = rt.tasks.length > 0;

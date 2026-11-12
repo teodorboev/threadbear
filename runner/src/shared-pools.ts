@@ -14,6 +14,9 @@ export type PoolBackend = {
   save(pools: SharedPool[]): Promise<void>;
   // True when these went in: only into an empty list.
   adopt(pools: SharedPool[]): Promise<boolean>;
+  // The backend takes a member with both an email and an id (two logins
+  // here sharing an email, pools.ts memberOf). False or missing: email only.
+  readonly pins?: boolean;
 };
 
 export type SharedPoolsDeps = {
@@ -91,8 +94,9 @@ export class SharedPools {
     if (!this.backend) throw new Error('not attached to the backend');
     const accounts = this.deps.accounts();
     const local = this.deps.localPools();
-    const previous = this.list ?? (local?.length ? toShared(local, [], accounts, this.deps.runnerId) : []);
-    const next = toShared(pools, previous, accounts, this.deps.runnerId);
+    const pin = !!this.backend.pins;
+    const previous = this.list ?? (local?.length ? toShared(local, [], accounts, this.deps.runnerId, pin) : []);
+    const next = toShared(pools, previous, accounts, this.deps.runnerId, pin);
     await this.backend.save(next);
     this.set(next);
   }
@@ -138,7 +142,7 @@ export class SharedPools {
     if (accounts.some((a) => used.has(a.id) && !a.email)) return;
     this.adopting = true;
     try {
-      const took = await this.backend.adopt(toShared(local, [], accounts, this.deps.runnerId));
+      const took = await this.backend.adopt(toShared(local, [], accounts, this.deps.runnerId, !!this.backend.pins));
       if (took) this.deps.log.info('shared pools: put this runner\'s pools up', { count: local.length });
     } catch (e) {
       this.deps.log.warn('could not put the pools up', { error: String(e) });

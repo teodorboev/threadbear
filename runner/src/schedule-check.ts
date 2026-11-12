@@ -1,4 +1,4 @@
-// A schedule's check (experiment scheduleChecks, experiments.ts): a shell
+// A schedule's check: a shell
 // command its runner runs before each run, in the schedule's folder. If it
 // prints nothing, the run is skipped and no agent starts, so a watcher that
 // polls every few minutes costs nothing until there's something to do.

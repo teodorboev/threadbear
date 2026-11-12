@@ -1,0 +1,214 @@
+{
+  "release": "2026-11-11",
+  "highlights": [
+    {
+      "kind": "added",
+      "title": "A Terminal under each thread",
+      "text": "View > Show Terminal (⌘J) opens your own shell in the thread's folder, and each thread keeps its own. A shell command in a reply has a play icon that puts it at the prompt, for you to read before pressing Return.",
+      "credit": "muperdev",
+      "media": {
+        "type": "clip",
+        "src": "terminal.mp4",
+        "poster": "terminal.webp",
+        "width": 540,
+        "height": 820,
+        "alt": "A reply with an npx convex deploy command; the Terminal opens under the thread and the play icon puts the command at its prompt, ready to run"
+      }
+    },
+    {
+      "kind": "added",
+      "title": "Answer a project's decisions in one place",
+      "text": "A project's page starts with every question its threads are waiting on, and each answer goes to its thread as if you'd answered it there. It's an experiment: turn on Decisions on the Projects page in Settings > General > Experiments.",
+      "media": {
+        "type": "clip",
+        "src": "project-decisions.mp4",
+        "poster": "project-decisions.webp",
+        "width": 1184,
+        "height": 1312,
+        "alt": "The Threadbear project's page opens on its Decisions: a card per thread waiting on a question, each with the thread's title, a line on what it's doing, its question and the answers, the agent's pick marked with a gold star and Recommended. Keep files is picked on the SQLite card and it drops off the list; then the release notes card's two questions are answered, Projects and then As a preview, and it goes too, leaving one decision."
+      }
+    },
+    {
+      "kind": "changed",
+      "title": "Slash commands in a new thread, and partway through a message",
+      "text": "Typing / in a new thread's box lists its commands and skills before the first message. Type / after a space anywhere in a message and it lists the skills the agent can use there, and Tab puts one in.",
+      "credit": "David Clark",
+      "media": {
+        "type": "clip",
+        "src": "slash-palette.mp4",
+        "poster": "slash-palette.webp",
+        "width": 1120,
+        "height": 840,
+        "alt": "In a new thread's box, typing / opens a palette above it with All, Threadbear, Claude Code and Skills down the left, the commands in the middle and the picked command's details on the right; the arrow keys move through /model, /effort and /clear. Then the box reads \"Tidy up the upload code, then run\", a / after the space lists only skills, typing des narrows it to /deslop, and Tab puts /deslop into the sentence."
+      }
+    },
+    {
+      "kind": "changed",
+      "title": "See what fills a Claude thread's context",
+      "text": "Click the context ring by the message box to see what's taking up the room: messages, memory files, skills, tools and the rest, each with its share, and a button to count again.",
+      "media": {
+        "type": "image",
+        "src": "context-breakdown.webp",
+        "width": 580,
+        "height": 856,
+        "alt": "The context ring's popover: 64% used, 642k of 1M, a stacked bar, and rows with tokens and share for Messages, Memory files, Skills, System tools, System prompt, MCP server instructions, MCP tools, Autocompact buffer and Free space, then deferred MCP and system tools, a refresh button at the top, and the model, login and cost so far at the bottom."
+      }
+    },
+    {
+      "kind": "changed",
+      "title": "A box by the message box when a login hits its limit",
+      "text": "The bar across the top of the thread is now a box above the message box saying what happened, with a button to switch to the login with the most room. A thread pinned to one login now carries on by itself once it resets, as pool threads already did, unless you set Carry on by itself to No.",
+      "media": {
+        "type": "image",
+        "src": "limit-box.webp",
+        "width": 1080,
+        "height": 740,
+        "alt": "The end of a thread with a box joined to the top of the message box: a clock and \"Every login in Evenings is out of room. Carries on by itself at 11:06 am.\", a Pin to mike (78% left) button and a Carry on by itself menu set to Yes. The composer's chip below says Evenings, Fable 5.1, Limit reached."
+      }
+    },
+    {
+      "kind": "changed",
+      "title": "Send while the runner restarts",
+      "text": "A message sent while the runner restarts waits at the end of the thread, dimmed, with \"Runner restarting. Sends when it's back.\" under it, and goes as soon as the runner is back. It used to bounce back into the box.",
+      "media": {
+        "type": "clip",
+        "src": "send-while-restarting.mp4",
+        "poster": "send-while-restarting.webp",
+        "width": 1080,
+        "height": 1640,
+        "alt": "A thread's bar says the runner is restarting. A message sent now shows dimmed at the end of the thread with \"Runner restarting. Sends when it's back.\" under it; when the runner is back the banner goes, the message turns normal and the agent's reply streams in under it."
+      }
+    },
+    {
+      "kind": "added",
+      "title": "Fold the Threads panel away with ⌘/",
+      "text": "View > Collapse Threads (⌘/) gives the thread the panel's room and keeps the icons down the left. Press ⌘/ again, or click one of those icons, and it comes back at the same width.",
+      "credit": "Wayne Sutton",
+      "media": {
+        "type": "clip",
+        "src": "collapse-threads.mp4",
+        "poster": "collapse-threads.webp",
+        "width": 1600,
+        "height": 1058,
+        "alt": "The whole window: ⌘/ folds the Threads panel away so the thread takes its room while the column of icons stays on the left, ⌘/ brings it back at the same width, and after folding it again ⌘1 (Show Inbox) brings it back too."
+      }
+    },
+    {
+      "kind": "changed",
+      "title": "Settings has a sidebar",
+      "text": "Settings lists its sections down the left, as System Settings does, and each one scrolls, so General no longer runs off a laptop screen. You can drag the window wider and taller.",
+      "media": {
+        "type": "clip",
+        "src": "settings-sidebar.mp4",
+        "poster": "settings-sidebar.webp",
+        "width": 1800,
+        "height": 1304,
+        "alt": "The Settings window with General, Models, Pools, Runners, Phone & browser and Keyboard down the left. General scrolls down through its sections to Code review, Activity log and Sleep, then Models, Pools and Keyboard are picked in turn from the sidebar."
+      }
+    },
+    {
+      "kind": "added",
+      "title": "Back and forward arrows",
+      "text": "Arrows beside Share in a thread's bar step back and forward through the threads you've had open. Hover over one to see where it goes.",
+      "media": {
+        "type": "clip",
+        "src": "back-forward-arrows.mp4",
+        "poster": "back-forward-arrows.webp",
+        "width": 1760,
+        "height": 860,
+        "alt": "Three threads are opened one after another, then the back arrow beside Share steps back through them and the forward arrow steps forward again."
+      }
+    },
+    {
+      "kind": "added",
+      "title": "Move a thread to another machine",
+      "text": "Move to in a thread's right-click menu sends it to another of your machines, with its conversation, pictures and git work. It's an experiment.",
+      "media": {
+        "type": "image",
+        "src": "move-to-machine-sheet.webp",
+        "width": 976,
+        "height": 460,
+        "alt": "The Move sheet for moving a thread to bruce: the folder and login it will use there, a note that one background job won't come, and Cancel and Move buttons."
+      }
+    },
+    {
+      "kind": "added",
+      "title": "A schedule's model and effort",
+      "text": "Pick a schedule's model and effort in its editor.",
+      "media": {
+        "type": "image",
+        "src": "schedule-model-effort.webp",
+        "width": 1040,
+        "height": 900,
+        "alt": "The Edit schedule sheet for a weekly schedule, with a Model row holding a model picker and an effort picker."
+      }
+    },
+    {
+      "kind": "added",
+      "title": "Which machine a thread is on",
+      "text": "With more than one runner, each thread in the sidebar names its machine after its project.",
+      "media": {
+        "type": "image",
+        "src": "sidebar-machine-names.webp",
+        "width": 700,
+        "height": 620,
+        "alt": "Sidebar rows reading misc • m5, misc • bruce, Threadbear • m5 and CannMedia • bruce under their thread titles."
+      }
+    }
+  ],
+  "added": [
+    "Stop a running thread from the iPhone app or the website: Send turns into Stop while it works, as on the Mac",
+    "⌘Q asks before quitting, with a Don't ask again box, and Settings > General > Quitting turns the question back on",
+    "Settings > General > Experiments has a switch for each experiment, with what it does behind its ⓘ",
+    "Right-click a picture in the side pane for Show in Finder and Copy Path",
+    "Write to a thread 12 hours or more after its last turn and the agent is asked to start with a short recap of what the thread was for",
+    "A patch can name a teardown command that runs when its thread's worktree is cleaned up, for things its setup made outside the folder (a Convex deployment per worktree, say)",
+    "Threadbear can run other tools' update commands once a day, listed under `cliUpdates.extra` in runner.json",
+    "A What's new page on the website, with each day's release",
+    "Run OpenCode and Cursor threads next to Claude and Codex (an experiment)",
+    "On Auto, a reviewer looks at approval cards first, lets through the ones that fit the thread's task and sends the rest to you with its reason (an experiment)",
+    "An agent can put a command on its card that runs with one press on the thread's machine, with the output going straight back to the agent (an experiment)",
+    "Open a thread that's been quiet for 12 hours and a box above the message box says what it's for and where it stands (an experiment)",
+    "An early build of a new app for Mac, Windows and Linux, to try beside this one; it doesn't do everything yet (an experiment)"
+  ],
+  "changed": [
+    "Keeping the Mac awake while threads work is on for everyone now, with a switch in Settings > General > Sleep",
+    "When a thread that changed code finishes, your other provider tries to break the change: this was an experiment and is now on for everyone, with Settings > General > Code review to turn it off",
+    "Every agent knows it can draw diagrams and small pages in its replies, which was an experiment before",
+    "New installs start threads on Auto, while existing installs keep Full access",
+    "File edits can only be allowed in the Mac app: on the phone and the website their cards offer Deny and say to allow them on the Mac",
+    "A permission card says why it's asking (Auto's safety check couldn't clear a command, say), and a call Auto refuses without asking says why in the thread",
+    "Permission cards show tabs as ⇥ and spaces at the end of a line as ·, and say when a file being written doesn't end with a line break",
+    "The agent's own pick on a question card is a small gold star and Recommended, in place of the blue \"my pick\"",
+    "On the iPhone and the website, a question card shows what each answer does under it, as on the Mac",
+    "The footer under each turn shows tokens out and in, for Codex turns too, with the API price when you hover over it, where it used to show a dollar cost",
+    "A Markdown file in the side pane has a Preview / Markdown menu in its bar in place of the pencil, and the drawn page keeps its lines to a readable width",
+    "The side pane's bar names a file by its own name, with its full path when you hover over it",
+    "Attach Image takes Markdown files too, which go in as their path",
+    "A clip enlarged in the options window plays with its sound on",
+    "With natural scrolling off, a two-finger swipe over a sidebar row goes Back rather than archiving the thread, and a swipe has to go a little further before it counts"
+  ],
+  "fixed": [
+    "A message sent just as the runner restarted could be lost: it now goes again once the runner is back, or comes back into the box with a note saying so",
+    "Dragging the edge of the Settings window could crash the app",
+    "A small picture in the options window could crash the app as the window opened",
+    "Long option descriptions on question cards wrap instead of being cut off after one line",
+    "Pictures and links to files in folders with spaces in their names (Application Support, say) show as pictures and links, not as raw text",
+    "In a narrow window, panels stay inside their space instead of hanging off both sides with their text showing through the bars",
+    "From the Mac, reply buttons and slash commands work on threads running on another machine",
+    "On iPhone, the done card and its follow-ups show for agents that write their reply before finishing the turn, as Codex does",
+    "On the iPhone and the website, a thread that said it needs nothing from you counts as done, as on the Mac, and no longer adds to the phone's badge",
+    "Shared thread pages scroll back past the newest 2,000 messages and keep your place while older ones load",
+    "Scrolling back through a long thread on the iPhone no longer reads so much from the backend that it could use up a free plan's daily allowance",
+    "The iPhone app no longer fails to open a thread holding a message it doesn't recognise",
+    "A thread on a permission mode the Mac app doesn't know shows as Unknown mode, where it used to show as Full access",
+    "A daily schedule could run twice when the network dropped as it ran, and a deleted schedule could come back after the disk filled up",
+    "One mistake in runner.json (a stray comma, say) could get it written over, losing your logins and settings: the runner now stops and says what's wrong",
+    "A thread that archives or snoozes itself waits while one of its cards is still open, so the work waiting on that card isn't stopped",
+    "The agent doesn't offer an option you passed over in an options review as a new follow-up",
+    "Waking the Mac no longer starts a \"needs someone at its screen\" thread because of a notification window that isn't showing",
+    "A runner update that failed because its machine ran short of something (disk space, say) is tried again once the machine recovers",
+    "Setup and builds work on more Macs: with only the Command Line Tools, with Node from Homebrew, with a company registry in ~/.npmrc, or with two signing certificates of the same name",
+    "Closed several security holes, including ways a thread on Ask or Auto could get more access through Threadbear's own commands, a folder's git settings could run a program before you'd trusted the folder, and an approval from the phone could allow more than its card showed"
+  ]
+}

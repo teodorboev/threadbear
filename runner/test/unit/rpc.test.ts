@@ -62,6 +62,10 @@ test('challenge auth, hello, and JSON-RPC errors', async () => {
   await assert.rejects(c.call('threads.create', { text: 'x', accountId: 'claude-42' }), (e: { code: number }) => e.code === -32010);
   await assert.rejects(c.call('threads.create', { text: 'x', effort: 'huge' }), (e: { code: number; message: string }) => e.code === -32602 && /effort must be one of/.test(e.message));
   await assert.rejects(c.call('nope.method'), (e: { code: number }) => e.code === -32601);
+  // A byline kind from a newer caller: the thread still starts, with none.
+  const bylined = await c.call('threads.create', { text: 'x', accountId: 'claude-3', startedBy: { kind: 'robot', label: 'R2' } });
+  assert.equal(bylined.thread.startedBy, undefined);
+  await assert.rejects(c.call('threads.create', { text: 'x', accountId: 'claude-3', startedBy: { kind: 7, label: 'R2' } }), (e: { code: number }) => e.code === -32602);
   c.close();
   await server.close();
 });
@@ -429,7 +433,9 @@ test('subscribe replays the gap then streams; thread.updated goes to everyone', 
   assert.equal(seen.thread.lastSeenSeq, page.lastSeq);
   const list = await b.call('threads.list', { include: ['inbox', 'snoozed', 'archived'] });
   assert.deepEqual(list.threads.map((t: { id: string }) => t.id), [id]);
-  await assert.rejects(b.call('threads.list', { include: ['bogus'] }), (e: { code: number }) => e.code === -32602);
+  // A bucket this runner doesn't know is left out, never a failed list.
+  assert.deepEqual((await b.call('threads.list', { include: ['inbox', 'pinned'] })).threads.map((t: { id: string }) => t.id), [id]);
+  assert.deepEqual((await b.call('threads.list', { include: ['pinned'] })).threads, []);
   await assert.rejects(b.call('threads.send', { threadId: id, text: 'x', answers: [{ action: 'a' }] }), (e: { code: number }) => e.code === -32602);
   // A phone command the primary passed on keeps its origin; nothing else
   // can be claimed.

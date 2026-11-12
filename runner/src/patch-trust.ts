@@ -141,6 +141,18 @@ export interface PatchGate {
 // What the runner keeps: the gate, and the ways in.
 export interface PatchTrustStore extends PatchGate {
   readonly existed: boolean;
+  // A worktree an always-trusted checkout's trust doesn't reach, and back
+  // (PatchTrust).
+  unvouch?(dir: string): void;
+  vouch?(dir: string): void;
+  // Whether the list of those is one this runner can rely on: written by
+  // a runner that keeps it (version 2), and readable. When it isn't, the
+  // runner works the list out again from its threads before anything
+  // loads a patch (runner/moves.ts settleUnvouched), and hands it here.
+  unvouchedKnown?(): boolean;
+  settleUnvouched?(dirs: string[]): void;
+  // Whether `dir` is in one of them.
+  isUnvouched?(dir: string): boolean;
   trust(file: string, hash: string): boolean;
   // As they are now, unasked: the first start's seeding.
   trustCurrent(files: string[]): string[];
@@ -206,6 +218,8 @@ export const TRUST_ALL: PatchTrustStore = {
   save: () => {},
 };
 
+const UNVOUCHED_VERSION = 2;
+
 export class PatchTrust implements PatchTrustStore {
   private file?: string;
   private folders = new Map<string, string[]>();
@@ -233,6 +247,128 @@ export class PatchTrust implements PatchTrustStore {
     this.existed = this.load() !== 'missing';
   }
 
+  // Worktrees `always` doesn't reach though their main checkout is in it:
+  // one that came from another runner with changes to what trust covers
+  // (runner/moves.ts), so the old runner's patches and Claude settings are
+  // held to the stored hashes like any folder's (Codex's review, 10 Nov
+  // 2026). Kept in the trust file, not with the thread, so it holds
+  // through the thread's delete and cleanup (which reads the teardown
+  // patch) and in whatever's left of the folder, until a worktree is made
+  // there afresh (vouch).
+  // In a file of its own beside the trust file (patch-trust-unvouched.json),
+  // as an older runner still finishing turns after a handover rewrites the
+  // trust file with only what it knows (Codex's review).
+  // The list has moved twice (security review, 11 Nov 2026, findings 90
+  // and 91), and each move without its old form brought the always-trust
+  // back to what was held: first a mark on the thread's worktree record
+  // (`worktree.unvouched`), then an `unvouched` array in patch-trust.json,
+  // now this file, version 2. The trust file's array is taken in whenever
+  // it's read (load); the records' marks, and moves finished before any
+  // mark, are the runner's to find (settleUnvouched) while this file isn't
+  // known good: missing, unreadable, or from before version 2.
+  private unvouchedDirs = new Set<string>();
+  private unvouchedMtime?: number | null;
+  private unvouchedState: 'missing' | 'old' | 'read' | 'broken' = 'missing';
+  // The trust file's own array as last read, which a vouch has to clear
+  // there too or the next read brings it back.
+  private legacyUnvouched = new Set<string>();
+
+  private get unvouchedFile(): string | undefined {
+    return this.file ? this.file.replace(/\.json$/, '') + '-unvouched.json' : undefined;
+  }
+
+  private loadUnvouched(): void {
+    const file = this.unvouchedFile;
+    if (!file) return;
+    let mtime: number | null;
+    try {
+      mtime = fs.statSync(file).mtimeMs;
+    } catch {
+      mtime = null;
+    }
+    if (mtime === this.unvouchedMtime) return;
+    this.unvouchedMtime = mtime;
+    if (mtime === null) {
+      // Gone: what was known stays, so another process deleting it
+      // doesn't trust everything again, and the next start works it out.
+      this.unvouchedState = 'missing';
+      return;
+    }
+    try {
+      const raw = JSON.parse(fs.readFileSync(file, 'utf8')) as { version?: unknown; unvouched?: unknown };
+      if (!raw || typeof raw !== 'object' || !Array.isArray(raw.unvouched)) throw new Error('no list');
+      this.unvouchedDirs = new Set(raw.unvouched.filter((d): d is string => typeof d === 'string'));
+      this.unvouchedState = raw.version === UNVOUCHED_VERSION ? 'read' : 'old';
+    } catch {
+      // Unreadable: keep what's known rather than trust everything again,
+      // and while it's unreadable no worktree has the always-trust
+      // (alwaysFor).
+      this.unvouchedState = 'broken';
+    }
+  }
+
+  private saveUnvouched(): void {
+    const file = this.unvouchedFile;
+    if (!file) return;
+    // Version 2 only once the list is known complete (read as version 2, or
+    // settleUnvouched): one saved before that, say a crash before the
+    // runner worked its list out, gets worked out again.
+    const known = this.unvouchedState === 'read';
+    atomicWriteFileSync(file, JSON.stringify({ ...(known ? { version: UNVOUCHED_VERSION } : {}), unvouched: [...this.unvouchedDirs] }, null, 2) + '\n');
+    this.unvouchedMtime = fs.statSync(file).mtimeMs;
+  }
+
+  unvouch(dir: string): void {
+    this.loadUnvouched();
+    this.unvouchedDirs.add(realpath(path.resolve(dir)));
+    this.saveUnvouched();
+  }
+
+  vouch(dir: string): void {
+    this.load();
+    this.loadUnvouched();
+    const real = realpath(path.resolve(dir));
+    const had = this.unvouchedDirs.delete(real);
+    if (had) this.saveUnvouched();
+    // Off the trust file's old array too, by writing the file without it.
+    if (this.legacyUnvouched.delete(real)) this.save();
+  }
+
+  unvouchedKnown(): boolean {
+    this.loadUnvouched();
+    return this.unvouchedState === 'read';
+  }
+
+  // The runner's list from its threads, added to what's known and saved as
+  // version 2: from then on this file is the list.
+  settleUnvouched(dirs: string[]): void {
+    this.loadUnvouched();
+    for (const d of dirs) this.unvouchedDirs.add(realpath(path.resolve(d)));
+    this.unvouchedState = 'read';
+    this.saveUnvouched();
+  }
+
+  isUnvouched(dir: string): boolean {
+    this.loadUnvouched();
+    const real = realpath(path.resolve(dir));
+    return [...this.unvouchedDirs].some((d) => isInside(real, d));
+  }
+
+  // `always` for this key, unless `actual` (the real file or folder) is in
+  // a worktree it doesn't reach.
+  private alwaysFor(key: string, actual: string): boolean {
+    if (!this.always.some((d) => isInside(key, d))) return false;
+    this.load();
+    this.loadUnvouched();
+    const real = realpath(path.resolve(actual));
+    // A list that can't be read can't say which worktrees are held: only
+    // the always-trusted checkouts themselves keep it, none of their
+    // worktrees.
+    if (this.unvouchedState === 'broken') return this.always.some((d) => isInside(real, d));
+    if (!this.unvouchedDirs.size) return true;
+    return ![...this.unvouchedDirs].some((d) => isInside(real, d));
+  }
+
   // Reads the file again when another runner (one finishing turns after a
   // handover) has written it since. A missing file is a first start; an
   // unreadable one trusts nothing, and isn't seeded over: a broken file
@@ -257,6 +393,16 @@ export class PatchTrust implements PatchTrustStore {
       // the patch it names (Codex's review, 6 Nov). They still say the
       // folder had something trusted ("changed").
       const legacy = typeof raw.version !== 'number' || raw.version < 3;
+      // Held worktrees, as a runner of 10 Nov kept them here: into the
+      // file of their own, before anything can be trusted for lack of them.
+      const held = Array.isArray((raw as { unvouched?: unknown }).unvouched) ? ((raw as { unvouched: unknown[] }).unvouched.filter((d): d is string => typeof d === 'string')) : [];
+      this.legacyUnvouched = new Set(held);
+      if (held.length) {
+        this.loadUnvouched();
+        const before = this.unvouchedDirs.size;
+        for (const d of held) this.unvouchedDirs.add(d);
+        if (this.unvouchedDirs.size !== before) this.saveUnvouched();
+      }
       this.folders.clear();
       for (const [key, list] of Object.entries(raw.folders ?? {})) {
         if (!Array.isArray(list)) continue;
@@ -272,7 +418,7 @@ export class PatchTrust implements PatchTrustStore {
   async check(file: string, mtimeMs: number): Promise<TrustVerdict> {
     this.load();
     const key = folderKey(file);
-    if (this.always.some((d) => isInside(key, d))) return { trusted: true };
+    if (this.alwaysFor(key, file)) return { trusted: true };
     void mtimeMs;
     const entry = this.hashOf(file);
     const { hash, deps } = entry;
@@ -292,7 +438,7 @@ export class PatchTrust implements PatchTrustStore {
   checkClaude(cwd: string, opts: ClaudeOptions = {}): ClaudeVerdict {
     this.load();
     const key = folderKeyOfDir(cwd);
-    if (this.always.some((d) => isInside(key, d))) return { trusted: true };
+    if (this.alwaysFor(key, cwd)) return { trusted: true };
     const found = claudeCommands(cwd, this.claudeHome, opts);
     if (!found) return { trusted: true };
     const known = (this.folders.get(key) ?? []).filter((h) => h.startsWith(CLAUDE_PREFIX));
@@ -378,7 +524,7 @@ export class PatchTrust implements PatchTrustStore {
   // Threadbear's own checkout runs whatever it holds, so there only the
   // command is bound, not what it reaches, or every landing would ask.
   private digestOf(command: string, cwd: string): CheckDigest {
-    return checkDigest(command, cwd, this.always.some((d) => isInside(folderKeyOfDir(cwd), d)));
+    return checkDigest(command, cwd, this.alwaysFor(folderKeyOfDir(cwd), cwd));
   }
 
   // Trusts one version of a patch file, by the hash the app showed. False
@@ -426,7 +572,7 @@ export class PatchTrust implements PatchTrustStore {
 
   loadsUnhashed(dir: string): boolean {
     const key = folderKeyOfDir(path.dirname(path.dirname(path.resolve(dir))));
-    return this.always.some((d) => isInside(key, d));
+    return this.alwaysFor(key, dir);
   }
 
   // Without case, as macOS names a file either way: a wider match only asks more.
@@ -440,7 +586,7 @@ export class PatchTrust implements PatchTrustStore {
 
   verify(file: string, hash: string): boolean {
     this.load();
-    if (this.always.some((d) => isInside(folderKey(file), d))) return true;
+    if (this.alwaysFor(folderKey(file), file)) return true;
     try {
       const fresh = patchHash(file);
       return !fresh.incomplete && fresh.hash === hash;
@@ -572,7 +718,15 @@ export function patchHash(file: string): PatchHash {
   const resolve = (dir: string, spec: string) => resolveHelper(dir, spec, reads);
   // The folder holding `.threadbear/`: where its commands run (a thread's
   // folder, or the worktree's root for setup), so `./setup.sh` is there.
-  const folder = path.dirname(path.dirname(path.dirname(root)));
+  // The folder holding the patch file as it's named, not its real one: for
+  // a patch file that's a link into another folder, its commands still run
+  // from beside the link (bindAutomatic, actions, live `sh`), so that's
+  // where the scripts they run, and theirs in turn, are followed from.
+  // From the real one, a script's own `./helper.sh` was followed in the
+  // other folder while the one beside the link ran, unhashed (Codex's
+  // review, 9 Nov). Its imports are still followed from the real file, as
+  // Node loads them.
+  const folder = realpath(path.dirname(path.dirname(path.dirname(path.resolve(file)))));
   const seen = new Set([root]);
   const deps: Dep[] = [];
   // The patch's import graph: what Node loads, served from these bytes.
@@ -928,6 +1082,9 @@ function patchRoles(patch: AstNode, give: (n: AstNode, role: 'data' | 'worktree'
     if (PATCH_FIELDS.has(name)) list(value).forEach((v) => give(v, 'data'));
     else if (name === 'worktree' && value.type === 'ObjectExpression') {
       for (const [k, v] of fields(value)) {
+        // Not `teardown`: it runs in the thread's worktree as the agent left
+        // it, as the thread is archived, so what it reaches counts as code
+        // like any other command's.
         if (k === 'setup' || k === 'check') give(v, 'worktree');
         else if (k === 'keep') list(v).forEach((e) => give(e, 'data'));
       }
@@ -1054,6 +1211,40 @@ export function actionCommandProblem(command: string, folder: string, files: str
   return undefined;
 }
 
+// What `command` run from `start.folder` reaches, its scripts outside the
+// repo too, each followed from its own folder and repo (checkDigest, and the
+// commands of a patch that loads without a hash). `missing`: files it names
+// that aren't there yet.
+function followOutside(command: string, label: string, start: FollowOptions, reads: Reads): { files: Set<string>; missing: Set<string>; problem?: string } {
+  const files = new Set<string>();
+  const missing = new Set<string>();
+  const seen = new Set<string>();
+  const queue: { file: string; dir: string }[] = [];
+  let problem: string | undefined;
+  const take = (reach: ScriptReach) => {
+    for (const f of reach.files) files.add(f);
+    for (const f of reach.missing) missing.add(f);
+    for (const { file, dirs } of reach.outside ?? []) for (const dir of dirs) queue.push({ file, dir });
+    problem ??= reach.problem;
+  };
+  take(reachOfCommand(command, label, { ...start, outside: true }));
+  while (queue.length) {
+    const { file: script, dir } = queue.shift()!;
+    const key = `${script}\0${dir}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    if (seen.size > MAX_HELPERS) {
+      problem ??= `${label} reaches more than ${MAX_HELPERS} scripts outside its repo, more than patch trust follows.`;
+      break;
+    }
+    files.add(script);
+    // The script's own repo bounds what's followed as part of it, from the
+    // folder it runs in: its `./x` is there, not beside it.
+    take(reachOf(script, { ...followOptions(path.dirname(script), reads), folder: dir, outside: true }));
+  }
+  return { files, missing, ...(problem ? { problem } : {}) };
+}
+
 // What a schedule's check runs, for binding its approval to (a card, or an
 // owner's or Full thread's call): the command, and every file it reaches
 // from `cwd` by its bytes. Its scripts outside the repo too, as a check is
@@ -1073,30 +1264,9 @@ export function checkDigest(command: string, cwd: string, commandOnly = false): 
   if (commandOnly) return { hash: sha256(Buffer.from(JSON.stringify([CHECK_TAG, command, []]))), files: [] };
   const reads = new Reads();
   const start = followOptions(cwd, reads);
-  const files = new Set<string>();
-  const seen = new Set<string>();
-  const queue: { file: string; dir: string }[] = [];
-  let problem: string | undefined;
-  const take = (reach: ScriptReach) => {
-    for (const f of reach.files) files.add(f);
-    for (const { file, dirs } of reach.outside ?? []) for (const dir of dirs) queue.push({ file, dir });
-    problem ??= reach.problem;
-  };
-  take(reachOfCommand(command, 'the check', { ...start, outside: true }));
-  while (queue.length) {
-    const { file: script, dir } = queue.shift()!;
-    const key = `${script}\0${dir}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    if (seen.size > MAX_HELPERS) {
-      problem ??= `the check reaches more than ${MAX_HELPERS} scripts outside its repo, more than patch trust follows.`;
-      break;
-    }
-    files.add(script);
-    // The script's own repo bounds what's followed as part of it, from the
-    // folder it runs in: its `./x` is there, not beside it.
-    take(reachOf(script, { ...followOptions(path.dirname(script), reads), folder: dir, outside: true }));
-  }
+  const followed = followOutside(command, 'the check', start, reads);
+  const files = followed.files;
+  let problem = followed.problem;
   if (problem) {
     for (const word of command.split(/[\s'"`;&|()<>=]+/)) {
       if (!word || word.length > MAX_PATH) continue;
@@ -1130,6 +1300,16 @@ export function commandFiles(command: string, folder: string): { files: string[]
   const real = realpath(folder);
   const reach = reachOfCommand(command, 'the command', { folder: real, top: repoTop(real), scanJs: scriptScan, resolveImport: resolveHelper, namedPaths });
   return { files: [...reach.files, ...reach.missing], ...(reach.problem ? { problem: reach.problem } : {}) };
+}
+
+// commandFiles, and the scripts it runs outside the folder's repo too, each
+// followed from its own folder (followOutside): what a command a patch that
+// loads without a hash builds from an absolute path reaches, which no word
+// in its text names whole (writeRunsAsCode).
+export function commandFilesOutside(command: string, folder: string): { files: string[]; problem?: string } {
+  const reads = new Reads();
+  const { files, missing, problem } = followOutside(command, 'the command', followOptions(folder, reads), reads);
+  return { files: [...files, ...missing], ...(problem ? { problem } : {}) };
 }
 
 // Why a command a trusted-by-hash patch's live function (`when`, `badge`,

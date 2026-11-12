@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { tmpDir } from '../helpers/fakes.ts';
-import { runnerKeysCommand, remoteCommand, REMOTE_ADMIN_CHECK, convexScratchDir } from '../../src/runner-keys.ts';
+import { runnerKeysCommand, remoteCommand, REMOTE_ADMIN_CHECK, convexScratchDir, sshTrouble } from '../../src/runner-keys.ts';
 import { spawnSync } from 'node:child_process';
 
 const URL_ = 'https://opulent-moose-249.ap-southeast-2.convex.cloud';
@@ -140,6 +140,41 @@ test("a key that couldn't be written over ssh is revoked again", async () => {
   assert.deepEqual(s.calls.map((c) => c.fn).filter((fn) => /RunnerKey$/.test(fn)), ['sync:addRunnerKey', 'sync:revokeRunnerKey']);
 });
 
+// ssh runs with BatchMode=yes, so each way it fails is told apart, with its
+// fix, rather than ssh's bare error (Wayne's second Mac, issue #39).
+test('a failed ssh says which case it is and the fix', async () => {
+  const cases: [string, RegExp][] = [
+    ['ssh: Could not resolve hostname waynes-mac: nodename nor servname provided, or not known', /waynes-mac\.local/],
+    ['ssh: connect to host waynes-mac.local port 22: No route to host', /Remote Login/],
+    ['ssh: connect to host waynes-mac.local port 22: Connection refused', /System Settings > General > Sharing > Remote Login/],
+    ['Host key verification failed.', /ssh-keygen -lf .*ssh_host_ed25519_key/],
+    ['kex_exchange_identification: Connection closed by remote host', /Remote Login/],
+    ['cat: /Users/w/Library/Application Support/Threadbear/runner.json: Permission denied', /command there failed/],
+    ['wayne@waynes-mac.local: Permission denied (publickey,password,keyboard-interactive).', /ssh-copy-id -o ClearAllForwardings=yes wayne@waynes-mac\.local/],
+    ['@@@ WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED! @@@\nHost key verification failed.', /ssh-keygen -R waynes-mac\.local/],
+  ];
+  for (const [err, want] of cases) assert.match(sshTrouble(err.includes('wayne@') ? 'wayne@waynes-mac.local' : err.includes('resolve') ? 'waynes-mac' : 'waynes-mac.local', err), want, err);
+  // A changed key isn't waved through, a host key is checked against that Mac's
+  // own, and the ssh it suggests keeps forwarding off.
+  assert.doesNotMatch(sshTrouble('m', 'REMOTE HOST IDENTIFICATION HAS CHANGED\nHost key verification failed.'), /answer yes/);
+  for (const e of ['Host key verification failed.', 'mystery']) assert.match(sshTrouble('m', e), /ssh -o ForwardAgent=no/);
+  assert.doesNotMatch(sshTrouble('m', 'Host key verification failed.'), /keyscan/);
+  // tb runner add says it too, and a Mac with no Threadbear isn't an ssh problem.
+  const s = setup();
+  s.deps.ssh = () => ({ ok: false, out: '', err: 'Host key verification failed.' });
+  assert.equal(await runnerKeysCommand(s.cfg, ['add', 'bruce'], { ssh: 'bruce' }, s.deps), 1);
+  assert.match(s.printed.join('\n'), /ssh -o ForwardAgent=no -o ClearAllForwardings=yes -o ForwardX11=no bruce/);
+  assert.deepEqual(s.calls.filter((c) => c.fn === 'sync:addRunnerKey'), []);
+  const none = setup();
+  none.deps.ssh = () => ({ ok: false, out: '', err: 'cat: /Users/w/Library/Application Support/Threadbear/runner.json: No such file or directory' });
+  assert.equal(await runnerKeysCommand(none.cfg, ['add', 'bruce'], { ssh: 'bruce' }, none.deps), 1);
+  assert.match(none.printed.join('\n'), /setup --existing/);
+  // And tb runner check --ssh.
+  const c = setup(undefined, [], ['down']);
+  assert.equal(await runnerKeysCommand(c.cfg, ['check'], { ssh: 'bruce' }, c.deps), 1);
+  assert.match(c.printed.join('\n'), /Remote Login/);
+});
+
 test('tb runner add --out writes an owner-only file', async () => {
   const s = setup();
   const file = path.join(s.cfg.home, 'out', 'bruce.key');
@@ -164,7 +199,26 @@ test("on a runner key's Mac, tb runner says only the main Mac can", async () => 
 // Plain JS with no types, as setup runs before any packages are installed.
 type Plan = (p: { envGet: { status: number; stdout: string; stderr: string }; local: string; joining: boolean }) => { action: string; why?: string };
 const planModule: string = '../../../scripts/runner-key-plan.mjs';
-const { runnerKeyPlan, isJoining } = (await import(planModule)) as { runnerKeyPlan: Plan; isJoining: (p: { existing: boolean; local: string }) => boolean };
+const { runnerKeyPlan, isJoining, joinSteps } = (await import(planModule)) as {
+  runnerKeyPlan: Plan;
+  isJoining: (p: { existing: boolean; local: string }) => boolean;
+  joinSteps: (p: { localHost: string; hostname: string; user: string; name?: string; sshOn: boolean }) => string[];
+};
+
+// Issue #39: the printed --ssh host had .local cut off and didn't resolve,
+// and nothing said Remote Login had to be on.
+test("setup's join step names this Mac as user@name.local and says when Remote Login is off", () => {
+  const on = joinSteps({ localHost: 'Waynes-MacBook-Pro', hostname: 'Waynes-MacBook-Pro.local', user: 'wayne', sshOn: true }).join('\n');
+  assert.match(on, /tb runner add Waynes-MacBook-Pro --ssh wayne@Waynes-MacBook-Pro\.local\b/);
+  assert.doesNotMatch(on, /Remote Login is off/);
+  assert.match(on, /ssh -o ForwardAgent=no -o ClearAllForwardings=yes -o ForwardX11=no wayne@/);
+  assert.match(on, /ssh-copy-id -o ClearAllForwardings=yes wayne@/);
+  const off = joinSteps({ localHost: 'mini', hostname: 'mini.local', user: 'w', name: 'studio', sshOn: false });
+  assert.match(off[0]!, /System Settings > General > Sharing > Remote Login/);
+  assert.match(off.join('\n'), /tb runner add studio --ssh w@mini\.local/);
+  // No Bonjour name: the hostname, with .local only once.
+  assert.match(joinSteps({ localHost: '', hostname: 'mini.local', user: 'w', sshOn: true }).join('\n'), /--ssh w@mini\.local\b/);
+});
 
 test('setup never sets RUNNER_KEY on a joining Mac, and a failed read never looks like an unset one', () => {
   const failed = { status: 1, stdout: '', stderr: 'network error' };
@@ -204,6 +258,10 @@ test('tb runner add warns when the other Mac also has a deploy key or a Convex l
   assert.match(out, /deployment token delete threadbear-panel-bruce-abc123 --deployment opulent-moose-249/);
   assert.match(out, /https:\/\/dashboard\.convex\.dev\/d\/opulent-moose-249\/settings/);
   assert.match(out, /rotate-owner/);
+  // Where a CLI login likely came from, and that rotating isn't always needed.
+  assert.match(out, /earlier npx convex login/);
+  assert.match(out, /run no threads yet can skip it/);
+  assert.match(out, /ran threads while it had these/);
   // tb runner check --ssh says the same on its own, and fails.
   const c = setup(undefined, [], ['cli-login']);
   assert.equal(await runnerKeysCommand(c.cfg, ['check'], { ssh: 'bruce' }, c.deps), 1);
@@ -602,4 +660,14 @@ test("rotate-owner on a self-hosted backend goes ahead without a deploy-key list
   const n = setup();
   assert.equal(await runnerKeysCommand(n.cfg, ['rotate-owner'], {}, n.deps), 1);
   assert.deepEqual(n.convexCalls, []);
+});
+
+test("a Mac whose runner.json is JSON but not an object gets nothing written over it, and no key", async () => {
+  for (const remote of [[], 42, 'oops', null]) {
+    const s = setup(remote);
+    assert.equal(await runnerKeysCommand(s.cfg, ['add', 'new'], { ssh: 'new' }, s.deps), 1, JSON.stringify(remote));
+    assert.equal(s.sshCalls.filter((c) => c.command.includes('runner.json.new')).length, 0);
+    assert.deepEqual(minted(s), []);
+    assert.match(s.printed.join('\n'), /not an object/);
+  }
 });

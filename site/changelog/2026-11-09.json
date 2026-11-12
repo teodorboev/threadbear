@@ -1,0 +1,112 @@
+{
+  "release": "2026-11-09",
+  "highlights": [
+    {
+      "kind": "changed",
+      "title": "Trackpad swipes show where you'll land",
+      "text": "Swipe back or forward with two fingers and a card in the middle of the window names the thread or page you'll go to, filling as your fingers move and turning blue once letting go will take you there. Which way is Back now follows your natural scrolling setting, as in Safari.",
+      "media": {
+        "type": "clip",
+        "src": "swipe-card.mp4",
+        "poster": "swipe-card.webp",
+        "width": 1080,
+        "height": 980,
+        "alt": "A two-finger swipe forward brings up a card saying Nothing to go forward to. A swipe back shows a card naming Add dark mode to the dashboard, filling as the fingers move and turning blue, and letting go opens that thread."
+      }
+    },
+    {
+      "kind": "changed",
+      "title": "Answer several permission asks on one card",
+      "text": "When a Claude agent wants to do several things that need your OK at once, they come on one card with a tick and a cross on each. Allow lets the ticked ones through and refuses the rest, and Deny all refuses them all.",
+      "media": {
+        "type": "clip",
+        "src": "several-asks.mp4",
+        "poster": "several-asks-2.webp",
+        "width": 1020,
+        "height": 1200,
+        "alt": "One permission card lists edits to DraftTests.swift and CPUTime.swift and the command swift test, each with a tick and a cross. Crossing the command fades it and the button changes to Allow 3; clicking it lets the three through and the reply says Allowed 3 of 4."
+      }
+    },
+    {
+      "kind": "added",
+      "title": "Start a thread from a project's page",
+      "text": "New Thread at the top of a project's page opens the message box in the project's folder, and the agent knows the project's goals and notes from its first message.",
+      "media": {
+        "type": "clip",
+        "src": "project-new-thread.mp4",
+        "poster": "project-new-thread.webp",
+        "width": 2480,
+        "height": 980,
+        "alt": "The Photo sync project page with New Thread at the top right. Clicking it opens the new-thread message box with an In Photo sync chip, starting in the photo-sync folder, and a message is typed in."
+      }
+    },
+    {
+      "kind": "added",
+      "title": "Delete an archived thread",
+      "text": "Hover a thread under Archived and click the trash, or right-click it and choose Delete…, then confirm.",
+      "credit": "emilsbauga",
+      "media": {
+        "type": "image",
+        "src": "delete-archived.webp",
+        "width": 690,
+        "height": 392,
+        "alt": "The Archived section of the sidebar with three threads. The hovered row, Set up the Cloudflare tunnel, shows an Unarchive arrow and a trash button in place of its time."
+      }
+    },
+    {
+      "kind": "changed",
+      "title": "Back skips the new-thread screen",
+      "text": "Back from a thread you just started goes to wherever you were before you pressed New thread, not to the empty new-thread screen.",
+      "media": {
+        "type": "clip",
+        "src": "back-after-new-thread.mp4",
+        "poster": "back-after-new-thread.webp",
+        "width": 2480,
+        "height": 1100,
+        "alt": "From Add dark mode to the dashboard, New thread opens the empty new-thread screen and a message is sent, starting Make the sidebar remember its width. A swipe back brings up a card saying Back to Add dark mode to the dashboard, which turns blue, and letting go opens that thread."
+      }
+    },
+    {
+      "kind": "fixed",
+      "title": "Pinned pages always open",
+      "text": "A page an agent pins to show you opens in the side pane every time, or as soon as you go back to that thread.",
+      "media": {
+        "type": "clip",
+        "src": "pin-opens-pane.mp4",
+        "poster": "pin-opens-pane.webp",
+        "width": 1860,
+        "height": 870,
+        "alt": "While on another thread, the agent in Make uploads resume after a crash pins resume-plan.md. Opening that thread opens the page in the side pane. The pane is closed, the agent pins the page again with a new line added, and it opens again showing Uploads over a phone hotspot."
+      }
+    }
+  ],
+  "added": [
+    "Send pictures to a thread running on another Mac or a cloud server, where it used to say pictures couldn't go there yet",
+    "On iPhone, type / in a thread's reply box to pick from its slash commands",
+    "On iPhone, the photos you sent show above your message, where it used to say \"[2 pictures]\"",
+    "On iPhone, swipe left on a thread to go forward again to the thread you just went back from"
+  ],
+  "changed": [
+    "The arrows on a diagram or small page in a reply open it full size in a window of its own, where they used to open it in the side pane",
+    "A swipe with nowhere to go says so, and a swipe has to go a little further before it counts",
+    "The browser panel lists the pages an agent has open, each with a picture of the page, what the agent is doing there and Show window to bring the real window forward",
+    "The Runners panel lists your runners in the same order as Settings and the phone, and you can drag them into a new order there",
+    "A patch's button can change its own label (say, \"Merge #707\"), and a patch's buttons update as soon as one of its commands finishes, so a Run can turn into Stop straight away",
+    "Voice mode (talking with a thread out loud, an experiment you had to turn on) is gone from the Mac app; dictation on the iPhone stays",
+    "The iPhone reads much less from your backend to know which threads a schedule will wake",
+    "On iPhone, the microphone's bars move with your voice"
+  ],
+  "fixed": [
+    "Pasting a screenshot you took to the clipboard with ⌃⇧⌘4 works in the message box and a Needs you card's answer box, where Paste was greyed out and ⌘V did nothing (other pictures already pasted fine)",
+    "On iPhone, scroll back through all of a long thread: past the newest 2,000 messages it used to say Loading… for good, and loading earlier messages now keeps your place, even mid-flick",
+    "On iPhone, the Starred, Inbox and Running headings stay at the top again while you scroll, and pictures near the top bar or reply box no longer go blank",
+    "A schedule keeps the message box's permission mode, Auto included, where a schedule made on Auto used to stop and ask before every edit",
+    "Hibernate until… with words works on threads running on another Mac",
+    "A decision card from a thread on another runner shows what each answer does, as your own runner's cards do",
+    "A thread another Mac asks to start here, with a folder named under that Mac's home folder, starts in the matching folder here, and the card says so when there's no such folder",
+    "A thread still finishing on a runner that's being replaced by an update can still message threads on your other runners, and its last saves are no longer lost",
+    "A thread brought back from the archive never carries on in a worktree folder that has since gone to another thread",
+    "The app menu has one Settings… item instead of two",
+    "Closed several security holes, including a stopped share link that could still show newer messages, a repo's icon that could make a Linux runner run a script, and ways text from another runner or repo could get past an approval check"
+  ]
+}

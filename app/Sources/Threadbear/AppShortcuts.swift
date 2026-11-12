@@ -82,8 +82,8 @@ final class AppShortcuts {
         }
         lastRead = data
         do {
-            try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try data.write(to: file, options: .atomic)
+            // Owner-only, as the GPUI app writes this same file (PrivateFile).
+            try PrivateFile.write(data, to: file)
             problem = nil
         } catch {
             problem = "Couldn't save your shortcuts: \(error.localizedDescription)"

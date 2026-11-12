@@ -1,0 +1,214 @@
+{
+  "release": "2026-11-07",
+  "highlights": [
+    {
+      "kind": "added",
+      "title": "Type / for a palette of commands",
+      "text": "Type / in a thread's message box and a palette opens above it with Threadbear's commands, the agent's own and your skills, each with how to use it. Up and Down pick one, Return runs it and Tab fills it in.",
+      "media": {
+        "type": "clip",
+        "src": "slash-palette-2.mp4",
+        "poster": "slash-palette-2.webp",
+        "width": 1080,
+        "height": 1276,
+        "alt": "Typing / in the message box opens a palette above it with categories and counts on the left, the matching commands in the middle and the picked command's usage on the right; typing co narrows the list and Down moves the pick to /cost."
+      }
+    },
+    {
+      "kind": "added",
+      "title": "See how full a thread's context is",
+      "text": "A small ring beside Send fills as the conversation uses up the model's context, and turns orange when it's nearly full. Click it for the tokens used, the model and login the thread ran on, and what it has cost.",
+      "media": {
+        "type": "clip",
+        "src": "context-ring.mp4",
+        "poster": "context-ring-2.webp",
+        "width": 740,
+        "height": 544,
+        "alt": "The context ring beside Stop is clicked and a popover opens above it: 642k of 1M tokens, 64%, the model Fable 5.1, the login mike@example.com and $0.44 spent so far."
+      }
+    },
+    {
+      "kind": "added",
+      "title": "Diagrams and small pages in replies",
+      "text": "When an agent puts a diagram or a small web page in its reply, it's drawn right in the thread, on the Mac and the iPhone. The switch on its box shows the code instead.",
+      "media": {
+        "type": "image",
+        "src": "reply-diagram.webp",
+        "width": 1048,
+        "height": 1036,
+        "alt": "A reply reading \"Here's how an upload picks up after a crash:\" followed by a box with a Diagram and Source switch, drawing a top-down flowchart from App starts through Unfinished upload?, Ask the server how much it has and Checksum matches? to Mark it done or Start that file again."
+      }
+    },
+    {
+      "kind": "changed",
+      "title": "Hibernate tucks a thread in",
+      "text": "Hibernating the open thread sinks it down into the moon by the Hibernating heading, on the Mac and the iPhone.",
+      "media": {
+        "type": "clip",
+        "src": "hibernate-moon.mp4",
+        "poster": "hibernate-moon.webp",
+        "width": 1840,
+        "height": 1564,
+        "alt": "Hibernating the open thread shrinks its page, which sinks and flies left into the Hibernating heading in the sidebar; the count goes from 1 to 2 and the next thread opens."
+      }
+    },
+    {
+      "kind": "changed",
+      "title": "The bear, redrawn",
+      "text": "The bear looks more like a bear, with a button eye and a stitch. Clear your Inbox and it pops up over the empty page to wave, and from 1 to 26 December it wears a Santa hat.",
+      "media": {
+        "type": "clip",
+        "src": "bear-inbox-zero.mp4",
+        "poster": "bear-inbox-zero.webp",
+        "width": 1040,
+        "height": 540,
+        "alt": "Archiving the last Inbox thread leaves the empty page reading \"What should we work on?\", and the line-drawn bear in a Santa hat rises above it and waves."
+      }
+    },
+    {
+      "kind": "added",
+      "title": "Change any keyboard shortcut",
+      "text": "In Settings > Keyboard, click a command's key and press the one you want. If another command already has it, it asks first.",
+      "media": {
+        "type": "clip",
+        "src": "keyboard-shortcut.mp4",
+        "poster": "keyboard-shortcut.webp",
+        "width": 1800,
+        "height": 640,
+        "alt": "Settings > Keyboard with the Threads group: Archive's key turns into a Press keys field, then shows ⇧⌘E with a Reset button beside it."
+      }
+    },
+    {
+      "kind": "added",
+      "title": "Drafts that paste as they look",
+      "text": "A Slack message or email an agent writes for you shows in a box line for line, as it'll go out, on the Mac, the iPhone and the website. Copy at its top right keeps the bold and the links.",
+      "media": {
+        "type": "image",
+        "src": "draft-block.webp",
+        "width": 1010,
+        "height": 584,
+        "alt": "A reply with a Slack draft box and Copy at its top right, holding the message line for line: \"Photo sync, today\" in bold, two lines, a blank line, and a Next line ending in \"the PR\" as a link."
+      }
+    },
+    {
+      "kind": "changed",
+      "title": "Questions slide past like a deck",
+      "text": "When a card asks several things, answering one slides the next in from the right.",
+      "media": {
+        "type": "clip",
+        "src": "asks-deck.mp4",
+        "poster": "asks-deck.webp",
+        "width": 1080,
+        "height": 790,
+        "alt": "A Decisions needed card on 1 of 3: picking Yes, all 37 slides the second question in from the right and the counter rolls to 2 of 3, then picking Yes, close them slides in the third."
+      }
+    },
+    {
+      "kind": "added",
+      "title": "Swipe between threads",
+      "text": "Swipe left or right with two fingers to go Back and Forward between threads, as in Safari.",
+      "media": {
+        "type": "clip",
+        "src": "swipe-back-forward.mp4",
+        "poster": "swipe-back-forward.webp",
+        "width": 1080,
+        "height": 960,
+        "alt": "A two-finger swipe on a thread brings up a Back to \"Export last quarter's invoices as CSV\" pill that turns blue, and that thread opens; swiping the other way shows Forward to \"Compare SQLite and plain files for the runner\" and goes back to it."
+      }
+    },
+    {
+      "kind": "changed",
+      "title": "Sent messages lift off",
+      "text": "A message you send lifts off the message box, and the done card's tick draws itself in.",
+      "media": {
+        "type": "clip",
+        "src": "send-lift-done-tick.mp4",
+        "poster": "send-lift-done-tick.webp",
+        "width": 1080,
+        "height": 920,
+        "alt": "\"Can you bump the version for the release?\" is sent from the message box and rises into the thread; the agent replies \"Bumped it to 1.4.3 in package.json.\" and a Done card appears above the message box with its tick drawing in."
+      }
+    },
+    {
+      "kind": "changed",
+      "title": "The bear sleeps at night",
+      "text": "Between 10 pm and 5 am the bear under an empty Inbox is asleep. A thread that wakes from hibernating has the bear stretching beside its note.",
+      "media": {
+        "type": "clip",
+        "src": "bear-asleep-and-stretch.mp4",
+        "poster": "bear-asleep-and-stretch.webp",
+        "width": 650,
+        "height": 280,
+        "alt": "The last Inbox thread is hibernated late at night, leaving \"Nothing in the inbox. Off to bed.\" under a sleeping bear with Zs drifting up. When the thread wakes and is opened, the small bear beside \"Woke up from hibernating.\" sits up and stretches a paw in the air."
+      }
+    },
+    {
+      "kind": "added",
+      "title": "About Threadbear waves",
+      "text": "Threadbear > About Threadbear opens a small window where the bear waves over a few numbers from your threads.",
+      "media": {
+        "type": "clip",
+        "src": "about-den-wave.mp4",
+        "poster": "about-den-wave.webp",
+        "width": 632,
+        "height": 480,
+        "alt": "The About Threadbear window opens with the bear tilting side to side as it waves, over \"21 threads since 6 Nov.\" and \"Busiest day: 8 Nov, 9 threads. Sorry.\""
+      }
+    }
+  ],
+  "added": [
+    "Plan first in the mode menu on the message box: the agent looks around and writes a plan without changing anything, as a card with Go ahead and Send back, and ticks off its steps on the same card once you let it start",
+    "Pick Light, Dark or Same as the Mac for Threadbear alone in Settings > General > Appearance",
+    "A soft ding when a thread finishes, waits for you or fails: choose Chime, Bell or Droplet in Settings > General > Notifications (off until you turn it on)",
+    "⌥⌘↓ (Go > Next Inbox Thread) opens the next thread in your Inbox, so you can work through it without the mouse",
+    "Drag a thread from the sidebar onto the open thread to mention it in your message",
+    "Investigate on the error bar starts a thread that looks for the error's cause and fixes it",
+    "When Claude refuses a message, Continue with Codex Sol carries the thread on in Codex",
+    "Files on a thread's right-hand rail shows the thread's folder in the folder browser",
+    "A thread's Highlights lists the threads it started, with where each is up to, and a click opens one",
+    "A page in the side pane that needs its scripts says so, and Run them turns them on for that version of the file, still with no internet",
+    "Options an agent asks you to compare can be videos and small pages as well as pictures, and the one it would pick is marked \"my pick\"",
+    "The Usage panel has a meter and chart of its own for Fable's weekly limit",
+    "A note, once, when you pass 1,000 threads",
+    "iPhone: a mic beside Send in a thread's reply box, with Whisper as an option for more accurate dictation and a word list for names in Settings",
+    "iPhone: choose which Mac a new thread runs on, and set the order they're tried in under Settings > Runners, on the phone or the Mac",
+    "iPhone: messages sent while the thread's Mac is asleep show faded with Cancel until that Mac takes them",
+    "iPhone: Copy Thread ID in a thread's ... menu, and a pasted thread id goes in as a link to that thread",
+    "Run Threadbear on your own Convex backend instead of Convex's cloud with `./threadbear setup --self-hosted`",
+    "Your own copy of Threadbear starts a thread every five days to bring in the newest releases, and straight away for an important one: Settings > General > Updates from Mike sets how often",
+    "New experiments you can switch on (the guide's Experiments page says how): keep the Mac awake while threads work, have Codex review Claude's changes and Claude review Codex's, skip a scheduled run when its check finds nothing new, a done card that lists loose ends, buttons in replies, instructions for every agent in Settings, and talking with a thread out loud"
+  ],
+  "changed": [
+    "Editing a file in the side pane shows line numbers, ⌘S saves it straight away, and a save never writes over a change an agent has just made to the file",
+    "Slash commands work in Codex threads too, and `/model` and `/effort` stay set for the thread",
+    "Copy thread id is on a thread's right-click menu in the sidebar as well as its ... menu",
+    "Usage on the left-hand rail is a honey pot, filled to how much is left on the login your next thread would use",
+    "Every button shows a spinner or the change straight away, and can't be pressed twice while it waits, on the Mac and the iPhone",
+    "Drop a file anywhere over the thread to attach it, not just on the message box",
+    "A link's right-click menu has Open in Chrome for each Chrome profile you have open, so a page can go to the window with the right sign-in",
+    "Web addresses inside code in a reply are links",
+    "Archive on the done card archives straight away again, without asking whether it worked",
+    "A failed update starts a thread in the background that fixes the cause and archives itself; the banner is only for when no thread can start",
+    "Checks, worktree setup and updates that Threadbear runs itself go at background priority, so the Mac stays responsive",
+    "A scheduled run that finds nothing for you puts an archived thread back in the archive",
+    "On the iPhone and the website, a hibernating thread's row says what it's waiting for",
+    "iPhone: pull the Inbox down and the bear peeks over the top while it reconnects, and clear the last row for a wave",
+    "iPhone: while you dictate, the reply box is a waveform with the time so far and a small stop button"
+  ],
+  "fixed": [
+    "Screenshots dragged from their floating thumbnail and photos copied from Photos now attach",
+    "A link in a reply to a file in the thread's folder opens that file",
+    "A link to a thread the sidebar doesn't have says why, rather than only beeping",
+    "Return in a question's Something else box moves on to the next question, and an empty box no longer counts as an answer",
+    "Picks on a card work while the thread is busy with a background task",
+    "A sub-agent's permission card stays up after its parent's turn ends, rather than the sub-agent being stopped as if you'd said no",
+    "Ask before edits threads no longer ask before Threadbear's own tools that only read or show you something",
+    "Answering or archiving while the runner restarts no longer fails with \"Thread not found\"",
+    "Cards on a thread that runs on another Mac can be answered, and its archived threads can be reopened from Archived",
+    "iPhone: tapping a notification no longer crashes the app, and opens its thread even when the app wasn't running",
+    "A mockup page saved without a character set no longer shows ✓ as garbled letters",
+    "Granting Full Disk Access after Threadbear first asked for it clears the notice",
+    "Your own copy no longer shows Mike's Sentry and App Store Connect chips",
+    "Closed several ways a cloned repo's settings, a stopped share link or a tampered release could get past Threadbear's checks"
+  ]
+}

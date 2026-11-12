@@ -193,6 +193,31 @@ final class RowDebugTests: XCTestCase {
         XCTAssertEqual(model.sourceSeqs(of: "cf:t1"), [5, 8, 9])
     }
 
+    /// Daybreak 87: the see line run by a real shell, against a `tb` that
+    /// prints its arguments. Another runner's id arrives as one argument,
+    /// and nothing in it runs.
+    func testTheSeeLinesIdIsOneShellWordWhateverItHolds() throws {
+        let model = TranscriptModel(events: events)
+        let row = try XCTUnwrap(model.item(id: "t:c1"))
+        for id in ["remote$(printf TB_ID_EXECUTED >&2)", "x'; printf TB_ID_EXECUTED >&2; '", "x`printf TB_ID_EXECUTED >&2`", "x\nprintf TB_ID_EXECUTED >&2"] {
+            let info = RowDebug.info(threadId: id, row: row, seqs: [5], runnerVersion: "1", source: .tb("tb"))
+            let line = try XCTUnwrap(info.components(separatedBy: "\nsee: ").last).trimmingCharacters(in: .newlines)
+            let shell = Process()
+            shell.executableURL = URL(fileURLWithPath: "/bin/sh")
+            shell.arguments = ["-c", "tb() { for a in \"$@\"; do printf '<%s>' \"$a\"; done; }; " + line]
+            let (out, err) = (Pipe(), Pipe())
+            shell.standardOutput = out
+            shell.standardError = err
+            try shell.run()
+            shell.waitUntilExit()
+            let stdout = String(decoding: out.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+            let stderr = String(decoding: err.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+            XCTAssertFalse(stderr.contains("TB_ID_EXECUTED"), line)
+            XCTAssertEqual(stdout, "<events><\(id)><--from><5><--to><5>", line)
+        }
+        XCTAssertEqual(RowDebug.shellWord("th1"), "th1")
+    }
+
     func testInfoReadsAsKeyValueLines() throws {
         let model = TranscriptModel(events: events)
         let row = try XCTUnwrap(model.item(id: "t:c1"))

@@ -109,7 +109,16 @@ let accounts = [
   {
     id: 'claude-2', provider: 'claude', title: 'work@example.com', configDir: `${tokenStatsAccounts}/claude-2`,
     defaultModel: 'claude-fable-5-1', models, email: 'work@example.com', plan: 'Team', note: 'Convex work only',
-    usage: usage(95, 90, { notice: couldntCheck, more: [{ kind: 'weekly_model', title: 'Weekly Fable', remainingPercent: 97, resetsAt: hoursFromNow(70) }] }),
+    // A week not started since its reset: full, and no reset time until
+    // it's used. The chart still shows the week before.
+    usage: usage(95, 100, {
+      notice: couldntCheck,
+      windows: [
+        { kind: 'five_hour', title: '5-hour', remainingPercent: 95, resetsAt: hoursFromNow(2) },
+        { kind: 'weekly', title: 'Weekly', remainingPercent: 100 },
+        { kind: 'weekly_model', title: 'Weekly Fable', remainingPercent: 97, resetsAt: hoursFromNow(70) },
+      ],
+    }),
   },
   {
     id: 'claude-3', provider: 'claude', title: 'mike+3@example.com', configDir: `${tokenStatsAccounts}/claude-3`,
@@ -179,10 +188,11 @@ function mockUsageStats(days) {
     const charted = (a.usage?.windows ?? []).filter((x) => ['weekly', 'five_hour', 'weekly_model'].includes(x.kind));
     for (const w of charted) {
       const kind = w.kind;
-      if (!w?.resetsAt) continue;
       const week = kind !== 'five_hour';
+      // A week with no reset time yet reset 20 hours ago and hasn't been used.
+      if (!w?.resetsAt && !week) continue;
       const length = (week ? 168 : 5) * HOUR;
-      const reset = Date.parse(w.resetsAt);
+      const reset = w.resetsAt ? Date.parse(w.resetsAt) : now - 20 * HOUR + length;
       // Walk back from now, one window at a time: each goes from 100 down
       // to where it ended, the current one to what it says now.
       const samples = [];
@@ -249,7 +259,7 @@ function pickInPool(pool, provider, current) {
   const want = provider ?? own[0]?.provider;
   const candidates = own.filter((a) => a.provider === want);
   const cur = candidates.find((a) => a.id === current);
-  if (cur && roomOf(cur) >= 10) return cur.id;
+  if (cur && roomOf(cur) >= 1) return cur.id; // the runner's MIN_ROOM_PERCENT
   return [...candidates].sort((a, b) => roomOf(b) - roomOf(a))[0]?.id;
 }
 // The provider whose account lists a model id, if any does.
@@ -292,11 +302,28 @@ const devices = [
   { id: 'tok3', kind: 'browser', name: 'Safari', createdAt: '2026-07-01T08:00:00.000Z', expiresAt: '2026-09-29T08:00:00.000Z', expired: true },
 ];
 let deviceSeq = devices.length;
-const deviceList = () => ({ devices: [...devices], site: DEMO_SITE });
+// MOCK_LOCAL_ONLY=1: a backend on this Mac only (setup --self-hosted
+// --local, docs/self-hosting.md), so Settings › Phone & browser can be seen
+// saying why a phone can't pair.
+const LOCAL_ONLY = process.env.MOCK_LOCAL_ONLY === '1';
+// mock.devices: sync off, with the runner's reason (devices.list lists none
+// and says why; pair and revoke refuse), and a pair or revoke the backend
+// doesn't answer, for the specs of Settings › Phone & browser.
+let devicesReason = null;
+let devicesFailNext = false;
+const deviceList = () => (devicesReason
+  ? { devices: [], reason: devicesReason }
+  : { devices: [...devices], site: LOCAL_ONLY ? 'http://127.0.0.1:13211' : DEMO_SITE });
+const devicesRefusal = () => {
+  if (devicesReason) return rpcError(-32000, devicesReason);
+  if (!devicesFailNext) return null;
+  devicesFailNext = false;
+  return rpcError(-32000, "The backend didn't answer. Try again in a moment.");
+};
 
 let mockInstructions = { text: '' };
 const settings = {
-  defaultCwd: defaults.cwd, idleMinutes: 30, maxLiveCLIs: 6, followMain: true, bulletReplies: true, oneReply: true,
+  defaultCwd: defaults.cwd, idleMinutes: 30, maxLiveCLIs: 6, followMain: true, bulletReplies: true, oneReply: true, labReview: true, keepAwake: true,
   models: {
     pool: 'claude',
     privateFolders: ['~/dev/clients/acme'],
@@ -334,6 +361,8 @@ const BRUCE = 'runner_bruce';
 // runner passes on the backend's.
 // MOCK_MORE_RUNNERS=1 adds two more, for a list worth rearranging (only for
 // a look at Settings > Runners: the usual demo stays at two).
+// What threads.movePreview says won't come; empty and Move to skips the sheet.
+let moveLeftBehind = ['1 background job, which gets stopped'];
 const MORE_RUNNERS = process.env.MOCK_MORE_RUNNERS ? [
   { id: 'runner_cloud', name: 'Hetzner Cloud', icon: 'cloud', online: true, lastSeenAt: new Date().toISOString() },
   { id: 'runner_pixel', name: 'Pixel', icon: 'smartphone', online: true, lastSeenAt: new Date().toISOString() },
@@ -369,6 +398,23 @@ let connectors = {
   ],
 };
 addDemoProjects();
+// Decisions on the Projects page (the projectDecisions experiment): three of
+// Threadbear's threads waiting on a card of asks, with what they're for. Only
+// when asked, as it changes those threads' rows and the Projects page.
+if (process.env.TB_MOCK_DECISIONS) addDemoDecisions();
+// Parts of a project (docs/protocol.md, Projects, "Parts"): Photo sync as a
+// part of Threadbear, for features/projects.feature.
+if (process.env.TB_MOCK_PARTS) {
+  const photo = projects.find((p) => p.title === 'Photo sync');
+  const tb = projects.find((p) => p.title === 'Threadbear');
+  if (photo && tb) photo.parentId = tb.id;
+}
+// A big set for timing the Projects view (TB_MOCK_PERF_PROJECTS=<threads>):
+// that many threads over 80 projects, nearly all archived, the open ones
+// partly waiting on a card of asks, and a third of the projects with a
+// picture for an icon: the shape of Mike's install on 11 Nov (1,186
+// threads, 1,151 archived, 83 projects).
+if (process.env.TB_MOCK_PERF_PROJECTS) addPerfProjects(Number(process.env.TB_MOCK_PERF_PROJECTS));
 
 const token = crypto.randomBytes(24).toString('hex');
 fs.mkdirSync(path.join(dataDir, 'secrets'), { recursive: true });
@@ -471,14 +517,27 @@ function onConnection(ws, request) {
 
 async function handle(client, { id, method, params = {} }) {
   // Each runner knows only its own threads: asking this one about one of
-  // bruce's (or bruce about this one's) is "Thread not found".
+  // bruce's (or bruce about this one's) is "Thread not found"...
+  let caller = client;
   if (typeof params?.threadId === 'string' && threads.has(params.threadId) && ownerOf(params.threadId) !== client.as) {
-    return reply(client, id, null, { code: -32004, message: 'Thread not found' });
+    // ...except that this runner answers for bruce's threads through the
+    // backend (docs/protocol.md, "Other runners' threads through the
+    // backend"), the app's default way in: here, that's bruce's own code
+    // answering, on the same connection and with the same shapes. Events
+    // come to whoever subscribed, whichever runner's connection they used.
+    if (client.as !== null || ownerOf(params.threadId) !== BRUCE) {
+      return reply(client, id, null, { code: -32004, message: 'Thread not found' });
+    }
+    caller = { ...client, as: BRUCE };
+  }
+  if (method === 'threads.create' && params?.runnerId === BRUCE && client.as === null) {
+    // A new thread on bruce through this runner, as the relay files it.
+    caller = { ...client, as: BRUCE };
   }
   if (slow.ms > 0 && ['threads.send', 'threads.create', 'threads.update'].includes(method)) {
     await new Promise((resolve) => setTimeout(resolve, slow.ms));
   }
-  const result = await dispatch(client, method, params);
+  const result = await dispatch(caller, method, params);
   if (id !== undefined && id !== null) reply(client, id, result ?? {});
   // Like the real runner: a client that says hello hears about a restart
   // that's waiting, straight after the hello result.
@@ -501,11 +560,49 @@ async function dispatch(client, method, p) {
       }
       return {
         runnerVersion, protocol: 1, accounts: publicAccounts(),
-        defaults: oldRunner ? { ...defaults, poolId: undefined } : defaults, ...(oldRunner ? {} : { clis, updates, pools }),
+        defaults: oldRunner ? { ...defaults, poolId: undefined } : defaults, ...(oldRunner ? {} : { clis, updates, pools, experiments: process.env.TB_MOCK_DECISIONS ? ['projectDecisions'] : [] }),
       };
+    // Moving a thread to another runner (docs/protocol.md): a guess from
+    // "that runner", and a move that only marks the row, for the app's
+    // Move to menu and sheet.
+    case 'threads.movePreview': {
+      await sleep(500);
+      const runner = runners.concat(MORE_RUNNERS).find((r) => r.id === p.runnerId);
+      const home = runner?.name === 'bruce' ? '/Users/bruce' : '/home/mike';
+      return {
+        cwd: p.cwd || `${home}/dev/me/threadbear-threads/slot-4`,
+        accountId: p.accountId || 'claude-main',
+        accounts: [{ id: 'claude-main', provider: 'claude', title: 'Claude', email: 'mike@example.com' }, { id: 'claude-1', provider: 'claude', title: 'Claude', email: 'mike@work.example.com' }],
+        leftBehind: moveLeftBehind,
+        sourceChecked: true,
+        problems: p.cwd && !String(p.cwd).startsWith(home) ? [`There's no folder ${p.cwd} on ${runner?.name ?? 'it'}.`] : [],
+        worktree: true,
+      };
+    }
+    case 'threads.move': {
+      const t = threads.get(p.threadId);
+      const runner = runners.concat(MORE_RUNNERS).find((r) => r.id === p.runnerId);
+      if (t) {
+        t.summary.moving = { moveId: 'mock-move', to: p.runnerId, toName: runner?.name ?? p.runnerId, state: 'ready' };
+        broadcastSummary(p.threadId);
+      }
+      return { moveId: 'mock-move' };
+    }
+    case 'threads.moveCancel': {
+      const t = threads.get(p.threadId);
+      if (t?.summary.moving) {
+        t.summary.moving = { ...t.summary.moving, state: 'cancelled' };
+        broadcastSummary(p.threadId);
+      }
+      return {};
+    }
     case 'files.read':
       // Slow enough on bruce that the app's loading state shows.
       if (client.as) await sleep(400);
+      // Another runner's file asked of this one, as the GPUI app asks for
+      // bruce's pictures: refused as the real runner refuses it
+      // (runner/src/rpc.ts), never this Mac's file at the same path.
+      if (!client.as && typeof p.runnerId === 'string') throw rpcError(-32000, 'Files on another runner are kept there for now.');
       return readFile(client, p);
     case 'files.list':
       if (client.as) await sleep(400);
@@ -533,7 +630,7 @@ async function dispatch(client, method, p) {
       if (!oldRunner) status.clis = clis;
       // Sync on, to the made-up deployment, so the website's links and
       // sharing show (their links open nothing).
-      if (!oldRunner) status.sync = { state: 'ok', url: DEMO_DEPLOYMENT };
+      if (!oldRunner) status.sync = LOCAL_ONLY ? { state: 'ok', url: 'http://127.0.0.1:13210', site: 'http://127.0.0.1:13211', pushOff: true } : { state: 'ok', url: DEMO_DEPLOYMENT };
       return status;
     }
     // The CLI requests only report and pretend: nothing is checked or
@@ -760,7 +857,17 @@ async function dispatch(client, method, p) {
       return { thread: s };
     }
     case 'threads.events': {
+      // THREADBEAR_MOCK_EVENTS_DELAY_MS: a runner slow to read a thread (one
+      // busy handing over, a loaded Mac), for the spinner while a thread's
+      // read and switching back to one kept loaded (switching-threads.feature).
+      const eventsDelay = Number(process.env.THREADBEAR_MOCK_EVENTS_DELAY_MS ?? 0);
+      if (eventsDelay > 0) await new Promise((r) => setTimeout(r, eventsDelay));
       const t = need(p.threadId);
+      const failing = failingEvents.get(t.summary.id) ?? 0;
+      if (failing > 0) {
+        failingEvents.set(t.summary.id, failing - 1);
+        throw rpcError(-32000, "Couldn't read this thread's transcript.");
+      }
       let events = t.events;
       if (p.afterSeq !== undefined) events = events.filter((e) => e.seq > p.afterSeq);
       if (p.beforeSeq !== undefined) events = events.filter((e) => e.seq < p.beforeSeq);
@@ -833,7 +940,21 @@ async function dispatch(client, method, p) {
       const t = need(p.threadId);
       const button = t.buttons?.get(p.buttonId);
       if (!button) throw rpcError(-32602, `Button not found: ${p.buttonId}`);
-      if (button.pressed) return { button: structuredClone(button) };
+      if (button.pressed || button.running) return { button: structuredClone(button) };
+      if (button.run) {
+        // Answers at once, running, then finishes, as the runner does.
+        const { failed: _failed, ...rest } = button;
+        const running = { ...rest, running: { at: iso() } };
+        t.buttons.set(running.id, running);
+        persist(t.summary.id, { type: 'button.updated', button: running });
+        setTimeout(() => {
+          const { running: _going, ...left } = running;
+          const done = { ...left, pressed: { at: iso(), threadId: t.summary.id }, ran: { ok: true, exitCode: 0, durationMs: 1500 } };
+          t.buttons.set(done.id, done);
+          persist(t.summary.id, { type: 'button.updated', button: done });
+        }, 1500 + slow.queueMs);
+        return { button: structuredClone(running) };
+      }
       await new Promise((resolve) => setTimeout(resolve, 600 + slow.queueMs));
       const from = `[Sent by the agent in the thread "${t.summary.title}" (${t.summary.id.slice(0, 8)})]\n\n`;
       let next;
@@ -986,14 +1107,30 @@ async function dispatch(client, method, p) {
       return { trusted: (p.files ?? []).map((f) => f.file) };
     }
     case 'mock.convexPanel': {
+      // `key` says how panels.convexKey answers: "none" (the default, the
+      // CLI's own error), "ok" (a made-up key), "signedOut" (-32040, until a
+      // sign-in through panels.convexLogin) or "noAccess" (-32041).
       const t = need(p.threadId);
       const deployment = 'happy-otter-123';
       t.summary.panels = [{ id: 'convex.dashboard', title: 'Convex', kind: 'url', patch: 'convex',
         url: `https://dashboard.convex.dev/d/${deployment}`,
         convex: { deployment, deploymentUrl: `https://${deployment}.convex.cloud`, team: 'mike', project: 'walkies' } }];
       t.convexKeyRequests ??= [];
+      t.convexKeyMode = p.key ?? 'none';
       broadcastSummary(t.summary.id);
       return { keyRequests: t.convexKeyRequests };
+    }
+    case 'mock.convexKeyRequests': {
+      // What the app has asked panels.convexKey for so far.
+      return { keyRequests: need(p.threadId).convexKeyRequests ?? [] };
+    }
+    case 'mock.urlPanel': {
+      // A patch's url panel showing any page (a local server playing media,
+      // say), for its links and its closing to be tried.
+      const t = need(p.threadId);
+      t.summary.panels = [{ id: 'mock.page', title: p.title ?? 'Page', kind: 'url', patch: 'mock', url: p.url }];
+      broadcastSummary(t.summary.id);
+      return { panels: t.summary.panels };
     }
     case 'panels.convexDeployments': {
       need(p.threadId);
@@ -1005,7 +1142,26 @@ async function dispatch(client, method, p) {
     case 'panels.convexKey': {
       const t = need(p.threadId);
       (t.convexKeyRequests ??= []).push({ deployment: p.deployment, renew: p.renew === true });
+      const deployment = p.deployment ?? 'happy-otter-123';
+      if (t.convexKeyMode === 'ok') {
+        const deploymentUrl = deployment === 'busy-bear-456' ? 'https://busy-bear-456.ap-southeast-2.convex.cloud' : `https://${deployment}.convex.cloud`;
+        return { deployment, deploymentUrl, adminKey: `mock-admin-key|${deployment}` };
+      }
+      if (t.convexKeyMode === 'signedOut') throw rpcError(-32040, "The runner's Convex CLI isn't signed in.");
+      if (t.convexKeyMode === 'noAccess') throw rpcError(-32041, "The runner's Convex login can't reach this deployment.");
       throw rpcError(-32000, 'The demo runner has no Convex deploy keys.');
+    }
+    case 'panels.convexLogin': {
+      // A sign-in that's approved by the second look: waiting with Convex's
+      // device page and a code, then done, and the keys come after it.
+      const t = need(p.threadId);
+      if (!p.check) t.convexLoginChecks = 0;
+      else t.convexLoginChecks = (t.convexLoginChecks ?? 0) + 1;
+      if (p.check && t.convexLoginChecks >= 2) {
+        t.convexKeyMode = 'ok';
+        return { state: 'done' };
+      }
+      return { state: 'waiting', url: 'https://auth.convex.dev/device', code: 'MOCK-1234' };
     }
     case 'panels.render': {
       // The Simulator panel's picture: a fixture image, as if simctl took it.
@@ -1048,10 +1204,49 @@ async function dispatch(client, method, p) {
       if (p.question) return { answer: `About "${sel}": ${p.question} That's the mock runner's answer to a follow-up.`, model: 'mock' };
       return { answer: `**${sel}** is what the agent called this step. It means the smallest piece to move first, so the rest can follow.\n\n- It's in \`runner/src/explain.ts\`\n- Nothing here goes into the thread`, model: 'mock' };
     }
+    case 'threads.contextUsage': {
+      // What fills the context (docs/protocol.md, "Context breakdown"), the
+      // rows Ghostex showed on 9 Nov, scaled to the thread's own total. A
+      // moment's wait, like the CLI's count; Codex threads have none.
+      const t = need(p.threadId);
+      if (t.summary.provider === 'codex' || !t.summary.contextTokens) return { live: false };
+      await new Promise((r) => setTimeout(r, 700));
+      const max = t.summary.contextWindow ?? 1_000_000;
+      const fixed = { system_prompt: 4_500, system_tools: 2_300, mcp_instructions: 596, mcp_tools: 1_700, memory_files: 15_000, skills: 8_100 };
+      const messages = Math.max(0, t.summary.contextTokens - Object.values(fixed).reduce((a, b) => a + b, 0));
+      const buffer = 33_000;
+      const used = messages + Object.values(fixed).reduce((a, b) => a + b, 0);
+      const row = (id, name, tokens, kind = 'used') => ({ id, name, tokens, kind });
+      return {
+        live: true,
+        usage: {
+          at: new Date().toISOString(),
+          model: 'claude-opus-5-5',
+          totalTokens: used,
+          maxTokens: max,
+          categories: [
+            row('system_prompt', 'System prompt', fixed.system_prompt),
+            row('system_tools', 'System tools', fixed.system_tools),
+            row('mcp_instructions', 'MCP server instructions', fixed.mcp_instructions),
+            row('mcp_tools', 'MCP tools', fixed.mcp_tools),
+            row('mcp_tools_deferred', 'MCP tools (deferred)', 173_000, 'deferred'),
+            row('system_tools_deferred', 'System tools (deferred)', 16_000, 'deferred'),
+            row('memory_files', 'Memory files', fixed.memory_files),
+            row('skills', 'Skills', fixed.skills),
+            row('messages', 'Messages', messages),
+            row('autocompact_buffer', 'Autocompact buffer', buffer, 'buffer'),
+            row('free_space', 'Free space', Math.max(0, max - used - buffer), 'free'),
+          ],
+        },
+      };
+    }
+    case 'folders.commands':
     case 'threads.commands': {
       // The palette's list (docs/protocol.md, "Slash commands"): Threadbear's
       // own, the CLI's, then skills, as a real Claude thread lists them.
-      const t = need(p.threadId);
+      // folders.commands is a new thread's box asking before there's a
+      // thread: the same list for the folder it would start in.
+      const t = method === 'folders.commands' ? { summary: { provider: 'claude', cwd: p.cwd ?? os.homedir() } } : need(p.threadId);
       const codex = t.summary.provider === 'codex';
       const own = [
         { name: 'model', description: "Switch this thread's model", argumentHint: '[model]', source: 'threadbear' },
@@ -1116,12 +1311,12 @@ async function dispatch(client, method, p) {
       return { highlight: list.highlights[0] };
     }
     case 'mock.showPanel': {
-      // As the agent's show_panel tool would: {threadId, panel, where?}
+      // As the agent's show_panel tool would: {threadId, panel, where?, reload?}
       // (docs/protocol.md, "Showing panels"). The panel isn't checked.
       const t = need(p.threadId);
       const named = { highlights: 'Highlights', patches: 'Patches', usage: 'Usage', updates: 'Updates' };
       const title = named[p.panel] ?? t.summary.panels?.find((x) => x.id === p.panel)?.title ?? String(p.panel);
-      t.summary.panelRequest = { id: 'pr_' + crypto.randomBytes(4).toString('hex'), panel: String(p.panel), title, ...(p.where ? { where: p.where } : {}), at: iso() };
+      t.summary.panelRequest = { id: 'pr_' + crypto.randomBytes(4).toString('hex'), panel: String(p.panel), title, ...(p.where ? { where: p.where } : {}), ...(p.reload ? { reload: true } : {}), at: iso() };
       broadcastSummary(t.summary.id);
       return { request: t.summary.panelRequest };
     }
@@ -1156,6 +1351,13 @@ async function dispatch(client, method, p) {
     case 'remoteThreads.list':
       if (oldRunner) throw rpcError(-32601, `Unknown method ${method}`);
       return remoteThreads(client);
+    case 'remoteThreads.logins': {
+      // That runner's logins through this one, from the backend (no pools,
+      // and its default folder), as bruce's own hello has them.
+      if (oldRunner) throw rpcError(-32601, `Unknown method ${method}`);
+      if (p.runnerId !== BRUCE) throw rpcError(-32000, `No logins known for ${p.runnerId}`);
+      return { accounts: publicAccounts().filter((a) => a.id === 'claude-main' || a.id === 'codex-main'), pools: [], defaults: { ...defaults, poolId: undefined, accountId: 'claude-main', cwd: '/Users/bruce/dev/me/misc' } };
+    }
     case 'runners.setOrder': {
       if (oldRunner) throw rpcError(-32601, `Unknown method ${method}`);
       if (!Array.isArray(p.runnerIds) || !p.runnerIds.every((x) => typeof x === 'string')) throw rpcError(-32602, 'runnerIds must be a list of runner ids');
@@ -1295,6 +1497,8 @@ async function dispatch(client, method, p) {
       }
       if (p.followMain !== undefined) settings.followMain = Boolean(p.followMain);
       if (p.bulletReplies !== undefined) settings.bulletReplies = Boolean(p.bulletReplies);
+      if (p.labReview !== undefined) settings.labReview = Boolean(p.labReview);
+      if (p.keepAwake !== undefined) settings.keepAwake = Boolean(p.keepAwake);
       const m = p.models ?? {};
       if (m.pool !== undefined) {
         if (m.pool !== null && !poolOf(m.pool)) throw rpcError(-32602, `No pool called ${m.pool}`);
@@ -1315,7 +1519,10 @@ async function dispatch(client, method, p) {
       return deviceList();
     case 'devices.pair': {
       if (oldRunner) throw rpcError(-32601, `Unknown method ${method}`);
+      const refused = devicesRefusal();
+      if (refused) throw refused;
       if (!['phone', 'browser'].includes(p.kind)) throw rpcError(-32602, 'kind must be one of phone, browser');
+      if (LOCAL_ONLY && p.kind === 'phone') throw rpcError(-32000, "Your backend is on this Mac only (setup --self-hosted --local), so a phone can't reach it.");
       const name = typeof p.name === 'string' && p.name.trim() ? p.name.trim() : p.kind === 'phone' ? 'iPhone' : 'Browser';
       const days = p.days ?? 90;
       const device = { id: `tok${++deviceSeq}`, kind: p.kind, name, createdAt: iso(), expiresAt: new Date(Date.now() + days * 86_400_000).toISOString(), expired: false };
@@ -1327,12 +1534,63 @@ async function dispatch(client, method, p) {
     }
     case 'devices.revoke': {
       if (oldRunner) throw rpcError(-32601, `Unknown method ${method}`);
+      const refused = devicesRefusal();
+      if (refused) throw refused;
       const i = devices.findIndex((d) => d.id === p.deviceId);
       if (i < 0) throw rpcError(-32602, `No phone or browser with id ${p.deviceId}`);
       devices.splice(i, 1);
       return deviceList();
     }
     // Mock-only helpers for perf runs, demos and screenshots.
+    // Phone & browser's harder cases: {reason} plays sync off ("" or null
+    // turns it back on), {failNext: true} makes the next pair or revoke fail.
+    case 'mock.devices': {
+      if (p.reason !== undefined) devicesReason = p.reason || null;
+      if (typeof p.failNext === 'boolean') devicesFailNext = p.failNext;
+      return deviceList();
+    }
+    case 'mock.checkIn': {
+      // A check-in booked on a thread, as an agent's schedule_message leaves
+      // one: a schedule that messages it in an hour (or `minutes`), for a
+      // scenario about a thread waiting on its schedule.
+      const entry = [...threads.values()].find((t) => t.summary.title === p.title);
+      if (!entry) throw rpcError(-32602, `No thread called "${p.title}"`);
+      const at = new Date(Date.now() + (p.minutes ?? 60) * 60_000).toISOString();
+      return dispatch(client, 'schedules.create', { title: p.text ?? 'See how it went', text: p.text ?? 'See how it went.', at, threadId: entry.summary.id, createdBy: entry.summary.id });
+    }
+    // A sub-agent whose record the CLI has cleaned up: threads.subagent
+    // answers -32006 for it, for the "no record" view.
+    case 'mock.forgetSubagent': {
+      const t = need(p.threadId);
+      t.subagentEvents?.delete(p.subagentId);
+      return { ok: true };
+    }
+    // The librarian's search words on a thread, by title, as it leaves
+    // them after reading it: for searching by what a thread is about.
+    case 'mock.keywords': {
+      const entry = [...threads.values()].find((t) => t.summary.title === p.title);
+      if (!entry) throw rpcError(-32602, `No thread called "${p.title}"`);
+      entry.summary.keywords = String(p.keywords ?? '');
+      broadcastSummary(entry.summary.id);
+      return { ok: true };
+    }
+    // The runner's loose-ends check on a thread's done card, by title
+    // (protocol "Loose ends"): `ends` as the summary's `looseEnds.ends`,
+    // for its last turn.completed (or `seq`); no `ends` takes it away.
+    // `quiet` leaves it unsent, as a check that finished while the app was
+    // away is: the app hears of it only from threads.list on reconnecting.
+    case 'mock.looseEnds': {
+      const entry = [...threads.values()].find((t) => t.summary.title === p.title);
+      if (!entry) throw rpcError(-32602, `No thread called "${p.title}"`);
+      const seq = p.seq ?? entry.events.findLast((e) => e.type === 'turn.completed')?.seq;
+      if (Array.isArray(p.ends) && seq != null) entry.summary.looseEnds = { seq, ends: p.ends, at: iso() };
+      else delete entry.summary.looseEnds;
+      if (!p.quiet) broadcastSummary(entry.summary.id);
+      return { thread: entry.summary };
+    }
+    case 'mock.moveLeftBehind':
+      moveLeftBehind = p.lines ?? [];
+      return { lines: moveLeftBehind };
     case 'mock.slow': {
       slow = { ms: Math.max(0, Number(p.ms ?? 0)), queueMs: Math.max(0, Number(p.queueMs ?? 0)) };
       return slow;
@@ -1386,6 +1644,57 @@ async function dispatch(client, method, p) {
       broadcast('runner.updates', { updates });
       return { updates };
     }
+    case 'mock.fillArchived': {
+      // More archived threads than the Archived section shows at first, for
+      // its Show more row: `count` of them, each archived a minute apart.
+      const count = Number(p.count) || 30;
+      const now = Date.now();
+      for (let i = 0; i < count; i++) {
+        const id = `th_archived_${i}`;
+        const ts = new Date(now - (i + 1) * 60_000 - 3_600_000).toISOString();
+        const summary = {
+          id, title: `Archived thread ${i + 1}`, cwd: defaults.cwd, accountId: 'claude-main', provider: 'claude',
+          permissionMode: 'full', status: 'idle', live: false, needsYou: false, createdAt: ts, updatedAt: ts, lastActivityAt: ts,
+          archivedAt: ts, preview: '', lastSeq: 0, lastSeenSeq: 0,
+        };
+        threads.set(id, { summary, events: [], inProgress: new Map(), timers: [] });
+        broadcastSummary(id);
+      }
+      return { count };
+    }
+    case 'mock.terminal': {
+      // A thread for the Terminal's specs: `cwd` makes its folder a real one
+      // (a temp folder the spec made, as the demo threads' are Mike's), and
+      // a finished turn after it with a reply holding a ```bash block of
+      // `block`, or a card whose ask carries `run`, a command to run from it
+      // (docs/protocol.md, "Run on the card").
+      const t = need(p.threadId);
+      const id = t.summary.id;
+      if (p.cwd) t.summary.cwd = p.cwd;
+      if (p.block || p.run) {
+        const turnId = 'turn_' + crypto.randomBytes(4).toString('hex');
+        persist(id, { type: 'user.message', text: p.ask ?? 'What do I run?', images: [] }, turnId);
+        persist(id, { type: 'turn.started', turnId }, turnId);
+        if (p.block) persist(id, { type: 'assistant.text', itemId: 'term_' + crypto.randomBytes(4).toString('hex'), text: `Run this in the repo:\n\n\`\`\`bash\n${p.block}\n\`\`\`\n` }, turnId);
+        if (p.run) {
+          const buttonId = crypto.randomBytes(6).toString('base64').replace(/[^a-z0-9]/gi, '').toLowerCase().padEnd(8, 'x').slice(0, 8);
+          const run = { command: p.run, cwd: t.summary.cwd };
+          const button = { id: buttonId, title: 'Run', createdAt: iso(), turnId, run };
+          t.buttons ??= new Map();
+          t.buttons.set(buttonId, button);
+          persist(id, { type: 'button.updated', button }, turnId);
+          const asks = [{ action: p.action ?? 'Run the migration on the dev database', why: 'It needs your database password, so I can\'t run it myself.', run: { ...run, buttonId } }];
+          persist(id, { type: 'turn.completed', turnId, outcome: 'completed', durationMs: 1200, needs: 'you', asks }, turnId);
+          setStatus(id, 'idle', true);
+        } else {
+          persist(id, { type: 'turn.completed', turnId, outcome: 'completed', durationMs: 1200 }, turnId);
+          setStatus(id, 'idle');
+        }
+      } else {
+        broadcastSummary(id);
+      }
+      return { thread: t.summary };
+    }
     case 'mock.background': {
       // What a thread's CLI is running in the background, as the real
       // runner reports it between turns: `tasks` is the summary's
@@ -1414,11 +1723,126 @@ async function dispatch(client, method, p) {
     }
     case 'mock.restart':
       return restartNow(p);
-    case 'mock.clis':
+    // The runner going away with no notice first (it crashed, or was
+    // stopped): the apps say they can't reach it, rather than "restarting".
+    case 'mock.goAway':
+      return restartNow({ ...p, unannounced: true });
+    // The next `times` reads of a thread's events fail, as a runner that
+    // can't read its transcript would (the "Couldn't load this thread" view).
+    case 'mock.failEvents': {
+      const t = need(p.threadId);
+      failingEvents.set(t.summary.id, Number(p.times ?? 1));
+      return { ok: true };
+    }
+    case 'mock.clis': {
       if (p.wentBack) return wentBack();
+      // { failed: { provider, message } }: that CLI's update failed, as the
+      // runner reports one (the apps' banner says so until it's dismissed).
+      const cli = p.failed && clis.find((c) => c.provider === p.failed.provider);
+      if (cli) {
+        cli.update = { state: 'failed', targetVersion: cli.latestVersion, finishedAt: iso(), message: String(p.failed.message ?? '') };
+        broadcastClis();
+      }
       return { clis };
+    }
+    // A runner.notice to every client, as the runner sends its warnings and
+    // errors: { level: "info" | "warning" | "error", message }.
+    case 'mock.notice':
+      broadcastNotice(p.level ?? 'warning', String(p.message ?? ''));
+      return { ok: true };
     case 'mock.stream':
       return startStream(need(p.threadId).summary.id, p);
+    // A thread with the id and title given, idle with nothing in it, for a
+    // spec that needs one an agent can name by its id (a thread chip): the
+    // demo threads' ids aren't the shape the runner's are.
+    case 'mock.thread': {
+      const threadId = typeof p.id === 'string' && p.id ? p.id : crypto.randomUUID();
+      const now = iso();
+      const accountId = defaults.accountId;
+      const provider = providerOf(accountId);
+      const summary = {
+        id: threadId, title: p.title ?? 'A thread', cwd: p.cwd ?? defaults.cwd, accountId, provider,
+        model: defaults.models[provider], effort: defaults.efforts[provider], permissionMode: 'full', status: 'idle', live: false,
+        needsYou: false, createdAt: now, updatedAt: now, lastActivityAt: now, preview: '', lastSeq: 0, lastSeenSeq: 0,
+      };
+      threads.set(threadId, { summary, events: [], inProgress: new Map(), timers: [] });
+      broadcastSummary(threadId);
+      return { thread: summary };
+    }
+    case 'mock.wakes': {
+      // Turns the agent started by itself as background jobs finished, for
+      // the wait lines between them ("44s later · ... finished"): a reply,
+      // then a turn woken by a long script path 44 s later, then one woken
+      // 3 min later by a command with a commit message in it, each with the
+      // runner's note on what finished. A shape from a real thread
+      // (a92fcf9a), whose wait lines the GPUI app drew over the replies.
+      // Back-dated, as the waits are worked out from the events' times.
+      const t = need(p.threadId);
+      const id = t.summary.id;
+      const start = Date.now() - 10 * 60_000;
+      const at = (seconds) => new Date(start + seconds * 1000).toISOString();
+      const script = '/Users/mike/.delegate/runs/20261111-153921-review-the-landing-fix/run.sh';
+      const commit = 'cd /Users/mike/dev/me/threadbear-threads/slot-5 && git add runner/src/cli.ts runner/src/runner/worktrees.ts && git commit -qm "Land the folder it runs in, never the thread\'s own\n\nThe review: with an unreadable .git in a sub-agent\'s checkout, git finds\nno checkout here and the landing fell back to the thread\'s worktree.\nNow it stops and says why." && tb land';
+      const turns = [
+        { woke: null, reply: 'The fix is committed. The review is still reading it; I\'ll pick it up when it finishes.' },
+        { woke: { at: 49, description: script }, note: `Background command "${script}" completed (exit code 0)`, reply: 'The review turned up two real gaps: the landing still falls back when git can\'t read the checkout, and the chip waits too long. Fixing both.' },
+        { woke: { at: 49 + 5 + 180, description: commit }, note: `Background command "${commit.split('\n')[0]}" completed (exit code 0)\nIts output is in the task's file.`, reply: 'Landing now lands the checkout it runs from, not the thread\'s worktree, so a sub-agent\'s own landing takes its own work.' },
+      ];
+      let clock = 0;
+      for (const [i, turn] of turns.entries()) {
+        const turnId = `turn_wake_${i}`;
+        if (turn.woke) clock = turn.woke.at;
+        else persist(id, { type: 'user.message', text: p.ask ?? 'Fix the landing and have it reviewed', images: [], ts: at(clock) }, turnId);
+        persist(id, { type: 'turn.started', turnId, ts: at(clock), ...(turn.woke ? { wokeBy: [{ kind: 'shell', description: turn.woke.description }] } : {}) }, turnId);
+        if (turn.note) persist(id, { type: 'system.note', text: turn.note, ts: at(clock) }, turnId);
+        persist(id, { type: 'assistant.text', itemId: `wake_${i}`, text: turn.reply, ts: at(clock + 3) }, turnId);
+        persist(id, { type: 'turn.completed', turnId, outcome: 'completed', durationMs: 5000, ts: at(clock + 5) }, turnId);
+      }
+      setStatus(id, 'idle');
+      return { thread: t.summary };
+    }
+    case 'mock.cardAnswer': {
+      // A daily brief's shape (thread 3fdaaeec, 12 Nov): a schedule's
+      // message, a reply ending on a card, Mike's answer to it with his own
+      // words under the pick, then, inside that answer's turn, a message
+      // another thread's agent sent in (send_message) and the agent's reply.
+      // His answer is the message to edit: the pencil by it did nothing.
+      const t = need(p.threadId);
+      const id = t.summary.id;
+      const ask = 'How did yesterday feel?';
+      persist(id, { type: 'user.message', text: '[Scheduled: "Daily brief", Every day at 6:30]\n\nWrite the daily brief.', images: [], origin: 'schedule' }, 'turn_brief');
+      persist(id, { type: 'turn.started' }, 'turn_brief');
+      persist(id, { type: 'assistant.text', itemId: 'brief_m', text: '# Morning brief\n\nA quiet day: two meetings and the lawn.', final: true }, 'turn_brief');
+      persist(id, { type: 'turn.completed', outcome: 'completed', durationMs: 60000, needs: 'you', asks: [{ action: ask, options: ['Great', 'Good', 'Meh', 'Rough'] }] }, 'turn_brief');
+      const words = p.words ?? 'It was good. I got a lot done.';
+      persist(id, { type: 'user.message', text: `${ask}\nGood\n\n${words}`, images: [], answers: [{ action: ask, answer: 'Good' }] }, 'turn_felt');
+      persist(id, { type: 'turn.started' }, 'turn_felt');
+      persist(id, { type: 'system.note', text: 'Resumed session' }, 'turn_felt');
+      persist(id, { type: 'user.message', text: '[Sent by the agent in the thread "Auth remaining work" (6888a556)]\n\nNot settled yet: hold the video.', images: [] }, 'turn_felt');
+      persist(id, { type: 'assistant.text', itemId: 'felt_m', text: 'Good to hear. The Auth thread says to hold the video.', final: true }, 'turn_felt');
+      persist(id, { type: 'turn.completed', outcome: 'completed', durationMs: 18000, needs: 'nothing' }, 'turn_felt');
+      setStatus(id, 'idle');
+      return { thread: t.summary };
+    }
+    case 'mock.review': {
+      // As an agent's show_options would: {threadId, review: { id?, title,
+      // note?, recommended?, options }}, the options as DesignReview has them
+      // (shots, media, url). For a review the demo thread's hasn't the like
+      // of: several shots an option, a page, a clip (features/review.feature).
+      const t = need(p.threadId);
+      const now = iso();
+      const review = {
+        id: p.review?.id ?? 'review_' + crypto.randomBytes(4).toString('hex'), title: p.review?.title ?? 'Design options',
+        ...(p.review?.note ? { note: p.review.note } : {}), ...(p.review?.recommended ? { recommended: p.review.recommended } : {}),
+        options: (p.review?.options ?? []).map((option) => ({ reference: false, ...option })),
+        status: 'pending', revision: 0, createdAt: now, updatedAt: now, draft: { notes: {}, pickedIds: [] },
+      };
+      t.reviews ??= new Map();
+      t.reviews.set(review.id, review);
+      updateReviewCount(t);
+      persist(t.summary.id, { type: 'review.updated', review });
+      return { review: structuredClone(review) };
+    }
     case 'mock.approval': {
       const t = need(p.threadId);
       const approvalId = 'ap_' + crypto.randomBytes(4).toString('hex');
@@ -1554,9 +1978,11 @@ async function fakeTurn(threadId, text, images, turnId = 'turn_' + crypto.random
   // through (docs/protocol.md, "Needs you", Answering).
   // "one decision" gives a single ask with no options, like a thread
   // started before end_turn had them. "follow-ups" ends done, with
-  // end_turn's next under "Or carry on".
+  // end_turn's next under "Or carry on". "pick a design" asks with a link
+  // to the demo review (review: links on a card, as show_options' are).
   const said = interrupted ? undefined
     : /follow-ups/i.test(text) ? { needs: 'nothing', next: ['Have the librarian tidy project notes when they get long', 'Add a size warning to the Notes panel'] }
+    : /pick a design/i.test(text) ? { needs: 'you', asks: [{ action: 'Pick one of the account picker designs', links: [{ title: 'See the designs', url: 'review:review_account_picker' }] }] }
     : /decisions/i.test(text) ? { needs: 'you', asks: DEMO_ASKS }
     : /one decision/i.test(text) ? { needs: 'you', asks: [{ action: 'Say go for Short 2 (Thomas on AI being dumb), or name another' }] }
     : undefined;
@@ -1711,6 +2137,8 @@ function librarianFiles(threadId) {
  * it. With `tools: true` it behaves more like a real turn: every 1.5 s the
  * text so far is persisted, a tool call and its result are persisted (each
  * persisted event also sends thread.updated), and a new text item starts.
+ * With `text` it streams those words once, however long that takes, for a
+ * spec that wants a reply of its own (a draft box, a thread chip).
  */
 function startStream(threadId, p) {
   const t = threads.get(threadId);
@@ -1720,16 +2148,27 @@ function startStream(threadId, p) {
   const turnId = 'turn_stream';
   const newItem = () => 'm_stream_' + crypto.randomBytes(3).toString('hex');
   let itemId = newItem();
-  const source = streamText();
+  const given = typeof p.text === 'string' && p.text.length > 0 ? p.text : null;
+  const source = given ?? streamText();
   let offset = 0;
   let ticks = 0;
   let toolCount = 0;
-  const total = Math.round(hz * seconds);
+  // Given words end when they're all sent: as many ticks as the chunks take.
+  let needed = 0;
+  for (let sent = 0; given && sent < given.length; needed += 1) sent += 2 + (needed % 11);
+  const total = given ? needed : Math.round(hz * seconds);
   const toolEvery = Math.max(1, Math.round(hz * 1.5));
   t.inProgress.set(itemId, { type: 'assistant.text', text: '' });
   setStatus(threadId, 'running');
   // Like a real turn, so the app shows it as running ("Working for 3s").
   persist(threadId, { type: 'turn.started', turnId }, turnId);
+  // `read`: the turn reads that file first, so a reply can name it by
+  // itself and the app find it among what the thread's tools touched.
+  if (typeof p.read === 'string' && p.read) {
+    const readId = 'c_read_' + crypto.randomBytes(2).toString('hex');
+    persist(threadId, { type: 'tool.call', itemId: readId, name: 'Read', kind: 'read', title: `Read ${path.basename(p.read)}`, input: { file_path: p.read } }, turnId);
+    persist(threadId, { type: 'tool.result', itemId: readId, ok: true, text: '', truncated: false, images: [] }, turnId);
+  }
   const started = Date.now();
   const finishText = () => {
     const text = t.inProgress.get(itemId)?.text ?? '';
@@ -1743,7 +2182,7 @@ function startStream(threadId, p) {
     // to the start instead of coming up short (which dropped letters and
     // started paragraphs mid-word: "re is how...").
     const at = offset % source.length;
-    let chunk = (source + source).slice(at, at + size);
+    let chunk = given ? given.slice(offset, offset + size) : (source + source).slice(at, at + size);
     if (!chunk) chunk = ' ';
     offset += size;
     ticks += 1;
@@ -1760,7 +2199,9 @@ function startStream(threadId, p) {
     if (ticks >= total) {
       clearInterval(timer);
       finishText();
-      persist(threadId, { type: 'turn.completed', turnId, outcome: 'completed', durationMs: Date.now() - started }, turnId);
+      // `completed`: more of what the turn ended with, as end_turn says it
+      // (needs, next, asks, another lab's `review` ledger).
+      persist(threadId, { type: 'turn.completed', turnId, outcome: 'completed', durationMs: Date.now() - started, ...(p.completed ?? {}) }, turnId);
       setStatus(threadId, 'idle');
     }
   }, 1000 / hz);
@@ -1800,6 +2241,9 @@ function pendingMessage(waiting, onYou = 0) {
  * restarted" note and the resume text as a turn sent by the runner
  * (`origin: "runner"`). The reply goes out before anything closes.
  */
+// Threads whose next reads of their events fail (mock.failEvents).
+const failingEvents = new Map();
+
 function restartNow(p) {
   const downMs = Number(p.downMs ?? 3000);
   const resumeId = p.resume?.threadId ?? pendingRestart?.resumeThreadId;
@@ -1831,8 +2275,10 @@ function restartNow(p) {
       setStatus(id, 'stopped', false);
     }
   }
-  broadcastNotice('info', pendingMessage(0));
-  pendingRestart = { when: 'now', requestedAt: iso(), waitingFor: [] };
+  if (!p.unannounced) {
+    broadcastNotice('info', pendingMessage(0));
+    pendingRestart = { when: 'now', requestedAt: iso(), waitingFor: [] };
+  }
   setTimeout(() => {
     const port = wss.address()?.port;
     wss.close();
@@ -2035,7 +2481,7 @@ function bruceFile(file) {
 // files.read as the runner answers it (runner/src/files.ts): bruce's made-up
 // files for bruce's clients, real ones on this Mac for this runner's.
 function readFile(client, p) {
-  if (typeof p.path !== 'string' || !p.path.startsWith('/')) throw rpcError(-32602, `path must be absolute: ${p.path}`);
+  if (typeof p.path !== 'string' || !path.isAbsolute(p.path)) throw rpcError(-32602, `path must be absolute: ${p.path}`);
   let bytes;
   let modifiedAt;
   if (client.as === BRUCE) {
@@ -2067,7 +2513,7 @@ function readFile(client, p) {
 // folder for bruce's clients (each of bruce's files' folders holds it),
 // the real one on this Mac for this runner's.
 function listFolder(client, p) {
-  if (typeof p.path !== 'string' || !p.path.startsWith('/')) throw rpcError(-32602, `path must be absolute: ${p.path}`);
+  if (typeof p.path !== 'string' || !path.isAbsolute(p.path)) throw rpcError(-32602, `path must be absolute: ${p.path}`);
   if (client.as === BRUCE) {
     const files = Object.values(BRUCE_FILES);
     const within = files.filter((f) => f.startsWith(`${p.path.replace(/\/$/, '')}/`)).map((f) => f.slice(p.path.replace(/\/$/, '').length + 1));
@@ -2087,7 +2533,15 @@ function listFolder(client, p) {
   return {
     path: p.path, truncated: false,
     entries: fs.readdirSync(p.path).map((name) => {
-      const s = fs.statSync(path.join(p.path, name));
+      let s;
+      try {
+        s = fs.statSync(path.join(p.path, name));
+      } catch {
+        // A broken link, or one stat can't follow, still listed, as the
+        // runner lists it (runner/src/files.ts): failing the whole folder
+        // said "Couldn't read this folder" for / on GitHub's Macs (11 Nov).
+        return { name, isFolder: false, hidden: name.startsWith('.') };
+      }
       return { name, isFolder: s.isDirectory(), hidden: name.startsWith('.'), modifiedAt: s.mtime.toISOString(), ...(s.isDirectory() ? {} : { size: s.size }) };
     }),
   };
@@ -2127,14 +2581,14 @@ function addRemoteDemo() {
     threads.set(id, { summary, events, inProgress: new Map(), timers: [], runnerId: BRUCE });
   };
   make('bruce_backup', 'Check the photo library backup', '/Users/bruce/dev/me/misc', 12, 'idle', [{
-    ask: 'Is last night\'s photo library backup complete? Here is what Backblaze showed this morning.',
+    ask: 'Is last night\'s photo library backup complete? [Picture 1] is what Backblaze showed this morning.',
     images: [{ path: BRUCE_FILES.picture, mediaType: 'image/png', width: 760, height: 420 }],
     answer: 'The backup finished at 3:12 am: **48,210 files**, nothing skipped. The only warning is the external drive, which was asleep for the first pass and caught up on the second.\n\nWant me to keep the drive awake during backups?',
     needs: 'you',
   }], { unread: true, needsYou: true });
   make('bruce_media', 'Tidy the media drive', '/Volumes/CannMedia', 300, 'idle', [{
     ask: 'Find duplicate videos on the media drive.',
-    // Sent from the iPhone app, so the transcript shows its phone mark.
+    // Sent from the phone app, so the transcript shows its phone mark.
     origin: 'phone',
     // Output past the runner's cut, kept whole in a blob on bruce.
     tools: [{ command: 'fdupes -r /Volumes/CannMedia/Footage', text: bruceFile(BRUCE_FILES.blob).slice(0, 600), blobPath: BRUCE_FILES.blob }],
@@ -2419,6 +2873,8 @@ function projectRequest(method, p) {
       }
       if (p.state !== undefined) { project.state = p.state; project.stateUpdatedAt = iso(); }
       if (p.archived !== undefined) project.archived = Boolean(p.archived) || undefined;
+      // Parts (docs/protocol.md, Projects, "Parts"): '' or null makes it its own.
+      if (p.parentId !== undefined) project.parentId = p.parentId || undefined;
       project.updatedAt = iso();
       if (p.title !== undefined) for (const s of membersOf(project.id)) { renameIn(s, project); broadcastSummary(s.id); }
       broadcastProjects();
@@ -2535,6 +2991,86 @@ function listedProjects(archived) {
 
 function membersOf(projectId) {
   return [...threads.values()].map((t) => t.summary).filter((s) => s.projects?.some((x) => x.id === projectId));
+}
+
+function addPerfProjects(count) {
+  const now = Date.now();
+  const ago = (minutes) => new Date(now - minutes * 60_000).toISOString();
+  const base = ['Poddle', 'Walkies HQ', 'Stash It', 'Voice Type', 'Sammy Cam', 'Convex videos', 'Pool site', 'RememBear'];
+  const names = Array.from({ length: 80 }, (_, i) => `${base[i % base.length]}${i < base.length ? '' : ` ${Math.floor(i / base.length) + 1}`}`);
+  const picture = fileURLToPath(new URL('../../icons/threadbear.png', import.meta.url));
+  const made = names.map((title, i) => ({
+    id: `p_perf_${i}`, title, folders: [`/Users/mike/dev/me/${title.toLowerCase().replace(/ /g, '-')}`],
+    goals: `Keep ${title} moving.`, state: `${title} is in progress; a few threads are waiting on decisions.`, notes: '', links: [],
+    createdBy: 'librarian', createdAt: ago(60 * 24 * 20), updatedAt: ago(i * 7),
+    icon: i % 3 === 0 ? { image: { path: picture, mediaType: 'image/png' }, by: 'librarian', updatedAt: ago(60) } : { symbol: 'folder', by: 'librarian', updatedAt: ago(60) },
+  }));
+  projects.push(...made);
+  for (let i = 0; i < count; i++) {
+    const id = `th_perf_${i}`;
+    const at = ago(i * 17 + 3);
+    const project = made[i % made.length];
+    // About 3% open (the newest), a third of those asking.
+    const open = i < Math.ceil(count * 0.03);
+    const asking = open && i % 3 === 0;
+    const asks = asking ? [{ action: `Ship change ${i} now, or wait for the next release?`, why: 'Both are fine; it only changes when people see it.',
+      options: ['Ship it now', 'Wait'], optionNotes: ['Goes out tonight', 'Next Monday'], suggested: 0 }] : undefined;
+    const summary = {
+      id, title: `${project.title} task ${i + 1}`, cwd: project.folders[0], accountId: 'claude-main', provider: 'claude',
+      permissionMode: 'full', status: 'idle', live: false, needsYou: asking, createdAt: at, updatedAt: at, lastActivityAt: at,
+      preview: `Worked on ${project.title} task ${i + 1}.`, lastSeq: 2, lastSeenSeq: asking ? 1 : 2,
+      recap: `Moves ${project.title} task ${i + 1} along.\n- Halfway there`,
+      ...(open ? {} : { archivedAt: at }),
+      ...(asking ? { needs: 'you', asks, asksSeq: 2 } : {}),
+    };
+    join(summary, project, 'librarian', false, at);
+    if (i % 13 === 0) join(summary, made[(i + 1) % made.length], 'agent', false, at);
+    const events = [
+      { seq: 1, ts: at, threadId: id, turnId: 't0', type: 'user.message', text: `Do ${project.title} task ${i + 1}`, images: [] },
+      { seq: 2, ts: at, threadId: id, turnId: 't0', type: 'turn.completed', outcome: 'completed', durationMs: 4000, ...(asking ? { needs: 'you', asks } : { needs: 'nothing' }) },
+    ];
+    threads.set(id, { summary, events, inProgress: new Map(), timers: [] });
+  }
+}
+
+/**
+ * TB_MOCK_DECISIONS: cards of asks on three of the Threadbear project's idle
+ * threads, as one-reply cards (options with what each does, the agent's pick),
+ * each with a headline, for the projectDecisions experiment's
+ * Decisions section (features/projects.feature, its screenshots).
+ */
+function addDemoDecisions() {
+  const cards = {
+    demo_settings_tabs: {
+      minutesAgo: 35, line: 'Renames the Settings tabs in the Mac app so each says what it holds.',
+      asks: [{ action: 'Call the Advanced tab "Machine" or "Runner"?', why: 'It holds the runner\'s folder, the check hosts and the logs.',
+        options: ['Runner', 'Machine'], optionNotes: ['Matches the runner menu', ''], suggested: 0 }],
+    },
+    demo_sqlite_vs_files: {
+      minutesAgo: 60, line: 'Weighs SQLite against plain files for the runner\'s thread store.',
+      asks: [{ action: 'Keep plain files for now?', why: 'Files were faster for every size we have. SQLite only wins past about 10,000 threads.',
+        options: ['Keep files', 'Move to SQLite'], optionNotes: ['Revisit at 5,000 threads', 'About two days of work'], suggested: 0 }],
+    },
+    demo_release_notes: {
+      minutesAgo: 180, line: 'Drafts the release notes for 0.4 from this week\'s commits.',
+      asks: [
+        { action: 'Lead with projects or with the librarian?', options: ['Projects', 'The librarian'], suggested: 0 },
+        { action: 'Mention the Windows build?', why: 'It runs, but nobody outside has tried it yet.', options: ['Not yet', 'As a preview'], suggested: 0 },
+      ],
+    },
+  };
+  for (const [id, card] of Object.entries(cards)) {
+    const t = threads.get(id);
+    if (!t) continue;
+    const done = t.events.findLast((e) => e.type === 'turn.completed');
+    if (done) Object.assign(done, { needs: 'you', asks: card.asks });
+    Object.assign(t.summary, {
+      status: 'idle', needs: 'you', needsYou: true, asks: card.asks, asksSeq: done?.seq ?? t.summary.lastSeq, preview: card.line,
+      lastActivityAt: new Date(Date.now() - card.minutesAgo * 60_000).toISOString(),
+    });
+    // Waiting on Mike, not on a login with room.
+    delete t.summary.waitingForRoom;
+  }
 }
 
 function join(summary, project, by, pinned, at = iso(), why) {
@@ -2733,9 +3269,9 @@ function addDemoSubagents() {
   const now = Date.now();
   const at = (secondsAgo) => new Date(now - secondsAgo * 1000).toISOString();
   t.summary.subagents = [
-    { id: 'a_cache', itemId: 'agent_cache', description: 'Compare the cache keys', agentType: 'Explore', status: 'completed', background: false,
+    { id: 'a_cache', itemId: 'agent_cache', description: 'Compare the cache keys', agentType: 'Explore', model: 'claude-haiku-5-5', effort: 'medium', status: 'completed', background: false,
       summary: 'The lockfile hash changed on 21 Oct, so every run since misses the cache.', toolUses: 4, startedAt: at(200), endedAt: at(150) },
-    { id: 'a_bisect', itemId: 'agent_bisect', description: 'Find the commit that slowed the build', agentType: 'general-purpose', status: 'running', background: true,
+    { id: 'a_bisect', itemId: 'agent_bisect', description: 'Find the commit that slowed the build', agentType: 'general-purpose', model: 'claude-opus-5-5', effort: 'high', status: 'running', background: true,
       activity: 'Running git bisect on the last 40 commits', toolUses: 2, startedAt: at(95) },
     { id: 'a_bisect_tests', parentId: 'a_bisect', description: 'Time the test step on each commit', agentType: 'fork', status: 'running', background: false,
       activity: 'Reading run-845.log', toolUses: 1, startedAt: at(40) },
@@ -2870,6 +3406,32 @@ ${process.env.MOCK_SCRIPTED_TURNS ? '' : "<p>The mock runner's stand-in for the 
   }
 }
 
+// A real PDF of one US Letter page with a line of text, made by hand so the
+// mock needs no PDF library: each object's byte offset goes in the table at
+// the end, which is what readers find the objects by. ASCII only, so a
+// string's length is its bytes. The line is a link to `link`, so a click on
+// it can be seen going through the app's open gate (file-previews.feature).
+function onePagePdf(line, link) {
+  const text = `BT /F1 24 Tf 72 700 Td (${line.replace(/[()\\]/g, '\\$&')}) Tj ET`;
+  const objects = [
+    '<< /Type /Catalog /Pages 2 0 R >>',
+    '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> /Annots [6 0 R] >>',
+    `<< /Length ${text.length} >>\nstream\n${text}\nendstream`,
+    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+    `<< /Type /Annot /Subtype /Link /Rect [66 690 560 724] /Border [0 0 0] /A << /S /URI /URI (${link}) >> >>`,
+  ];
+  let out = '%PDF-1.4\n';
+  const offsets = objects.map((body, i) => {
+    const at = out.length;
+    out += `${i + 1} 0 obj\n${body}\nendobj\n`;
+    return at;
+  });
+  const table = out.length;
+  out += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n${offsets.map((n) => `${String(n).padStart(10, '0')} 00000 n \n`).join('')}`;
+  return `${out}trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${table}\n%%EOF\n`;
+}
+
 // The landing pages thread works in a real folder under the data dir, so its
 // highlights are files the app can preview: a mockup it pinned, a doc it
 // wrote, a screenshot it opened. Its other threads' highlights are only
@@ -2902,7 +3464,14 @@ The new hero is shorter, and every page now leads with what the app does.
 - Search moves to the top of the page.
 `);
     const before = file('screens/pricing-before.png', { copy: path.join(here, 'fixtures/demo-upload-resume/media/progress-before.png') });
+    // A real film (the site's inbox clip, 1600x1058 H.264), for a video in
+    // the pane (features/file-previews.feature). Only listed in the folder.
+    const clip = path.join(here, '../../../site/public/clips/inbox.mp4');
+    if (fs.existsSync(clip)) file('screens/hero-walkthrough.mp4', { copy: clip });
+    // And a one-page PDF, for a PDF in the pane.
+    file('docs/launch-brief.pdf', onePagePdf('Launch brief: the new hero ships Friday', 'https://example.com/launch-brief'));
     file('logs/docs-build.txt', 'Error: Could not resolve image /docs/hero.png\n  at src/pages/docs.astro:12\nBuild failed in 14.2s.\n');
+    file('src/hero.ts', '// The hero at the top of the home page.\nexport function hero(words: string): string {\n  return `<h1>${words}</h1>`;\n}\n');
     site.summary.cwd = root;
     const at = (seq) => site.events.find((e) => e.seq === seq)?.ts ?? iso();
     const h = (seq, fields) => ({ seq, lastSeq: seq, at: at(seq), ...fields });

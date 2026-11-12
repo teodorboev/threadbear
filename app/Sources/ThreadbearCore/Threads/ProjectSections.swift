@@ -18,14 +18,49 @@ public struct ProjectSection: Sendable, Equatable, Identifiable {
 /// The Projects view: a section per project, newest activity first, then
 /// the threads in no project.
 public struct ProjectSections: Sendable, Equatable {
+    /// Every live project's section, parts too, newest activity first: for
+    /// finding one by id and counting threads.
     public var sections: [ProjectSection] = []
     /// Inbox threads in no project the view shows (none, or only archived
     /// or unknown ones), newest first.
     public var unfiled: [ThreadSummary] = []
+    /// What the lists show at the top: projects of their own, and parts
+    /// whose parent isn't shown (archived, or gone). A parent goes by the
+    /// newest activity in it or its parts (docs/protocol.md, Projects, "Parts").
+    public private(set) var topLevel: [ProjectSection] = []
+    /// Each shown parent's parts, by its id, in title order.
+    public private(set) var parts: [String: [ProjectSection]] = [:]
 
     public init(sections: [ProjectSection] = [], unfiled: [ThreadSummary] = []) {
         self.sections = sections
         self.unfiled = unfiled
+        // A part nests only under a shown parent that isn't a part itself,
+        // so whatever comes in (a cycle, three levels) nothing is hidden.
+        let parentOf = Dictionary(sections.map { ($0.id, $0.project.parentId) }, uniquingKeysWith: { a, _ in a })
+        let isPart = { (section: ProjectSection) in
+            section.project.parentId.map { $0 != section.id && parentOf[$0] == .some(nil) } ?? false
+        }
+        var byParent: [String: [ProjectSection]] = [:]
+        for section in sections where isPart(section) {
+            byParent[section.project.parentId!, default: []].append(section)
+        }
+        for key in byParent.keys {
+            byParent[key]!.sort { $0.project.title.localizedStandardCompare($1.project.title) == .orderedAscending }
+        }
+        let newest = { (section: ProjectSection) in ([section] + (byParent[section.id] ?? [])).map(\.lastActivityAt).max() ?? section.lastActivityAt }
+        parts = byParent
+        topLevel = sections.filter { !isPart($0) }.enumerated().sorted { a, b in
+            let (x, y) = (newest(a.element), newest(b.element))
+            return x != y ? x > y : a.offset < b.offset
+        }.map(\.element)
+    }
+
+    /// The project's threads and its parts', each once, newest first.
+    public func threadsWithParts(_ section: ProjectSection) -> [ThreadSummary] {
+        var seen = Set<String>()
+        return ([section] + (parts[section.id] ?? [])).flatMap(\.threads)
+            .filter { seen.insert($0.id).inserted }
+            .sorted { $0.lastActivityAt != $1.lastActivityAt ? $0.lastActivityAt > $1.lastActivityAt : $0.id < $1.id }
     }
 
     /// Archived projects are left out, and so are archived and hibernating
@@ -71,7 +106,8 @@ public struct ProjectSections: Sendable, Equatable {
     /// projects is in it twice; the first is where the arrows land.
     public var order: [String] {
         var seen = Set<String>()
-        return (sections.flatMap(\.threads) + unfiled).map(\.id).filter { seen.insert($0).inserted }
+        let drawn = topLevel.flatMap { [$0] + (parts[$0.id] ?? []) }
+        return (drawn.flatMap(\.threads) + unfiled).map(\.id).filter { seen.insert($0).inserted }
     }
 
     /// A project's threads (any, put away ones too), newest activity first,
@@ -286,6 +322,15 @@ public enum ProjectPane {
 
 /// The words the Librarian view uses.
 public enum LibrarianText {
+    /// A line for each project the look filed the thread in, in the row's
+    /// order: "Walkies: Plans the dog walk route". Nothing on other looks.
+    public static func filingReasons(_ entry: LibrarianEntry, title: (String) -> String?) -> [String] {
+        entry.projectIds.compactMap { id in
+            guard let why = entry.reasons[id], !why.isEmpty else { return nil }
+            return title(id).map { "\($0): \(why)" } ?? why
+        }
+    }
+
     /// "Idle", "Looking at Rename the Settings tabs", "Paused", "Off: Needs
     /// a Claude pool to run on".
     public static func state(_ status: LibrarianStatus) -> String {

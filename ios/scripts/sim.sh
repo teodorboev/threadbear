@@ -54,7 +54,16 @@ if [[ -z "$SIM" ]]; then
   prune_gone
   # Cloned from a stock 6.9" iPhone, since `simctl create` refuses some pairs.
   # Pro Max sizes are what the App Store asks for.
-  BASE=$(xcrun simctl list devices available | grep -E "iPhone 1[6-8] Pro Max" | grep -oE "[0-9A-F-]{36}" | head -1)
+  # Any Pro Max, newest first; failing that any iPhone, as a Mac whose
+  # runtime only had an iPhone 17 and 17 Pro left this empty and the
+  # script quit saying nothing (11 Nov).
+  AVAILABLE=$(xcrun simctl list devices available)
+  BASE=$(print -r -- "$AVAILABLE" | grep -E "iPhone [0-9]+ Pro Max \(" | sort -t' ' -k2 -rn | grep -oE "[0-9A-F-]{36}" | head -1 || true)
+  [[ -z "$BASE" ]] && BASE=$(print -r -- "$AVAILABLE" | grep -E "iPhone [0-9]+" | grep -oE "[0-9A-F-]{36}" | head -1 || true)
+  if [[ -z "$BASE" ]]; then
+    echo "No iPhone simulator to clone: add one in Xcode (Window > Devices and Simulators)." >&2
+    exit 1
+  fi
   SIM=$(xcrun simctl clone "$BASE" "$SIM_NAME")
 fi
 

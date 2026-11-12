@@ -56,6 +56,10 @@ export class ClaudeNormalizer {
   private authFailed = false; // this turn's login was refused (signed out, or its session ran out)
   private afterCompact = false;
   private agentTasks = new Set<string>(); // task ids that are sub-agents
+  // The Agent call's tool_use_id -> its task id, and the model last reported
+  // for each: a sub-agent's own messages name their tool_use_id, not the task.
+  private agentByToolUse = new Map<string, string>();
+  private agentModels = new Map<string, string>();
   private model?: string; // the session's model, from init
   private contextNow?: number; // tokens in the context at the last model call
 
@@ -70,8 +74,12 @@ export class ClaudeNormalizer {
 
   handle(msg: AnyMsg): AdapterOutput[] {
     const out: AdapterOutput[] = [];
-    // Subagent traffic stays inside its Agent tool call for now.
-    if (msg.parent_tool_use_id) return out;
+    // Subagent traffic stays inside its Agent tool call for now, but what
+    // model it ran on goes on the sub-agent's row (Mike asked 12 Nov).
+    if (msg.parent_tool_use_id) {
+      this.subagentModel(msg, out);
+      return out;
+    }
     switch (msg.type) {
       case 'command_lifecycle':
         this.lifecycle = true;
@@ -164,6 +172,15 @@ export class ClaudeNormalizer {
       out.push({ kind: 'tasks', tasks });
     } else if (msg.subtype === 'informational' && msg.level === 'warning' && typeof msg.content === 'string') {
       out.push({ kind: 'event', event: { type: 'system.note', text: msg.content } });
+    } else if (msg.subtype === 'permission_denied') {
+      // A call refused without a card (Auto's safety check, a deny rule):
+      // its result tells the agent, and this tells Mike why (David, 8 Nov 2026).
+      const reason = typeof msg.decision_reason === 'string' ? msg.decision_reason.trim().slice(0, 1000) : '';
+      const tool = typeof msg.tool_name === 'string' && msg.tool_name ? msg.tool_name : 'A tool call';
+      if (reason) {
+        const text = msg.decision_reason_type === 'classifier' ? `Auto mode's safety check stopped ${tool}: ${reason}` : `${tool} was refused: ${reason}`;
+        out.push({ kind: 'event', event: { type: 'system.note', text } });
+      }
     }
   }
 
@@ -178,7 +195,10 @@ export class ClaudeNormalizer {
       if (msg.ambient || msg.skip_transcript) return;
       this.agentTasks.add(id);
       const update: SubagentUpdate = { id, started: true, status: 'running', background: msg.is_backgrounded === true };
-      if (typeof msg.tool_use_id === 'string') update.itemId = msg.tool_use_id;
+      if (typeof msg.tool_use_id === 'string') {
+        update.itemId = msg.tool_use_id;
+        this.agentByToolUse.set(msg.tool_use_id, id);
+      }
       if (typeof msg.parent_task_id === 'string') update.parentId = msg.parent_task_id;
       if (typeof msg.description === 'string') update.description = msg.description;
       if (typeof msg.subagent_type === 'string') update.agentType = msg.subagent_type;
@@ -214,6 +234,17 @@ export class ClaudeNormalizer {
       if (typeof msg.usage?.tool_uses === 'number') update.toolUses = msg.usage.tool_uses;
       out.push({ kind: 'subagent', update });
     }
+  }
+
+  // A sub-agent's assistant message names the model it ran on. Sent once
+  // per change, as a fallback model can take over mid-run.
+  private subagentModel(msg: AnyMsg, out: AdapterOutput[]): void {
+    if (msg.type !== 'assistant') return;
+    const id = this.agentByToolUse.get(String(msg.parent_tool_use_id));
+    const model = realModel(msg.message?.model);
+    if (!id || !model || this.agentModels.get(id) === model) return;
+    this.agentModels.set(id, model);
+    out.push({ kind: 'subagent', update: { id, model } });
   }
 
   private stream(msg: AnyMsg, out: AdapterOutput[]): void {
@@ -716,4 +747,10 @@ function summariseServerResult(content: unknown): string {
     .map((r) => [r.title, r.url].filter(Boolean).join(' '))
     .filter(Boolean)
     .join('\n');
+}
+
+// A model id worth showing: the CLI writes "<synthetic>" on messages it
+// made up itself (an API error, an interrupt), which ran on no model.
+export function realModel(model: unknown): string | undefined {
+  return typeof model === 'string' && model && !model.startsWith('<') ? model : undefined;
 }

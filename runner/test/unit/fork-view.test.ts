@@ -28,7 +28,7 @@ const SHOWN = {
 
 // Things of Mike's that a stranger's copy must never show, whatever SHOWN
 // says, so a careless update to SHOWN still fails.
-const MIKES = [/mikec\.sentry\.io/, /appstoreconnect\.apple\.com/, /~\/dev\/me\//, /\/Users\/m5-mike/, /mikecann@|mike@cannstudios/];
+const MIKES = [/mikec\.sentry\.io/, /appstoreconnect\.apple\.com/, /~\/dev\/me\//, /\/Users\/m5-mike/, /mikecann@|mike@studio/];
 
 test("a fork's own patches show nothing of Mike's", async () => {
   const home = tmpDir();
@@ -90,6 +90,43 @@ test('strings shown or sent in a fork only name Mike where he is meant', () => {
       // Only text inside quotes or backticks.
       const strings = code.match(/(['"`])(?:\\.|(?!\1).)*\1/g) ?? [];
       for (const s of strings) if (/\bMike\b/.test(s) && !MIKE_MEANT.some((m) => m.test(s))) found.push(`${path.relative(REPO, file)}:${i + 1}: ${s.slice(0, 120)}`);
+    });
+  }
+  assert.deepEqual(found, []);
+});
+
+// Mike's machines, his cloud box's branch prefix and his addresses mean
+// nothing in a fork, and a prompt naming them sends a fork's agent looking
+// for hosts it hasn't got. The fork-leak review on 10 Nov found "bruce and
+// the Pixel" and `HEAD:cloud/<topic>` in the follow-origin prompts, inside
+// multi-line backtick strings the quote matcher above can't see, and his
+// real addresses in the mock runner (a fixture, so not scanned here; its
+// sample runner is still called bruce). So this one reads every line that isn't
+// a comment, in every folder whose text reaches a person or an agent, not
+// just quoted text. Rust stops at its #[cfg(test)] module; tests and
+// fixtures elsewhere aren't scanned.
+const MIKES_OWN = /\b(bruce|tinker-desk|Tinker Desk|the Pixel)\b|HEAD:cloud\/|[\w.+-]+@(gmail\.com|org\.io|convex\.dev)\b/i;
+
+test("text that runs in a fork names none of Mike's machines or addresses", () => {
+  const files = [
+    ...sourceFiles(path.join(REPO, 'runner/src'), ['.ts', '.md']),
+    ...sourceFiles(path.join(REPO, 'app/Sources'), ['.swift']),
+    ...['gpui', 'core', 'client', 'dock', 'web'].flatMap((d) => sourceFiles(path.join(REPO, 'desktop', d, 'src'), ['.rs'])),
+    // The native Android app (added 10 Nov) ships to other people's phones
+    // too, so the 11 Nov fork-leak review added it here.
+    ...['app', 'kit'].flatMap((d) => sourceFiles(path.join(REPO, 'android-native', d, 'src/main'), ['.kt'])),
+    ...['ios/Threadbear', 'ios/ThreadbearKit/Sources', 'ios/NotificationService'].flatMap((d) => sourceFiles(path.join(REPO, d), ['.swift'])),
+    ...sourceFiles(path.join(REPO, 'web/src'), ['.ts', '.tsx']),
+    ...sourceFiles(path.join(REPO, 'convex'), ['.ts']).filter((f) => !f.includes('/_generated/')),
+  ].filter((f) => !/\/Automation[^/]*\.swift$/.test(f) && !/\.test\.tsx?$/.test(f));
+  const found: string[] = [];
+  for (const file of files) {
+    const lines = fs.readFileSync(file, 'utf8').split('\n');
+    const end = file.endsWith('.rs') ? lines.findIndex((l) => /^\s*#\[cfg\(test\)\]/.test(l)) : -1;
+    lines.slice(0, end < 0 ? undefined : end).forEach((line, i) => {
+      // A comment says why, for whoever reads the code; Markdown has none.
+      const code = file.endsWith('.md') ? line : /^\s*(\/\/|\/\*|\*(\s|\/|$))/.test(line) ? '' : line.replace(/\s\/\/\s.*$/, '');
+      if (MIKES_OWN.test(code)) found.push(`${path.relative(REPO, file)}:${i + 1}: ${code.trim().slice(0, 120)}`);
     });
   }
   assert.deepEqual(found, []);

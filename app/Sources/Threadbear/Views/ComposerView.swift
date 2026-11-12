@@ -1,5 +1,6 @@
 import AppKit
 import BearDock
+import Quartz
 import SwiftUI
 import ThreadbearCore
 import UniformTypeIdentifiers
@@ -47,6 +48,11 @@ struct ComposerView: View {
         // A new thread on its way: what was sent stays, greyed and locked,
         // until the runner has made the thread.
         let creating = thread == nil && app.creatingThread
+        // On its way to another machine: anything typed or answered now
+        // could land on the wrong side of the move, so the box and the card
+        // wait until it's there. Cancel Move, or a failed move, gives them back.
+        let moving = thread?.moving?.ended == false
+        let locked = creating || moving
         // The open card sits at the top of the box (ComposerCard), not
         // while a message is being edited: the edit is a reply of its own.
         let cardRow = thread.flatMap { thread in app.editing[thread.id] == nil ? session?.openCard : nil }
@@ -66,10 +72,16 @@ struct ComposerView: View {
                 .padding(.bottom, -0.5)
                 .zIndex(1)
         }
-        // The box: the open card over a line, then the message.
+        // The box: the limit box and the open card, each over a line, then
+        // the message.
         VStack(alignment: .leading, spacing: 0) {
+        if let thread, !moving {
+            LimitBox(thread: thread, padding: Self.padding)
+        }
         if let cardRow, let controller {
             ComposerCard(row: cardRow, threadId: thread?.id, collapsed: cardCollapsed, controller: controller)
+                .allowsHitTesting(!moving)
+                .opacity(moving ? 0.5 : 1)
                 .padding(.horizontal, Self.padding)
                 .padding(.top, zoomed(8))
                 .padding(.bottom, zoomed(10))
@@ -86,9 +98,11 @@ struct ComposerView: View {
                 AnswerChips(thread: thread, picks: picks)
             }
             if !draft.wrappedValue.images.isEmpty || importing > 0 {
-                AttachmentStrip(images: draft.wrappedValue.images, importing: importing) { removePicture(at: $0, from: draft) }
-                    .disabled(creating)
-                    .opacity(creating ? 0.5 : 1)
+                AttachmentStrip(images: draft.wrappedValue.images, importing: importing,
+                                onOpen: { handle.textView?.previewPicture(at: $0) },
+                                onRemove: { removePicture(at: $0, from: draft) })
+                    .disabled(locked)
+                    .opacity(locked ? 0.5 : 1)
             }
             ComposerTextField(
                 draft: draft,
@@ -97,18 +111,18 @@ struct ComposerView: View {
                 placeholder: placeholder(picks, followUps: followUps, needsYou: needsYou),
                 onSend: { send() },
                 onReturnWhenEmpty: { command in returnWhenEmpty(draft.wrappedValue, command: command) },
-                pictures: ComposerTextView.Pictures(allowed: { picturesAllowed() }, importOne: { await importPicture($0) }),
+                pictures: ComposerTextView.Pictures(allowed: { !moving && picturesAllowed() }, importOne: { await importPicture($0) }),
                 handle: handle,
                 onEscape: { cancelEdit() },
                 onPaletteKey: { paletteKey($0, text: draft.wrappedValue.text) },
-                editable: !creating
+                editable: !locked
             )
             .frame(height: height)
-            .opacity(creating ? 0.5 : 1)
+            .opacity(locked ? 0.5 : 1)
             ComposerControls(
                 thread: thread,
                 running: thread?.status.isBusy == true,
-                canSend: canSend,
+                canSend: canSend && !moving,
                 sending: creating,
                 onAttach: { chooseImages(for: draft) },
                 onSend: { send() },
@@ -140,8 +154,9 @@ struct ComposerView: View {
             )
             .frame(height: 1)
         }
-        .task(id: thread.flatMap { paletteQuery(draft.wrappedValue.text) != nil ? $0.id : nil }) {
-            if let thread, paletteQuery(draft.wrappedValue.text) != nil { app.loadSlashCommands(thread.id) }
+        .task(id: paletteQuery(draft.wrappedValue.text) != nil ? paletteListKey : nil) {
+            guard paletteQuery(draft.wrappedValue.text) != nil else { return }
+            if let thread { app.loadSlashCommands(thread.id) } else { app.loadNewThreadSlashCommands() }
         }
         // Esc closed the palette at that text only: any change reopens it,
         // even back to the same words later.
@@ -179,12 +194,25 @@ struct ComposerView: View {
             .onTapGesture { app.focusComposer(draftKey) }
     }
 
-    /// What's typed while the palette is open: the command so far. Not
-    /// in a new thread (it has no CLI yet), and not once Esc closed it at
+    /// What's typed while the palette is open: the command so far, in a
+    /// new thread too (folders.commands), and not once Esc closed it at
     /// this text.
     private func paletteQuery(_ text: String) -> String? {
-        guard thread != nil, palette.closedAt != text else { return nil }
-        return SlashPalette.query(in: text)
+        paletteTyped(text)?.query
+    }
+
+    /// The command being typed as the message's last word, at its start or
+    /// partway through it (David, 9 Nov 2026: skills named mid-message).
+    private func paletteTyped(_ text: String) -> SlashPalette.Typed? {
+        guard palette.closedAt != text else { return nil }
+        return SlashPalette.typed(in: text)
+    }
+
+    /// The palette's list for what's typed: partway through a message only
+    /// the skills the agent can run there.
+    private func paletteCommands(_ typed: SlashPalette.Typed) -> [SlashCommand]? {
+        guard let all = app.slashCommands[paletteListKey] else { return nil }
+        return typed.midMessage ? SlashPalette.midMessage(all) : all
     }
 
     /// About half the window: read when the palette draws, which it does
@@ -202,28 +230,63 @@ struct ComposerView: View {
 
     /// The palette for what's typed, or nil when it's closed.
     private func paletteContent(_ draft: Binding<Draft>) -> SlashPaletteView? {
-        guard let thread, let query = paletteQuery(draft.wrappedValue.text) else { return nil }
+        let text = draft.wrappedValue.text
+        guard let typed = paletteTyped(text) else {
+            #if DEBUG
+            AppDump.slashPalette = nil
+            #endif
+            return nil
+        }
+        let commands = paletteCommands(typed)
+        // Partway through a message the palette only opens on a match, so
+        // a slash in other words ("the /tmp folder") doesn't get in the way.
+        if typed.midMessage, SlashPalette.matches(commands ?? [], query: typed.query, category: .all, recent: []).isEmpty {
+            #if DEBUG
+            AppDump.slashPalette = nil
+            #endif
+            return nil
+        }
+        #if DEBUG
+        // For `dump`: what the palette shows (the view's own state lives here).
+        AppDump.slashPalette = AppDump.paletteInfo(commands: commands, query: typed.query, provider: thread?.provider ?? app.newThreadProviderId, recent: app.recentSlashCommands, state: palette, current: paletteCurrent(thread), canOpenFile: thread.map { app.runnerName(of: $0) == nil } ?? false)
+        #endif
         return SlashPaletteView(
-            commands: app.slashCommands[thread.id],
-            query: query,
-            provider: thread.provider,
+            commands: commands,
+            query: typed.query,
+            provider: thread?.provider ?? app.newThreadProviderId,
             recent: app.recentSlashCommands,
             state: $palette,
             current: paletteCurrent(thread),
             onFill: { pick($0, run: false) },
-            onRun: { pick($0, run: true) },
-            // Another Mac's runner found the file there, not here.
-            onOpen: app.runnerName(of: thread) == nil ? { path in
+            // A skill named partway through a message isn't sent on its own.
+            onRun: { pick($0, run: !typed.midMessage) },
+            midMessage: typed.midMessage,
+            // Another Mac's runner found the file there, not here; a new
+            // thread has no side pane to show it in yet.
+            onOpen: thread.flatMap { thread in app.runnerName(of: thread) == nil ? { path in
                 palette.closedAt = draft.wrappedValue.text
                 app.preview(path: path, in: thread)
-            } : nil,
+            } : nil },
             layout: Binding(get: { app.slashPaletteLayout }, set: { app.slashPaletteLayout = $0 })
         )
     }
 
-    /// What /model and /effort would change, as the thread has it now.
-    private func paletteCurrent(_ thread: ThreadSummary) -> [String: String] {
+    /// Where the palette's list is kept: the thread's, or for a new
+    /// thread its login and folder's.
+    private var paletteListKey: String { thread?.id ?? app.newThreadCommandsKey }
+
+    /// What /model and /effort would change, as the thread has it now, or
+    /// as a new thread would start.
+    private func paletteCurrent(_ thread: ThreadSummary?) -> [String: String] {
         var out: [String: String] = [:]
+        guard let thread else {
+            let account = app.draftLogins.account(app.newThreadAccountId)
+            if let model = app.newThreadModel ?? account?.defaultModel {
+                out["model"] = ComposerChips.modelTitle(model, choices: account?.models ?? []) + (app.newThreadModel == nil ? ", the default" : "")
+            }
+            if let level = app.newThreadEffort { out["effort"] = ComposerChips.effortTitle(level) }
+            return out
+        }
         let account = app.logins(for: thread)?.account(thread.accountId)
         if let model = thread.model ?? thread.modelInUse ?? account?.defaultModel {
             out["model"] = ComposerChips.modelTitle(model, choices: account?.models ?? []) + (thread.model == nil ? ", the default" : "")
@@ -237,27 +300,39 @@ struct ComposerView: View {
     /// Arrows, Tab, Return and Esc while the palette is open. False lets
     /// the box have the key as usual.
     private func paletteKey(_ key: PaletteKey, text: String) -> Bool {
-        guard let thread, let query = paletteQuery(text) else { return false }
-        let matches = SlashPalette.matches(app.slashCommands[thread.id] ?? [], query: query, category: palette.category, recent: app.recentSlashCommands)
+        guard let typed = paletteTyped(text) else { return false }
+        let commands = paletteCommands(typed) ?? []
+        // Partway through a message, a closed palette leaves the keys alone.
+        if typed.midMessage, SlashPalette.matches(commands, query: typed.query, category: .all, recent: []).isEmpty { return false }
+        let matches = SlashPalette.matches(commands, query: typed.query, category: palette.category, recent: app.recentSlashCommands)
         // Return with nothing to pick sends what's typed, as words.
         if key == .enter, matches.isEmpty { return false }
         if let (command, run) = SlashPaletteView.handle(key, matches: matches, state: &palette, text: text) {
-            pick(command, run: run)
+            pick(command, run: run && !typed.midMessage)
         }
         return true
     }
 
-    /// Puts the command in the box: to send now, or with a space after it
-    /// for its arguments. Through the text view, so it's one undo.
+    /// Puts the command in the box in place of what was typed for it: to
+    /// send now, or with a space after it for its arguments (or, partway
+    /// through a message, the words after it). Through the text view, so
+    /// it's one undo.
     private func pick(_ command: SlashCommand, run: Bool) {
         app.recentSlashCommands = SlashPalette.used(command.name, recent: app.recentSlashCommands)
+        let current = app.drafts[draftKey]?.normalized.text ?? ""
+        // Counted from the end: the text view's string can differ earlier
+        // on (a picture's chip), never in the last word.
+        let typedLength = SlashPalette.typed(in: current).map { current.utf16.count - $0.start } ?? current.utf16.count
         palette = PaletteState()
         let text = SlashPalette.fill(command, forArguments: !run)
         if let textView = handle.textView {
-            textView.insertText(text, replacementRange: NSRange(location: 0, length: (textView.string as NSString).length))
+            let length = (textView.string as NSString).length
+            let cut = min(typedLength, length)
+            textView.insertText(text, replacementRange: NSRange(location: length - cut, length: cut))
             textView.window?.makeFirstResponder(textView)
         } else {
-            app.drafts[draftKey, default: Draft()].text = text
+            let kept = String(current.utf16.dropLast(typedLength)) ?? ""
+            app.drafts[draftKey, default: Draft()].text = kept + text
         }
         if run { send() }
     }
@@ -273,6 +348,7 @@ struct ComposerView: View {
     /// else answer has its own box on the card. Under asks with none
     /// picked, it's the way to answer in other words.
     private func placeholder(_ picks: [Int: Int], followUps: FollowUpPicks, needsYou: Bool) -> String {
+        if let moving = thread?.moving, !moving.ended { return moving.line + "…" }
         if let thread, app.editing[thread.id] != nil { return "Your message…" }
         if !picks.isEmpty || !followUps.isEmpty { return "Add anything else…" }
         return needsYou ? "Or say something else…" : "Message"
@@ -281,6 +357,8 @@ struct ComposerView: View {
     /// AppModel empties the box, and puts the draft back if it isn't sent.
     /// Picked answers go with it.
     private func send() {
+        // Return still reaches here with the box locked.
+        if thread?.moving?.ended == false { return }
         // Return in an empty box comes here too, with nothing to go.
         if Self.canSend((app.drafts[draftKey] ?? Draft()).normalized,
                         picks: thread.map { app.picks(for: $0) } ?? [:],
@@ -372,15 +450,15 @@ struct ComposerView: View {
         panel.canChooseFiles = true
         panel.canChooseDirectories = false
         panel.allowsMultipleSelection = true
-        panel.allowedContentTypes = [.image]
+        panel.allowedContentTypes = ComposerTextView.attachableTypes
         panel.prompt = "Add"
         let finish = { (response: NSApplication.ModalResponse) in
             guard response == .OK else { return }
-            // Chips where the cursor was, as a paste would put them.
+            // Where the cursor was, as a paste would put them.
             if let textView = handle.textView {
-                textView.insertPictures(panel.urls)
+                textView.insertChosenFiles(panel.urls)
             } else {
-                attach(panel.urls, to: draft)
+                attach(panel.urls.filter { !PreviewRules.isMarkdown($0.path) }, to: draft)
             }
         }
         if let window = NSApp.keyWindow {
@@ -424,12 +502,13 @@ private struct EditingBanner: View {
 private struct AttachmentStrip: View {
     let images: [ImageRef]
     let importing: Int
+    let onOpen: (Int) -> Void
     let onRemove: (Int) -> Void
 
     var body: some View {
         HStack(spacing: zoomed(8)) {
             ForEach(Array(images.enumerated()), id: \.offset) { index, image in
-                AttachmentThumbnail(path: image.path) { onRemove(index) }
+                AttachmentThumbnail(path: image.path, onOpen: { onOpen(index) }, onRemove: { onRemove(index) })
             }
             // One placeholder per image still being imported, so the strip
             // doesn't jump when they arrive.
@@ -445,6 +524,8 @@ private struct AttachmentStrip: View {
 
 struct AttachmentThumbnail: View {
     let path: String
+    /// A click on the picture: Quick Look (ComposerTextView.previewPicture).
+    var onOpen: (() -> Void)?
     let onRemove: () -> Void
     @State private var hovering = false
 
@@ -458,6 +539,9 @@ struct AttachmentThumbnail: View {
         AsyncThumbnail(path: path)
             .frame(width: Self.size, height: Self.size)
             .clipShape(shape)
+            .contentShape(shape)
+            // The remove badge is a button over it, so its click stays its own.
+            .onTapGesture { onOpen?() }
             .overlay(shape.strokeBorder(Color(nsColor: .separatorColor), lineWidth: 0.5))
             .overlay(alignment: .topTrailing) {
                 if hovering || Self.debugShowRemove {
@@ -846,11 +930,12 @@ final class ComposerTextView: NSTextView {
         storage.endEditing()
     }
 
-    // MARK: A chip's hover card
+    // MARK: A chip's hover card, and Quick Look on a click
     //
     // The picture over a chip in the box, as in Mike's bubble, to tell which
-    // is which. A click stays the cursor's (PictureChipCell), so here it's
-    // the hover alone.
+    // is which. A plain click on a chip still puts the cursor beside it
+    // (PictureChipCell), then opens the picture in Quick Look, as a click
+    // on the strip's thumbnail does (Mike, 11 Nov).
 
     private var chipTracking: NSTrackingArea?
     private var chipCard: ChipCardWindow?
@@ -877,8 +962,54 @@ final class ComposerTextView: NSTextView {
 
     override func mouseDown(with event: NSEvent) {
         hoverChip(nil)
+        let plain = event.clickCount == 1 && event.modifierFlags.intersection([.shift, .command, .option, .control]).isEmpty
+        let pressed = plain ? chipUnder(convert(event.locationInWindow, from: nil)) : nil
+        // NSTextView tracks the press until the button comes up.
         super.mouseDown(with: event)
+        // A drag from the chip selects words instead, and letting go
+        // somewhere else is a change of mind.
+        guard let pressed, selectedRange().length == 0, let up = NSApp.currentEvent, up.type == .leftMouseUp,
+              chipUnder(convert(up.locationInWindow, from: nil)) === pressed else { return }
+        previewPicture(pressed)
     }
+
+    /// Quick Look on the strip's `index`-th picture (the ones copied in).
+    @discardableResult
+    func previewPicture(at index: Int) -> Bool {
+        var found: PictureAttachment?
+        var seen = 0
+        textStorage?.enumerateAttribute(.attachment, in: whole) { value, _, stop in
+            guard let chip = value as? PictureAttachment, chip.picture != nil else { return }
+            if seen == index {
+                found = chip
+                stop.pointee = true
+            }
+            seen += 1
+        }
+        guard let found else { return false }
+        return previewPicture(found)
+    }
+
+    /// Quick Look on `chip`'s picture, stepping through the box's others.
+    @discardableResult
+    func previewPicture(_ chip: PictureAttachment) -> Bool {
+        var chips: [PictureAttachment] = []
+        textStorage?.enumerateAttribute(.attachment, in: whole) { value, _, _ in
+            if let chip = value as? PictureAttachment { chips.append(chip) }
+        }
+        // One still being copied in shows from the file it came from.
+        let path = { (chip: PictureAttachment) in chip.picture?.path ?? chip.source }
+        let shown = chips.map(path).filter(QuickLookCoordinator.isPicture)
+        guard let index = shown.firstIndex(of: path(chip)) else { return false }
+        // Quick Look asks the first responder for its pictures (below).
+        if window?.firstResponder !== self { window?.makeFirstResponder(self) }
+        QuickLookCoordinator.shared.show(paths: shown, index: index, from: self)
+        return true
+    }
+
+    override func acceptsPreviewPanelControl(_ panel: QLPreviewPanel!) -> Bool { true }
+    override func beginPreviewPanelControl(_ panel: QLPreviewPanel!) { QuickLookCoordinator.shared.begin(panel) }
+    override func endPreviewPanelControl(_ panel: QLPreviewPanel!) { QuickLookCoordinator.shared.end(panel) }
 
     override func viewWillMove(toWindow newWindow: NSWindow?) {
         super.viewWillMove(toWindow: newWindow)
@@ -938,6 +1069,34 @@ final class ComposerTextView: NSTextView {
     }
 
     func debugEndHover() { hoverChip(nil) }
+
+    /// A press and release on the chip numbered `number`, through
+    /// mouseDown as a real click goes, or with `strip` the strip
+    /// thumbnail's open (`previewPicture(at:)`, a 0-based place): what
+    /// Quick Look would show, without its panel coming up over Mike's work.
+    func debugOpenPicture(chip number: Int?, strip: Int?) -> (paths: [String], index: Int)? {
+        var opened: (paths: [String], index: Int)?
+        QuickLookCoordinator.shared.debugOpened = { opened = ($0, $1) }
+        defer { QuickLookCoordinator.shared.debugOpened = nil }
+        if let strip {
+            previewPicture(at: strip)
+            return opened
+        }
+        var found: PictureAttachment?
+        textStorage?.enumerateAttribute(.attachment, in: whole) { value, _, _ in
+            if let chip = value as? PictureAttachment, chip.number == number { found = chip }
+        }
+        guard let found, let window, let rect = range(of: found).flatMap(chipRect) else { return nil }
+        let spot = convert(NSPoint(x: rect.midX, y: rect.midY), to: nil)
+        func mouse(_ type: NSEvent.EventType) -> NSEvent? {
+            NSEvent.mouseEvent(with: type, location: spot, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                               windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1)
+        }
+        guard let down = mouse(.leftMouseDown), let up = mouse(.leftMouseUp) else { return nil }
+        window.postEvent(up, atStart: true)
+        mouseDown(with: down)
+        return opened
+    }
     #endif
 
     override func keyDown(with event: NSEvent) {
@@ -1174,6 +1333,21 @@ final class ComposerTextView: NSTextView {
     /// screen recording) still reads as one path.
     static func pathText(for urls: [URL]) -> String {
         urls.map { "`\($0.standardizedFileURL.path)`" }.joined(separator: " ")
+    }
+
+    /// What Attach Image's picker lets you pick: pictures, and Markdown
+    /// files, which go in as their paths as a dropped one does.
+    static let attachableTypes: [UTType] = [.image]
+        + ["md", "markdown"].compactMap { UTType(filenameExtension: $0) }
+
+    /// Files picked from Attach Image, where the cursor is: pictures as
+    /// chips, anything else as its path, as a drop puts them.
+    func insertChosenFiles(_ urls: [URL]) {
+        let images = urls.filter(isImage)
+        let others = urls.filter { !isImage($0) }
+        var at: NSRange?
+        if !others.isEmpty { at = insertPaths(others, replacing: nil) }
+        if !images.isEmpty { deliver(images, at: at) }
     }
 
     /// `urls` as paths in place of `range` (the selection by default), with

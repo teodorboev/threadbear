@@ -50,7 +50,7 @@ remote thread breaks wherever the app treats a path as a file on this Mac:
 - **Folders.** The composer's folder picker and `cwd` checks read this
   Mac's disk. Patches (`appliesTo`) look in this Mac's folders.
 - **Accounts and pools** are per runner. Bruce has one Claude login
-  (mike.cann@gmail.com), Codex installed and signed in, and no Token Stats
+  (mike@example.net), Codex installed and signed in, and no Token Stats
   accounts folder.
 
 ## Runs on: picking a runner
@@ -179,7 +179,7 @@ Checked 29 Oct over SSH:
 ## Questions for Mike
 
 1. Part 2's shape: the M5's runner fronts Bruce's, one socket for the app?
-2. Which Claude login goes on Bruce? Today it's mike.cann@gmail.com.
+2. Which Claude login goes on Bruce? Today it's mike@example.net.
 
 Decided 29 Oct: schedules first, held in Convex (part 1). Every thread and
 schedule has its runner set by Mike or the agent: this Mac by default in

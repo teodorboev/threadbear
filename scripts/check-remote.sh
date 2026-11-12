@@ -9,7 +9,7 @@
 # With several hosts (Mike's are Tinker Desk and the cloud box), each run
 # goes to the first one that's free and can run it, or waits for the first
 # that can. A Linux host only takes what needs no Mac: a --quick run that
-# doesn't touch ios/ (ThreadbearKit's tests are Swift), with no --shots.
+# doesn't touch ios/, app/ or dock/ (each brings in Swift), with no --shots.
 # Mike asked on 6 Nov, when nine threads' checks queued at once.
 #
 # Mike asked on 6 Nov 2026, after three threads' unit suites, a swift test
@@ -54,8 +54,10 @@ if [ "${1:-}" = "--on-host" ]; then
   shift 2
   base="$HOME/$BASE_REL"
   src="$base/src"
-  NODE="$HOME/.nvm/versions/node/v24.22.1/bin/node"
-  export PATH="$(dirname "$NODE"):/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin"
+  # An ssh session's PATH has no nvm, so find-node.sh looks there too.
+  . "${BASH_SOURCE[0]%/*}/../runner/scripts/find-node.sh"
+  NODE="$(threadbear_find_node)" || exit 1
+  export PATH="${NODE%/*}:/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin"
   # Everything the tests make in a temp folder goes here and is deleted
   # with the run, so nothing piles up in /var/folders.
   export TMPDIR="$base/tmp-$id"
@@ -66,6 +68,8 @@ if [ "${1:-}" = "--on-host" ]; then
     -mmin +720 -exec rm -rf {} + 2>/dev/null
   # A checkout's mirror that hasn't sent a run for a week (a removed worktree).
   find "$base/mirror" -mindepth 1 -maxdepth 1 -type d -mtime +7 -exec rm -rf {} + 2>/dev/null
+  # Folders this run makes are private whatever the host's umask (see probe).
+  umask 022
   mkdir -p "$TMPDIR"
   mv "$base/runs/$id" "$src" || { echo "The copy for run $id isn't on $(hostname -s)." >&2; exit 1; }
   # A failed check keeps its logs in $TMPDIR; they move aside for this
@@ -93,7 +97,11 @@ if [ "${1:-}" = "--on-host" ]; then
 
   # node_modules per package-lock, kept between runs (the newest three of
   # each). npm ci only when the lockfile is new.
-  for dir in . runner app/Tools/mock-runner; do
+  # --runner (the runner's self-update) needs only the runner's: a broken
+  # lockfile elsewhere mustn't hold the runner back (Codex, 9 Nov).
+  dep_dirs=". runner app/Tools/mock-runner"
+  case " $* " in *" --runner "*) dep_dirs="runner" ;; esac
+  for dir in $dep_dirs; do
     [ -f "$src/$dir/package-lock.json" ] || continue
     name="$(printf '%s' "$dir" | tr -c 'a-zA-Z0-9' '-')"
     hash="$(shasum -a 256 "$src/$dir/package-lock.json" | cut -c1-16)"
@@ -120,6 +128,31 @@ if [ "${1:-}" = "--on-host" ]; then
     rm -rf "$src/$dir/.build"
     ln -s "$base/build/$name" "$src/$dir/.build"
   done
+  # Cargo for the desktop app's Rust (desktop/): the one desktop/scripts/remote.sh
+  # installed under gpui/ if there is one, else rustup's. Its target folder is
+  # kept between runs too, one for every checkout: this host's lock means only
+  # one run uses it at a time, and the copy is always at src/ with the Mac's
+  # file times (rsync -a), so cargo rebuilds only the crates whose files
+  # changed. It's dropped when the disk runs short, as a GPUI build fills
+  # several GiB and the cloud box runs a runner of its own (THREADBEAR-1R).
+  if [ -x "$base/gpui/cargo/bin/cargo" ]; then
+    export CARGO_HOME="$base/gpui/cargo" RUSTUP_HOME="$base/gpui/rustup"
+    PATH="$CARGO_HOME/bin:$PATH"
+  elif [ -x "$HOME/.cargo/bin/cargo" ]; then
+    PATH="$HOME/.cargo/bin:$PATH"
+  fi
+  # THREADBEAR_CHECK_SHARED_TARGET has check.sh make sure cargo sees every
+  # change (cargo_step there says why).
+  export CARGO_TARGET_DIR="$base/build/desktop-target" THREADBEAR_CHECK_SHARED_TARGET=1 \
+    CARGO_HTTP_MULTIPLEXING=false CARGO_NET_RETRY=10
+  free_kb="$(cd "$base" && eval "$free_cmd")"
+  case "$free_kb" in
+    ""|*[!0123456789]*) ;;
+    *) if [ "$free_kb" -lt $((12 * 1048576)) ] && [ -d "$CARGO_TARGET_DIR" ]; then
+         echo "Short of disk here, so the desktop app's cargo target goes; it builds from cold this time."
+         rm -rf "$CARGO_TARGET_DIR"
+       fi ;;
+  esac
 
   cd "$src" || exit 1
   # Under a limit of its own as well: this Mac giving up on it (a dropped
@@ -277,15 +310,23 @@ dropped() {
   timed 10 "${SSH[@]}" -O exit "$1" >/dev/null 2>&1
 }
 # Past MAX_SECS: not 255, as running it all again here wouldn't be quicker.
+# Before the check started there (waiting for a host or copying: over_time
+# busy), BUSY_EXIT, as with no host having room: the runner's self-update
+# sets THREADBEAR_CHECK_BUSY_EXIT so it can tell the hosts' trouble from a
+# failed check and try again later (deploy-steps.mjs, remoteChecks).
+BUSY_EXIT="${THREADBEAR_CHECK_BUSY_EXIT:-1}"
+case "$BUSY_EXIT" in [1-9]|[1-9][0-9]|1[01][0-9]|12[0-3]) ;; *) BUSY_EXIT=1 ;; esac
 over_time() {
   echo "This check has been going for $((MAX_SECS / 60)) minutes, waiting in line included, so it was stopped." >&2
   rm -f "$files" "$changed"
+  if [ "${1:-}" = busy ]; then exit "$BUSY_EXIT"; fi
   exit 1
 }
 
 ARGS=()
 SHOTS=""
 QUICK=0
+RUNNER_ONLY=0
 ALL=0
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -293,6 +334,7 @@ while [ $# -gt 0 ]; do
       case "$2" in /*) SHOTS="$2" ;; *) SHOTS="$PWD/$2" ;; esac
       shift ;;
     --quick) QUICK=1; ARGS+=("$1") ;;
+    --runner) QUICK=1; RUNNER_ONLY=1; ARGS+=("$1") ;;
     --all) ALL=1; ARGS+=("$1") ;;
     *) ARGS+=("$1") ;;
   esac
@@ -309,11 +351,25 @@ changed="$(mktemp)"
 } 2>/dev/null | sort -u >"$changed"
 
 # Whether a Linux host can run this: only the runner's, Convex's and the
-# website's checks, so --quick, nothing changed under ios/ (and something
-# changed: with nothing, check.sh itself or --all, it runs everything), no
-# shots.
+# website's checks, so --quick, nothing changed under ios/ (ThreadbearKit's
+# tests), app/ or dock/ (the Mac app's release build) beyond what the GPUI
+# app shares (scripts/swift-freeze.sh --gpui-shared: the mock runner,
+# fixtures, art, which the Swift app's build no longer runs for), and
+# something changed (with nothing, check.sh itself or --all, it runs
+# everything), no shots.
 linux_ok=0
-if [ "$QUICK" = 1 ] && [ "$ALL" = 0 ] && [ -z "$SHOTS" ] && [ -s "$changed" ] && ! grep -qE '^ios/|^check\.sh$' "$changed"; then linux_ok=1; fi
+GPUI_SHARED="$("$ROOT/scripts/swift-freeze.sh" --gpui-shared 2>/dev/null)"
+# Without it, nothing counts as shared: an empty pattern would match every
+# line, and every change would look like none.
+[ -n "$GPUI_SHARED" ] || GPUI_SHARED='^$'
+if [ "$QUICK" = 1 ] && [ "$ALL" = 0 ] && [ -z "$SHOTS" ] && [ -s "$changed" ] \
+  && ! grep -qE '^ios/|^check\.sh$' "$changed" && ! grep -vE "$GPUI_SHARED" "$changed" | grep -E '^(app|dock)/' >/dev/null; then linux_ok=1; fi
+# (grep to /dev/null, not -q: -q closing the pipe early fails grep -v under
+# pipefail, and a big change would have looked like none.)
+# --runner is only Node, whatever changed: the runner's self-update sends
+# it from a clone on main, where nothing has, and with Tinker Desk away a
+# Linux host should still take it rather than this Mac (Codex, 9 Nov).
+if [ "$RUNNER_ONLY" = 1 ] && [ -z "$SHOTS" ]; then linux_ok=1; fi
 
 # The disk a run wants free on its host. On 7 Nov Tinker Desk fell under 1 GiB
 # and an --app check died with a CodeSign error that said nothing about space,
@@ -351,10 +407,31 @@ host_is_low() {
 # first that can, which then waits for its lock. Two checks can both see a host
 # free, so a run there takes the lock without waiting (exit 75 if it can't),
 # and the one that lost chooses again; after three goes it waits in line.
-probe='mkdir -p ~/'"$BASE_REL"'/runs && cd ~/'"$BASE_REL"' && pwd && uname -s && if [ "$(uname -s)" = Darwin ]; then /usr/bin/lockf -t 0 lock true 2>/dev/null && echo free || echo busy; else flock -n lock true 2>/dev/null && echo free || echo busy; fi && '"$free_cmd"
+# The copy's folders are made private: a host whose umask is 002 (the cloud
+# box) left them group-writable, and the private-dir tests (ios/scripts/
+# private-dir.mjs) refuse a folder under one of those (9 Nov).
+probe='mkdir -p ~/'"$BASE_REL"'/runs && chmod go-w ~/'"$BASE_REL"' ~/'"$BASE_REL"'/runs && cd ~/'"$BASE_REL"' && pwd && uname -s && if [ "$(uname -s)" = Darwin ]; then /usr/bin/lockf -t 0 lock true 2>/dev/null && echo free || echo busy; else flock -n lock true 2>/dev/null && echo free || echo busy; fi && '"$free_cmd"
 # Hosts with no room, as "<host> has <n> GiB free": those this choosing passed
 # over, and those whose copy failed for lack of it, which aren't asked again.
 LOW="" LOW_COPY=""
+# A host short of room may only be short because of the GPUI build folders
+# desktop/scripts/remote.sh keeps there (63 GB of them on Tinker Desk, 12 Nov,
+# with 1.8 GiB free). Those idle get given back by the same script remote.sh
+# uses, and the disk read again: true if it now has room. $2 is the host's
+# folder: as its probe gave it, already checked as a plain path, or \$HOME's
+# when the probe couldn't run, for the host to expand. Sent in the command,
+# not on stdin, as watched runs ssh in the background, where stdin is empty.
+# Under a time limit of its own, so a host stuck deleting doesn't keep the
+# other hosts from being tried.
+TRIM="$ROOT/desktop/scripts/trim-remote-cache.sh"
+make_room() {
+  [ -f "$TRIM" ] || return 1
+  local kb
+  timed 600 "${SSH[@]}" "$1" "cd \"$2/gpui\" 2>/dev/null || exit 0; bash -c \"\$(printf %s '$(base64 <"$TRIM" | tr -d '\n')' | base64 -d)\" trim -" </dev/null || true
+  kb="$(watched "$1" "${SSH[@]}" "$1" "cd \"$2\" && $free_cmd" 2>/dev/null)" || return 1
+  low_on_room "$kb"
+  [ $? = 1 ]
+}
 pass_over() {
   echo "Passing over $1: it has $FREE_GIB GiB free, and this check wants $MIN_FREE_GIB GiB." >&2
   LOW+="${LOW:+, }$1 has $FREE_GIB GiB free"
@@ -367,9 +444,18 @@ choose() {
     case "$h" in -*|"") continue ;; esac
     # One that dropped out during a copy this run isn't tried again.
     case " $SKIP " in *" $h "*) continue ;; esac
-    out="$(watched "$h" "${SSH[@]}" "$h" "$probe" 2>/dev/null)"
-    rc=$?
-    [ "$rc" != 125 ] || over_time
+    # Probed again once if the first failed for want of room and giving back
+    # build folders made some.
+    tried_room=0
+    while :; do
+      out="$(watched "$h" "${SSH[@]}" "$h" "$probe" 2>/dev/null)"
+      rc=$?
+      [ "$rc" != 125 ] || over_time busy
+      [ "$rc" != 0 ] && [ "$rc" != 124 ] && [ "$rc" != 255 ] && [ "$tried_room" = 0 ] || break
+      tried_room=1
+      kb="$(watched "$h" "${SSH[@]}" "$h" "cd ~ && $free_cmd" 2>/dev/null)" && low_on_room "$kb" || break
+      make_room "$h" '$HOME/'"$BASE_REL" || break
+    done
     if [ "$rc" = 124 ]; then
       dropped "$h"
       continue
@@ -402,8 +488,10 @@ choose() {
     low_on_room "$kb"
     case $? in
       0)
-        pass_over "$h"
-        continue ;;
+        make_room "$h" "$b" && echo "$h was short of disk; idle GPUI build folders there were given back, and it has room now." >&2 || {
+          pass_over "$h"
+          continue
+        } ;;
       # Not knowing is no reason to stop checks; a failure there still says.
       2) echo "Couldn't read how much disk $h has free; trying it anyway." >&2 ;;
     esac
@@ -448,7 +536,7 @@ take_copylock() {
   holder=$!
   # Waiting for another check from this checkout counts towards MAX_SECS too.
   until [ -e "$ready" ] || ! kill -0 "$holder" 2>/dev/null; do
-    if [ "$(date +%s)" -ge "$DEADLINE" ]; then kill_tree "$holder"; wait "$holder" 2>/dev/null; holder="" release=""; over_time; fi
+    if [ "$(date +%s)" -ge "$DEADLINE" ]; then kill_tree "$holder"; wait "$holder" 2>/dev/null; holder="" release=""; over_time busy; fi
     sleep 0.2
   done
   # The helper gone with no ready file never had the lock (a lock file it
@@ -514,7 +602,7 @@ while :; do
     if [ -n "$LOW" ]; then
       # Not 255: a disk to clear isn't a reason to run it all on this Mac.
       echo "No check host has room for this check: $LOW, and it wants $MIN_FREE_GIB GiB. Free some space there and run it again." >&2
-      exit 1
+      exit "$BUSY_EXIT"
     fi
     echo "None of $HOST_LIST can run this check now." >&2
     exit 255
@@ -546,7 +634,7 @@ while :; do
     # By content (-c), not size and time: an edit that keeps both would
     # otherwise leave the mirror's old copy in the run.
     copy_it() {
-      "${SSH[@]}" "$HOST" "mkdir -p '$mirror' '$remote_run' && touch '$mirror'" \
+      "${SSH[@]}" "$HOST" "umask 022 && mkdir -p '$mirror' '$remote_run' && touch '$mirror'" \
         && rsync -azc --from0 --files-from="$files" -e "${SSH[*]}" "$ROOT/" "$HOST:$mirror/" \
         && rsync -a -e "${SSH[*]}" "$files" "$HOST:$remote_run.files" \
         && "${SSH[@]}" "$HOST" "rsync -a --from0 --files-from='$remote_run.files' '$mirror/' '$remote_run/' && rm -f '$remote_run.files'" \
@@ -556,7 +644,7 @@ while :; do
     rc=$?
     if [ "$rc" = 124 ] || [ "$rc" = 125 ]; then
       drop_copylock
-      [ "$rc" != 125 ] || over_time
+      [ "$rc" != 125 ] || over_time busy
       dropped "$HOST"
       continue
     elif [ "$rc" != 0 ]; then
@@ -610,7 +698,15 @@ while :; do
   local_logs="$(mktemp -d "${TMPDIR:-/tmp}/threadbear-check-remote.XXXXXX")"
   watched "$HOST" "${SSH[@]}" "$HOST" "$remote_cmd" 2>&1 | rewrite_logs "$remote_base/tmp-$id/threadbear-check." "$local_logs"
   code=${PIPESTATUS[0]}
-  [ "$code" != 125 ] || { rmdir "$local_logs" 2>/dev/null; over_time; }
+  if [ "$code" = 125 ]; then
+    rmdir "$local_logs" 2>/dev/null
+    # Still waiting for the host's lock, the check never started: its copy is
+    # still under runs/, which --on-host moves out once it has the lock. A
+    # host that doesn't answer is taken as still waiting too; a run that did
+    # start (a hung step) is the check's own failure (Codex, 9 Nov).
+    if ! timed 15 "${SSH[@]}" "$HOST" "test ! -d '$remote_run'" >/dev/null 2>&1; then over_time busy; fi
+    over_time
+  fi
   # 255 is ssh's own: the connection went before the check ended. Like a host
   # that stops answering, it's the next host's (or, with none, this Mac's): a
   # run that can't finish anywhere would hold the landing for nothing.

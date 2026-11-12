@@ -1,4 +1,4 @@
-// Schedule checks (experiment scheduleChecks, src/schedule-check.ts): a
+// Schedule checks (src/schedule-check.ts): a
 // command run before each run; nothing printed skips it.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -13,7 +13,7 @@ import { toOwnedScheduleDoc } from '../../src/sync.ts';
 
 const MIN = 60_000;
 
-function setup(o: { on?: boolean; result?: () => CheckResult } = {}) {
+function setup(o: { result?: () => CheckResult } = {}) {
   const h = makeHarness();
   const seen: { command: string; cwd: string }[] = [];
   const sched = new Scheduler({
@@ -22,7 +22,6 @@ function setup(o: { on?: boolean; result?: () => CheckResult } = {}) {
     clock: h.clock,
     log: nullLogger,
     zone: () => 'UTC',
-    checksOn: () => o.on ?? true,
     runCheck: async (p) => {
       seen.push({ command: p.command, cwd: p.cwd });
       return o.result?.() ?? { ok: true, output: '' };
@@ -75,16 +74,6 @@ test('scheduleChecks: a failing check runs anyway, with the error', async () => 
   sched.stop();
 });
 
-test('scheduleChecks: with the experiment off the check is ignored and it runs as before', async () => {
-  const { h, sched, seen } = setup({ on: false });
-  await sched.create({ text: 'Triage', title: 'Watch Sentry', cron: '*/5 * * * *', check: 'sentry-new-issues' });
-  h.clock.advance(5 * MIN);
-  await tick(6);
-  assert.equal(seen.length, 0);
-  assert.equal(newThreads(h).length, 1);
-  sched.stop();
-});
-
 test('scheduleChecks: update sets and takes off the check; Run now skips it', async () => {
   const { h, sched, seen } = setup();
   const sc = await sched.create({ text: 'Triage', title: 'Watch Sentry', cron: '@daily' });
@@ -103,14 +92,13 @@ test('scheduleChecks: the backend gets the check only from API 51', () => {
   assert.equal(toOwnedScheduleDoc(s as never, 51).check, 'ls');
 });
 
-test('scheduleChecks: the tools offer check only while the experiment is on', () => {
+test('scheduleChecks: the schedule tools always offer check and checkTimeoutSecs', () => {
   const { h, sched } = setup();
-  const names = (on: boolean) => {
-    const tools = buildThreadbearTools(h.runner, 'x', Date.now, sched, undefined, undefined, { scheduleChecks: () => on }) as unknown as { name: string; inputSchema: Record<string, unknown> }[];
-    return Object.keys(tools.find((t) => t.name === 'schedule_message')!.inputSchema);
-  };
-  assert.ok(!names(false).includes('check'));
-  assert.ok(names(true).includes('check'));
+  const tools = buildThreadbearTools(h.runner, 'x', Date.now, sched) as unknown as { name: string; inputSchema: Record<string, unknown> }[];
+  for (const name of ['schedule_message', 'update_schedule']) {
+    const keys = Object.keys(tools.find((t) => t.name === name)!.inputSchema);
+    assert.ok(keys.includes('check') && keys.includes('checkTimeoutSecs'), name);
+  }
   sched.stop();
 });
 
@@ -152,7 +140,6 @@ function schedulerOn(h: ReturnType<typeof makeHarness>, result: () => CheckResul
     clock: h.clock,
     log: nullLogger,
     zone: () => 'UTC',
-    checksOn: () => true,
     runCheck: async (p) => {
       seen.push(p.command);
       return result();
@@ -456,7 +443,7 @@ test('scheduleChecks: output kept only in memory is written down before the runn
 test('scheduleChecks: a schedule sets how long its check may take, 60 s without, at most 300', async () => {
   const h = makeHarness();
   const limits: (number | undefined)[] = [];
-  const sched = new Scheduler({ runner: h.runner, home: h.home, clock: h.clock, log: nullLogger, zone: () => 'UTC', checksOn: () => true, runCheck: async (p) => (limits.push(p.timeoutMs), { ok: true, output: '' }) });
+  const sched = new Scheduler({ runner: h.runner, home: h.home, clock: h.clock, log: nullLogger, zone: () => 'UTC', runCheck: async (p) => (limits.push(p.timeoutMs), { ok: true, output: '' }) });
   sched.start();
   const sc = await sched.create({ text: 'Read Slack', title: 'Slack', cron: '*/5 * * * *', check: 'slack-read', checkTimeoutSecs: 180 });
   assert.equal(sc.checkTimeoutSecs, 180);
@@ -478,7 +465,7 @@ test('scheduleChecks: a schedule sets how long its check may take, 60 s without,
 test('scheduleChecks: a stop waits out the longest check under way, not just a minute', async () => {
   const h = makeHarness();
   let finish!: (r: CheckResult) => void;
-  const sched = new Scheduler({ runner: h.runner, home: h.home, clock: h.clock, log: nullLogger, zone: () => 'UTC', checksOn: () => true, runCheck: () => new Promise<CheckResult>((r) => (finish = r)) });
+  const sched = new Scheduler({ runner: h.runner, home: h.home, clock: h.clock, log: nullLogger, zone: () => 'UTC', runCheck: () => new Promise<CheckResult>((r) => (finish = r)) });
   sched.start();
   await sched.create({ text: 'Read Slack', title: 'Slack', cron: '*/5 * * * *', check: 'slack-read', checkTimeoutSecs: 180 });
   h.clock.advance(5 * MIN);
@@ -510,21 +497,11 @@ test("scheduleChecks: another process's marker stays live for twice its own chec
   assert.equal(JSON.parse(fs.readFileSync(path.join(dir, 's2.running.json'), 'utf8')).limitMs, 180_000);
 });
 
-test('scheduleChecks: the backend gets checkTimeoutSecs only from API 55, and the tools offer it with check', () => {
+test('scheduleChecks: the backend gets checkTimeoutSecs only from API 55', () => {
   const s = { id: 'a', runnerId: 'r', title: 't', text: 'x', whenText: 'w', paused: false, createdAt: 'c', updatedAt: 'u', runs: 0, check: 'ls', checkTimeoutSecs: 180 };
   assert.equal(toOwnedScheduleDoc(s as never, 54).checkTimeoutSecs, undefined);
   assert.equal(toOwnedScheduleDoc(s as never, 54).check, 'ls');
   assert.equal(toOwnedScheduleDoc(s as never, 55).checkTimeoutSecs, 180);
-  const { h, sched } = setup();
-  for (const name of ['schedule_message', 'update_schedule']) {
-    const keys = (on: boolean) => {
-      const tools = buildThreadbearTools(h.runner, 'x', Date.now, sched, undefined, undefined, { scheduleChecks: () => on }) as unknown as { name: string; inputSchema: Record<string, unknown> }[];
-      return Object.keys(tools.find((t) => t.name === name)!.inputSchema);
-    };
-    assert.ok(keys(true).includes('checkTimeoutSecs'), name);
-    assert.ok(!keys(false).includes('checkTimeoutSecs'), name);
-  }
-  sched.stop();
 });
 
 test('runCheck: a timeout says how to give the check longer', async () => {

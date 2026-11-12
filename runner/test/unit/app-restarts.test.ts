@@ -166,3 +166,41 @@ test('a turn whose end_turn was refused still signs up from its closing "What I 
   h.adapter.last.result('completed');
   assert.deepEqual(asked, [thread.id]);
 });
+
+const D1 = { commit: 'dddd1111', short: 'dddd111', tree: 'desktop-1' };
+const D2 = { commit: 'dddd2222', short: 'dddd222', tree: 'desktop-2' };
+
+test('the GPUI app restarting is told apart from the Swift app', () => {
+  const { h, watcher, thread } = setUp();
+  watcher.appHello(A);
+  watcher.appHello(D1, 'desktop');
+  watcher.watch(thread.id);
+  // Each reconnecting on the build it had: nothing.
+  watcher.appHello(A);
+  watcher.appHello(D1, 'desktop');
+  assert.equal(said(h, thread.id).message, undefined);
+  watcher.appHello(D2, 'desktop');
+  const evs = h.events(thread.id);
+  assert.equal(evs.findLast((e) => e.type === 'system.note')?.text, 'Threadbear GPUI app restarted: dddd111 to dddd222');
+  assert.match(String(evs.findLast((e) => e.type === 'user.message' && e.origin === 'runner')?.text), /The Threadbear GPUI app has restarted onto dddd222/);
+  assert.equal(watcher.isWatching(thread.id), false);
+});
+
+test("the GPUI app's first build isn't a restart of the Swift app a thread waits for", () => {
+  // Before the GPUI app said its build, a thread only knew the Swift app's.
+  const { h, watcher, thread } = setUp();
+  watcher.appHello(A);
+  watcher.watch(thread.id);
+  watcher.appHello(D1, 'desktop');
+  assert.equal(said(h, thread.id).message, undefined);
+  assert.equal(watcher.isWatching(thread.id), true);
+  watcher.appHello(B);
+  assert.match(said(h, thread.id).message, /restarted onto bbbb222/);
+});
+
+test('with no build known at all, either app coming back counts', () => {
+  const { h, watcher, thread } = setUp();
+  watcher.watch(thread.id);
+  watcher.appHello(D1, 'desktop');
+  assert.match(String(h.events(thread.id).findLast((e) => e.type === 'user.message' && e.origin === 'runner')?.text), /GPUI app has restarted onto dddd111/);
+});

@@ -2,7 +2,7 @@ import Foundation
 import ThreadbearCore
 
 /// Settings > General's Instructions. `standingInstructions` is nil while the
-/// runner has none to offer (the experiment off, or a runner from before), and
+/// runner has none to offer (a runner from before 7 Nov), and
 /// then there's no box.
 extension AppModel {
     func loadStandingInstructions() {

@@ -880,6 +880,16 @@ final class FolderPaneView: NSView, NSOutlineViewDataSource, NSOutlineViewDelega
         return true
     }
 
+    /// A ⌘-click's result: that row picked as well as what was.
+    func selectAlso(name: String) -> Bool {
+        guard let node = row(named: name) else { return false }
+        select(paths: selectedPaths + [node.entry.path])
+        return true
+    }
+
+    /// The folders behind the path bar's "…", nearest first, as its menu lists them.
+    var debugPathMenu: [String] { pathBar.debugTucked }
+
     func open(name: String) -> Bool {
         guard let node = row(named: name) else { return false }
         open(node)
@@ -1146,6 +1156,11 @@ final class FolderPathBar: NSView {
         guard let index = crumbs.firstIndex(where: { $0.name == name }) else { return false }
         go(to: index)
         return true
+    }
+
+    var debugTucked: [String] {
+        layoutSubtreeIfNeeded()
+        return (0..<tucked).reversed().map { crumbs[$0].name }
     }
 }
 

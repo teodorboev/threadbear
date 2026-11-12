@@ -1,0 +1,118 @@
+[package]
+name = "threadbear-gpui"
+version = "0.1.0"
+description = "Threadbear as a native GPUI app"
+edition = "2021"
+publish = false
+# `cargo run` means the app, not its web helper.
+default-run = "threadbear-gpui"
+
+[[bin]]
+name = "threadbear-gpui"
+path = "src/main.rs"
+
+# The processes Chromium starts (src/web_helper.rs), built with the app so the
+# two always match. desktop/scripts/install-app.sh puts it beside the app.
+[[bin]]
+name = "threadbear-web-helper"
+path = "src/web_helper.rs"
+
+[dependencies]
+threadbear-client = { path = "../client" }
+threadbear-core = { path = "../core" }
+threadbear-dock = { path = "../dock" }
+# The web runtime (CEF), its download and its pages (../web).
+threadbear-web = { path = "../web" }
+# The download thread's updates and Chromium's answers, awaited on GPUI's
+# side. Already in the build through GPUI, at this version.
+futures = "=0.3.34"
+# Exactly this version: gpui-kit is young, so upgrades are done on purpose
+# and the specs (features/) say what they broke.
+# `syntect` colours the code a file preview shows (a pure-Rust highlighter,
+# about the languages of the Swift app's Highlightr).
+gpui-kit = { version = "=0.9.0", features = ["syntect"] }
+# The markdown tree gpui-kit parses into, for the reply text's own pieces
+# (reply_buttons.rs's pills): the kit's own version, already in the build.
+markdown = "=1.0.0"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "sync"] }
+# A pasted picture's private folder (composer.rs, save_pasted_image): made
+# with a random name and 0700, so nobody else on the machine can read it or
+# put one there first. Already in the build through gpui-kit.
+tempfile = "3"
+# A project card's backdrop (projects_page.rs): its picture icon blurred, as
+# the Swift card's `.blur(radius: 28)` behind it. GPUI has no blur for an
+# image, so a small copy is blurred here, off the main thread. Already in the
+# build through GPUI, at this version and with these formats.
+image = { version = "=0.25.10", default-features = false, features = ["png", "jpeg", "webp", "gif", "ico"] }
+# Hearing a folder in the pane change (file_watch.rs): FSEvents on the Mac,
+# inotify on Linux, ReadDirectoryChangesW on Windows. Already in the build
+# through gpui-kit, at this version and with its default features.
+notify = "=8.2.1"
+# Crash and freeze reports to Sentry from the installed app
+# (crash_reporting.rs): one POST of an envelope over rustls, with no Sentry SDK
+# (core's crash_report.rs builds what's sent). Already in the build through
+# threadbear-web, at this version and with these features.
+ureq = { version = "=3.5.1", default-features = false, features = ["rustls"] }
+# The Terminal panel's emulator (terminal.rs, terminal_element.rs): the
+# screen, its scrollback and selection, the escape codes programs print, and
+# the shell's pty (a Unix pty on macOS and Linux, ConPTY on Windows), with
+# the reader thread that feeds one into the other. Apache-2.0. The drawing
+# and the keys are this app's own. No serde: nothing here saves its state.
+alacritty_terminal = { version = "=0.26.0", default-features = false }
+# Never compiled. gpui-kit's test helpers (the `automation` feature) mention
+# gpui-fast, which pins these exact versions, and Cargo resolves it even though
+# it isn't built, so the versions have to agree. Remove with gpui-kit's next bump.
+taffy = { version = "=0.15.0", optional = true }
+unicode-properties = { version = "=0.1.3", optional = true }
+
+# The Terminal's shell (terminal.rs): whether the shell or a program it's
+# running has the terminal (tcgetpgrp), and SIGHUP to end it as closing a
+# Terminal window does. Already in the build, at this version, through gpui
+# and alacritty_terminal.
+[target.'cfg(unix)'.dependencies]
+libc = "=0.2.191"
+
+# Asking macOS which app opens a file, as the Swift app's OpenGate does
+# (open_gate.rs). Both are already built, with these features, for gpui's
+# own macOS platform.
+[target.'cfg(target_os = "macos")'.dependencies]
+# A window's own NSView, the parent a web page's view goes in (rich_window.rs).
+# Already in the build through GPUI, at this version.
+raw-window-handle = "=0.6.2"
+# NSColor and NSAppearance: the window's colour from the system (style.rs).
+# NSDockTile: the Dock badge (notify.rs). NSSound: the finished ding
+# (ding.rs). NSAlert and its button: Quit's "Don't ask again"
+# (quit_prompt.rs), which gpui's own prompt can't show.
+# NSPasteboard: a draft's Copy puts HTML beside the plain text
+# (draft_boxes.rs), which gpui's clipboard can't, and so does a copy of
+# words selected in a reply (selection_bar.rs). NSRunningApplication:
+# whether Chrome's running, for a web link's per-profile items (open_gate.rs).
+# NSEvent: System Settings' "Swipe between pages", and NSUserDefaults its
+# natural scrolling, for a page swipe (swipe_nav.rs). NSWindow and NSPanel:
+# whether an alert, a file picker or a sheet is up, which an update's
+# restart waits for (app_update.rs). NSWindow, NSMenu and NSMenuItem: File >
+# Close as AppKit's own, and what AppKit adds to the menus, for the specs
+# (window_menu.rs).
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSWorkspace", "NSColor", "NSColorSpace", "NSAppearance", "objc2-core-foundation", "NSApplication", "NSResponder", "NSDockTile", "NSSound", "NSAlert", "NSButton", "NSControl", "NSCell", "NSView", "NSPasteboard", "NSRunningApplication", "NSEvent", "NSWindow", "NSPanel", "NSMenu", "NSMenuItem"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSString", "NSURL", "NSBundle", "NSData", "NSUserDefaults"] }
+# A window's CAMetalLayer tagged as sRGB (colour_space.rs). Both already in
+# the build through GPUI's macOS renderer, at these versions and features.
+objc2-quartz-core = { version = "=0.3.2", default-features = false, features = ["std", "CALayer", "CAMetalLayer", "objc2-metal", "objc2-core-foundation", "objc2-core-graphics"] }
+objc2-core-graphics = { version = "=0.3.2", default-features = false, features = ["CGColorSpace"] }
+
+[build-dependencies]
+# Compiles native/media_views.m on a Mac (build.rs). Already in the build
+# through threadbear-web, at this version.
+cc = "=1.11.0"
+
+[features]
+# The scripted control the behaviour specs use (src/automation.rs). Off in
+# anything anyone runs for real: only `cargo build --features automation` has it.
+automation = ["gpui-kit/test-support", "tokio/net", "tokio/io-util", "tokio/macros"]
+# GPUI's frame profiler (src/frame_stats.rs): View > Show Frame Rate, and the
+# numbers behind features/tools/scroll-perf.ts. In the build installed for Mike
+# (desktop/scripts/install-app.sh) and the perf runs, not the specs' builds.
+frame-stats = ["gpui-kit/profiler"]

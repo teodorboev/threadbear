@@ -177,9 +177,11 @@ enum RichDiskCache {
         let base = folder.appendingPathComponent(key)
         for (image, look) in [(pictures.dark, "dark"), (pictures.light, "light")] {
             guard let data = NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:]) else { return }
-            try? data.write(to: URL(fileURLWithPath: base.path + "-\(look).png"), options: .atomic)
+            // A picture of a reply: this user's only, as the GPUI app's
+            // copies in the same folder are (PrivateFile).
+            try? PrivateFile.write(data, to: URL(fileURLWithPath: base.path + "-\(look).png"))
         }
-        try? "\(drawn.size.width) \(drawn.size.height) \(drawn.clipped ? 1 : 0)".write(to: base.appendingPathExtension("size"), atomically: true, encoding: .utf8)
+        try? PrivateFile.write(Data("\(drawn.size.width) \(drawn.size.height) \(drawn.clipped ? 1 : 0)".utf8), to: base.appendingPathExtension("size"))
         prune()
     }
 
@@ -207,6 +209,10 @@ enum RichDiskCache {
 /// Everything it shows is fixed when the row renders; a change renders the
 /// row again with a new cell.
 final class RichBlockCell: NSTextAttachmentCell {
+    /// Where Copy puts the source: the Mac's clipboard, or a scripted app's
+    /// own pasteboard (Automation), so a script's copies leave Mike's be.
+    nonisolated(unsafe) static var pasteboard: NSPasteboard = .general
+
     enum Action: String, CaseIterable {
         case drawn, source, copy, open
 

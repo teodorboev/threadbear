@@ -1,22 +1,23 @@
 {
   "claude": {
-    "instructions": 2733,
-    "tools": 35022,
-    "total": 37755
+    "instructions": 2984,
+    "tools": 39101,
+    "total": 42085
   },
   "codex": {
-    "instructions": 2158,
-    "tools": 35121,
-    "total": 37279
+    "instructions": 2153,
+    "tools": 39200,
+    "total": 41353
   },
-  "worktreeInstructions": 498,
+  "worktreeInstructions": 608,
   "perTool": {
+    "add_button": 1659,
     "ask_secret": 1241,
-    "create_project": 1335,
+    "create_project": 1433,
     "create_thread": 2390,
     "delete_schedule": 267,
     "delete_thread": 445,
-    "end_turn": 7884,
+    "end_turn": 8641,
     "interrupt_thread": 335,
     "join_project": 524,
     "leave_project": 460,
@@ -24,18 +25,18 @@
     "list_projects": 474,
     "list_schedules": 379,
     "list_threads": 734,
-    "move_thread": 1166,
+    "move_thread": 1497,
     "pin": 1120,
     "pocket": 1420,
     "read_project": 379,
     "read_thread": 520,
-    "schedule_message": 2835,
+    "schedule_message": 3313,
     "send_message": 562,
     "show_options": 2143,
-    "show_panel": 1299,
+    "show_panel": 1400,
     "unpin": 300,
-    "update_project": 2822,
-    "update_schedule": 1165,
+    "update_project": 2937,
+    "update_schedule": 1705,
     "update_thread": 1720,
     "wait_for_app_restart": 649
   }

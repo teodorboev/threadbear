@@ -447,3 +447,18 @@ test('an older backend is never asked for the order', async () => {
   assert.equal(index.list().order, undefined);
   index.stop();
 });
+
+// Daybreak 87 and 102 (11 Nov 2026): a compromised extra Mac's row under an
+// id with shell or markdown in it never reaches the apps.
+test('another runner’s row whose id isn’t a thread id’s shape is left out', async () => {
+  const { index, heard, remote } = setup();
+  index.start();
+  const row = (threadId: string) => ({ runnerId: 'r-bruce', threadId, title: 'x', cwd: '/', accountId: 'a', provider: 'claude', status: 'idle', needsYou: false, unread: false, preview: '', createdAt: 'c', lastActivityAt: 'l' });
+  remote({
+    runners: [{ runnerId: 'r-bruce', name: 'bruce', lastSeenAt: 1 }],
+    threads: [row('remote$(printf TB_ID_EXECUTED >&2)'), row('deadbeef) ![local](/tmp/private.png'), row('../x'), row('0cf430ac-f429-4b2e-9c1d-2f6a8b7c9d0e')],
+  });
+  assert.deepEqual(heard.at(-1)!.threads.map((t) => t.threadId), ['0cf430ac-f429-4b2e-9c1d-2f6a8b7c9d0e']);
+  assert.deepEqual(index.list().threads.map((t) => t.threadId), ['0cf430ac-f429-4b2e-9c1d-2f6a8b7c9d0e']);
+  index.stop();
+});

@@ -2,9 +2,11 @@
 // Part of the Runner (runner.ts), split out on 4 Nov 2026 as a plain move so a
 // fork's change to one area doesn't clash with another's. Each method's `this`
 // is the Runner; runner.ts puts them on its prototype.
+import { neutraliseCopied, realCopy } from '../real-copy.ts';
 import type { Runner } from '../runner.ts';
 import type { RunnerPart } from './part.ts';
 import type { ThreadSummary } from '../protocol.ts';
+import type { ThreadRecord } from '../store.ts';
 import type { Drain, ThreadState } from '../runner.ts';
 import { DRAIN_AGENT_MS, DRAIN_BACKGROUND_MS, DRAIN_CHECK_MS, DRAIN_MAX_OLD_MS, DRAIN_SETTLE_MS, newRuntime } from '../runner.ts';
 
@@ -162,7 +164,7 @@ export const handoversPart = {
     rt.deltaTimer?.cancel();
     rt.wakeTimer?.cancel();
     rt.generation++;
-    this.store.save(rec);
+    this.store.saveIfChanged(rec);
     rt.deleted = true;
     this.dirty.delete(rec.id);
     this.threads.delete(rec.id);
@@ -177,30 +179,56 @@ export const handoversPart = {
   adopt(this: Runner, threadId: string, opts: { crashed?: boolean } = {}): ThreadSummary | undefined {
     const had = this.threads.get(threadId);
     if (had) return this.summary(had);
+    // A thread handed over while this runner is still connecting to the old
+    // one comes before start: which worktrees are held is worked out first,
+    // from every thread on disk, and before this one's record, if it can't
+    // be read, is rebuilt without its worktree (Muse's review, 11 Nov 2026).
+    if (!this.unvouchedSettled) {
+      const all = this.store.loadAll();
+      this.settleUnvouched(all.records, all.broken);
+    }
     this.store.forget(threadId);
-    const rec = this.store.load(threadId) ?? this.rebuild(threadId);
+    let rec: ThreadRecord | undefined;
+    try {
+      rec = this.store.load(threadId) ?? this.rebuild(threadId);
+    } catch (e) {
+      this.log.error("couldn't rebuild a handed-over thread's record", { threadId, error: String(e) });
+    }
     if (!rec) {
       this.log.warn('a handed-over thread is gone', { threadId });
       return undefined;
     }
+    // Neutralised like the ones loaded at start (real-copy.ts).
+    const copy = realCopy(this.store.home);
+    if (copy) this.store.save(neutraliseCopied(rec, copy.work));
+    // An old runner's mark of a worktree the always-trust doesn't reach
+    // (settleUnvouched), set after this one started.
+    const w = rec.worktree;
+    if (w && w.unvouched === true && typeof w.path === 'string' && !w.removedAt) this.patchTrust.unvouch?.(w.path);
     rec.lastSeq = this.store.log(rec.id).lastSeq;
     const st: ThreadState = { rec, rt: newRuntime(Date.parse(rec.lastActivityAt) || 0) };
     this.threads.set(rec.id, st);
     // A thread that was busy on the old runner comes across here, not at
     // start, so it learns its "You: ..." line here too.
-    if (rec.asked === undefined && !rec.archivedAt) this.backfillAsked(rec);
-    this.recoverReviews(st);
-    // Handed over before its worktree cleanup finished (letGo's limit).
-    void this.settleLostCleanups([st], false);
-    if (opts.crashed) {
-      // main.ts carries it on (carryOnStopped), after any resume of its own.
-      if (this.recover(st)) this.notice('info', `The old runner stopped while "${rec.title}" was mid-turn.`);
-    }
-    // Hibernating until the runner restarts: for this thread, coming across
-    // is the restart.
-    if (this.wakesOnStart(rec)) this.wake(st, 'restart');
-    else if (rec.queue.length && this.bucket(rec) === 'inbox') {
-      this.kickQueue(st);
+    // As at start, one record that trips recovery costs that thread its
+    // recovery, not the handover (Runner.recoveryFailed).
+    try {
+      if (rec.asked === undefined && !rec.archivedAt) this.backfillAsked(rec);
+      this.recoverReviews(st);
+      // Handed over before its worktree cleanup finished (letGo's limit).
+      void this.settleLostCleanups([st], false);
+      if (opts.crashed) {
+        // main.ts carries it on (carryOnStopped), after any resume of its own.
+        if (this.recover(st)) this.notice('info', `The old runner stopped while "${rec.title}" was mid-turn.`);
+      }
+      // Hibernating until the runner restarts: for this thread, coming across
+      // is the restart.
+      if (this.wakesOnStart(rec)) this.wake(st, 'restart');
+      else if (rec.queue.length && this.bucket(rec) === 'inbox') {
+        this.kickQueue(st);
+      }
+    } catch (e) {
+      this.recoveryFailed(st, e);
     }
     this.tellOneStoppedWork(st);
     this.markDirty(st);

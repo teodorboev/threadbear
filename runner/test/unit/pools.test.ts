@@ -119,11 +119,12 @@ for (const c of folderCases.cases) {
 const CLAUDE: Pool = { id: 'claude', title: 'Claude', accountIds: ['claude-main', 'claude-1', 'claude-3'] };
 const MIXED: Pool = { id: 'all', title: 'All', accountIds: ['claude-main', 'codex-main', 'claude-1'] };
 
-test('loginOk: blocked or under 10% is not; unknown usage is', () => {
+test('loginOk: blocked or under 1% is not; unknown usage is', () => {
   assert.equal(loginOk(acct('a')), true);
-  assert.equal(loginOk(acct('a', { five: 10, week: 50 })), true);
-  assert.equal(loginOk(acct('a', { five: 9.5, week: 50 })), false);
-  assert.equal(loginOk(acct('a', { five: 80, week: 5 })), false);
+  assert.equal(loginOk(acct('a', { five: 1, week: 50 })), true);
+  assert.equal(loginOk(acct('a', { five: 3, week: 50 })), true, 'a login is used until it is all but out, not left at 10%');
+  assert.equal(loginOk(acct('a', { five: 0.9, week: 50 })), false);
+  assert.equal(loginOk(acct('a', { five: 80, week: 0.5 })), false);
   assert.equal(loginOk(acct('a', { five: 80, blocked: true })), false);
 });
 
@@ -134,11 +135,11 @@ test('pickInPool: current stays while OK; else most room; unknown after known; p
   assert.equal(pickInPool(CLAUDE, list, { provider: 'claude', prefer: 'claude-3' }), 'claude-3');
   assert.equal(pickInPool(CLAUDE, list, { provider: 'claude', exclude: ['claude-1', 'claude-3'] }), 'claude-main');
   assert.equal(pickInPool(CLAUDE, list, { provider: 'codex' }), undefined, 'codex-main is not in the pool');
-  const lowCurrent = [acct('claude-main', { five: 5 }), acct('claude-1'), acct('claude-3', { five: 30 })];
+  const lowCurrent = [acct('claude-main', { five: 0.5 }), acct('claude-1'), acct('claude-3', { five: 30 })];
   assert.equal(pickInPool(CLAUDE, lowCurrent, { provider: 'claude', current: 'claude-main' }), 'claude-3', 'known room beats unknown');
   assert.equal(pickInPool(CLAUDE, lowCurrent, { provider: 'claude', exclude: ['claude-3'] }), 'claude-1', 'then unknown');
   assert.equal(pickInPool(CLAUDE, lowCurrent, { provider: 'claude', prefer: 'claude-1' }), 'claude-1', 'a preferred login with unknown usage stays, as pickAccount');
-  const dry = [acct('claude-main', { five: 5 }), acct('claude-1', { blocked: true }), acct('claude-3', { five: 2 })];
+  const dry = [acct('claude-main', { five: 0.5 }), acct('claude-1', { blocked: true }), acct('claude-3', { five: 0.2 })];
   assert.equal(pickInPool(CLAUDE, dry, { provider: 'claude' }), undefined);
 });
 
@@ -151,10 +152,10 @@ test('pickInPool: the login whose week resets soonest goes first, while it has r
   assert.equal(pickInPool(CLAUDE, list, { provider: 'claude', now: NOW + 6 * 60 * 60_000 }), 'claude-1', 'once claude-3 has reset, its next reset is unknown');
   assert.equal(pickInPool(CLAUDE, list, { provider: 'claude', current: 'claude-main', now: NOW }), 'claude-main', 'a thread on a login with room stays put');
   // Down to the floor: it's left, and the next to reset is used.
-  const low = [list[0], list[1], acct('claude-3', { five: 99, week: 9, weekResets: 5 * 60 })];
+  const low = [list[0], list[1], acct('claude-3', { five: 99, week: 0.9, weekResets: 5 * 60 })];
   assert.equal(pickInPool(CLAUDE, low, { provider: 'claude', now: NOW }), 'claude-1');
   // The tighter 5-hour window counts too.
-  const busy = [list[0], list[1], acct('claude-3', { five: 4, week: 37, weekResets: 5 * 60 })];
+  const busy = [list[0], list[1], acct('claude-3', { five: 0.4, week: 37, weekResets: 5 * 60 })];
   assert.equal(pickInPool(CLAUDE, busy, { provider: 'claude', now: NOW }), 'claude-1');
   // The same reset: most room, then prefer.
   const same = [acct('claude-main', { week: 40, weekResets: 60 }), acct('claude-1', { week: 60, weekResets: 60 }), acct('claude-3', { week: 60, weekResets: 60 })];
@@ -169,15 +170,15 @@ test('nextLogin: same provider first, then spill in pool order, then a wait', ()
   const thread = { accountId: 'claude-main', provider: 'claude' as const };
   let list = [acct('claude-main', { five: 0, blocked: true, resets: 120 }), acct('codex-main', { five: 80 }), acct('claude-1', { five: 50 })];
   assert.deepEqual(nextLogin(MIXED, list, thread, NOW), { accountId: 'claude-1', provider: 'claude' });
-  list = [acct('claude-main', { five: 0, blocked: true, resets: 120 }), acct('codex-main', { five: 80 }), acct('claude-1', { five: 3, resets: 60 })];
+  list = [acct('claude-main', { five: 0, blocked: true, resets: 120 }), acct('codex-main', { five: 80 }), acct('claude-1', { five: 0.3, resets: 60 })];
   assert.deepEqual(nextLogin(MIXED, list, thread, NOW), { accountId: 'codex-main', provider: 'codex' });
-  list = [acct('claude-main', { five: 0, blocked: true, resets: 120 }), acct('codex-main', { blocked: true }), acct('claude-1', { five: 3, resets: 60 })];
+  list = [acct('claude-main', { five: 0, blocked: true, resets: 120 }), acct('codex-main', { blocked: true }), acct('claude-1', { five: 0.3, resets: 60 })];
   assert.deepEqual(nextLogin(MIXED, list, thread, NOW), { waitUntil: new Date(NOW + 60 * 60_000 + WAIT_SLACK_MS).toISOString(), accountId: 'claude-1' });
   assert.deepEqual(poolProviders(MIXED, list), ['claude', 'codex']);
 });
 
 test('roomWait: the earliest login back plus a minute, or 30 minutes when none says', () => {
-  const list = [acct('claude-main', { five: 0, blocked: true, resets: 300 }), acct('claude-1', { five: 50, week: 4, resets: 90 }), acct('claude-3', { five: 2, resets: 45 })];
+  const list = [acct('claude-main', { five: 0, blocked: true, resets: 300 }), acct('claude-1', { five: 50, week: 0.4, resets: 90 }), acct('claude-3', { five: 0.2, resets: 45 })];
   assert.deepEqual(roomWait(CLAUDE, list, NOW), { waitUntil: at(46), accountId: 'claude-3' });
   assert.deepEqual(roomWait(CLAUDE, [acct('claude-main', { blocked: true })], NOW), { waitUntil: new Date(NOW + UNKNOWN_WAIT_MS).toISOString() });
 });

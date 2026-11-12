@@ -103,13 +103,17 @@ public struct Project: Sendable, Hashable, Decodable, Identifiable {
     /// board as the runner last read it (docs/protocol.md, "Project tasks").
     public var notion: String?
     public var tasks: ProjectTasks?
+    /// The project it's a part of (docs/protocol.md, Projects, "Parts"),
+    /// nil for a project of its own and from a runner before parts.
+    public var parentId: String?
 
     public init(
         id: String, title: String, folders: [String] = [], goals: String = "", state: String = "", notes: String = "",
         links: [ProjectLink] = [], createdBy: ProjectAuthor = .librarian, createdByThread: String? = nil, createdAt: Date = Date(), updatedAt: Date = Date(),
         stateUpdatedAt: Date? = nil, archived: Bool = false, icon: ProjectIcon? = nil, threadCount: Int = 0, lastActivityAt: Date? = nil,
-        notion: String? = nil, tasks: ProjectTasks? = nil
+        notion: String? = nil, tasks: ProjectTasks? = nil, parentId: String? = nil
     ) {
+        self.parentId = parentId
         self.id = id
         self.title = title
         self.folders = folders
@@ -152,11 +156,12 @@ public struct Project: Sendable, Hashable, Decodable, Identifiable {
         lastActivityAt = date(.lastActivityAt)
         notion = string(.notion).flatMap { $0.isEmpty ? nil : $0 }
         tasks = (try? c.decodeIfPresent(ProjectTasks.self, forKey: .tasks)).flatMap { $0 }
+        parentId = string(.parentId).flatMap { $0.isEmpty ? nil : $0 }
     }
 
     enum CodingKeys: String, CodingKey {
         case id, title, folders, goals, state, notes, links, createdBy, createdByThread, createdAt, updatedAt, stateUpdatedAt
-        case archived, icon, threadCount, lastActivityAt, notion, tasks
+        case archived, icon, threadCount, lastActivityAt, notion, tasks, parentId
     }
 }
 
@@ -456,10 +461,15 @@ public struct LibrarianEntry: Sendable, Hashable, Decodable, Identifiable {
     /// "Put it in Threadbear", "Made Poddle and put it there".
     public var text: String
     public var projectIds: [String]
+    /// Why it joined each project, by project id.
+    public var reasons: [String: String]
+    /// The look's line overall, on a look that filed the thread somewhere.
+    public var why: String?
     public var costUsd: Double?
 
     public init(id: String, at: Date? = nil, threadId: String, threadTitle: String = "", reason: LibrarianReason = .asked,
-                outcome: Outcome = .nothing, text: String = "", projectIds: [String] = [], costUsd: Double? = nil) {
+                outcome: Outcome = .nothing, text: String = "", projectIds: [String] = [], reasons: [String: String] = [:],
+                why: String? = nil, costUsd: Double? = nil) {
         self.id = id
         self.at = at
         self.threadId = threadId
@@ -468,6 +478,8 @@ public struct LibrarianEntry: Sendable, Hashable, Decodable, Identifiable {
         self.outcome = outcome
         self.text = text
         self.projectIds = projectIds
+        self.reasons = reasons
+        self.why = why
         self.costUsd = costUsd
     }
 
@@ -482,10 +494,12 @@ public struct LibrarianEntry: Sendable, Hashable, Decodable, Identifiable {
         outcome = (try? c.decodeIfPresent(Outcome.self, forKey: .outcome)).flatMap { $0 } ?? .other
         text = string(.text) ?? ""
         projectIds = c.lossyArray(String.self, forKey: .projectIds)
+        reasons = (try? c.decodeIfPresent([String: String].self, forKey: .reasons)).flatMap { $0 } ?? [:]
+        why = string(.why)
         costUsd = (try? c.decodeIfPresent(Double.self, forKey: .costUsd)).flatMap { $0 }
     }
 
-    enum CodingKeys: String, CodingKey { case id, at, threadId, threadTitle, reason, outcome, text, projectIds, costUsd }
+    enum CodingKeys: String, CodingKey { case id, at, threadId, threadTitle, reason, outcome, text, projectIds, reasons, why, costUsd }
 }
 
 /// What the librarian is doing, has done and will do next.

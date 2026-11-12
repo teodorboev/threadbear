@@ -10,8 +10,8 @@ import type { SharedPool } from '../../src/pools.ts';
 import { SharedPools, type PoolBackend } from '../../src/shared-pools.ts';
 
 const login = (id: string, email?: string, provider: 'claude' | 'codex' = 'claude'): Account => ({ id, provider, title: id, configDir: `/tmp/${id}`, ...(email ? { email } : {}) });
-const MAC = [login('claude-main', 'mike@cannstudios.com'), login('claude-1', 'mike.cann@gmail.com'), login('codex-main', 'mike.cann@gmail.com', 'codex')];
-const BOX = [login('claude-main', 'mike.cann@gmail.com'), login('codex-main', 'mike.cann@gmail.com', 'codex')];
+const MAC = [login('claude-main', 'mike@studio.example'), login('claude-1', 'mike@example.net'), login('codex-main', 'mike@example.net', 'codex')];
+const BOX = [login('claude-main', 'mike@example.net'), login('codex-main', 'mike@example.net', 'codex')];
 const MAC_POOLS: Pool[] = [{ id: 'claude', title: 'Claude', accountIds: ['claude-main', 'claude-1'] }, { id: 'codex', title: 'Codex', accountIds: ['codex-main'] }];
 
 // A backend with one list that pushes to every subscriber, like Convex.

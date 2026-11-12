@@ -231,4 +231,41 @@ final class UsageStatsTests: XCTestCase {
         XCTAssertEqual(LimitPace.gap(70 * 60), "1 hour")
         XCTAssertEqual(LimitPace.gap(40 * 60), "40 min")
     }
+
+    // MARK: Rolling week
+
+    func testTheRollingWeekKeepsLastWeekAndBreaksAtTheReset() {
+        // Last week ran down to 5% and reset 20 hours ago; the new week
+        // hasn't been touched, so there's no reset time yet.
+        let now = at(12)
+        let h: (Double) -> Date = { now.addingTimeInterval($0 * 3600) }
+        let samples = [LimitSample(at: h(-200), remainingPercent: 90), // over a week ago
+                       LimitSample(at: h(-150), remainingPercent: 60),
+                       LimitSample(at: h(-30), remainingPercent: 5),
+                       LimitSample(at: h(-19), remainingPercent: 100),
+                       LimitSample(at: h(-2), remainingPercent: 100)]
+        let runs = RollingWeek.runs(samples: samples, current: 100, windowStart: nil, now: now)
+        XCTAssertEqual(runs.map { $0.map(\.remainingPercent) }, [[60, 5], [100, 100, 100]])
+        XCTAssertEqual(runs.last?.last?.at, now)
+    }
+
+    func testTheRollingWeekStartsTheCurrentWeekFull() {
+        // The week began 30 hours ago: full there whatever the readings
+        // around it, and a small rise in it (a revised reading) stays joined.
+        let now = at(12)
+        let h: (Double) -> Date = { now.addingTimeInterval($0 * 3600) }
+        let samples = [LimitSample(at: h(-40), remainingPercent: 97),
+                       LimitSample(at: h(-20), remainingPercent: 90),
+                       LimitSample(at: h(-10), remainingPercent: 92)]
+        let runs = RollingWeek.runs(samples: samples, current: 85, windowStart: h(-30), now: now)
+        XCTAssertEqual(runs.map { $0.map(\.remainingPercent) }, [[97], [100, 90, 92, 85]])
+        XCTAssertEqual(runs[1].first?.at, h(-30))
+    }
+
+    func testTheRollingWeeksDayLinesAreMidnights() {
+        let now = at(12)
+        let lines = RollingWeek.midnights(from: now.addingTimeInterval(-7 * 86400), to: now, calendar: calendar)
+        XCTAssertEqual(lines.count, 7)
+        XCTAssertTrue(lines.allSatisfy { calendar.component(.hour, from: $0) == 0 && calendar.component(.minute, from: $0) == 0 })
+    }
 }

@@ -1,0 +1,23 @@
+# The desktop app's Rust: the runner connection and the GPUI app, built
+# together with one lock file and one target folder.
+[workspace]
+resolver = "2"
+members = ["client", "core", "gpui", "dock", "dock/layout", "web"]
+# A copy of a published crate, built as a dependency only (below).
+exclude = ["vendor"]
+
+# gpui-kit's components, as published at 0.9.0, with this app's changes on
+# top: its popup menus drawn as macOS draws its own (the tick column beside
+# the icon, the metrics, the highlight), which nothing outside the crate can
+# reach (Mike, 12 Nov: the Inbox's sort menu "not spaced properly", and no
+# tick). `git log -p desktop/vendor` shows what's ours: the first commit
+# there is the crate as published. On a gpui-kit bump, copy the new version
+# in from ~/.cargo/registry/src and put those changes back on it.
+#
+# gpui-kit's base, the same way: the first commit under vendor/gpui-base is
+# 0.9.0 as published. Ours on top: a TextViewStyle switch for the hairline
+# the kit draws under every link, which Swift's replies don't have (Mike,
+# 12 Nov: "the links are underlined in the GPUI version").
+[patch.crates-io]
+gpui-component = { path = "vendor/gpui-component" }
+gpui-base = { path = "vendor/gpui-base" }

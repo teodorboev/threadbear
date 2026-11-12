@@ -274,6 +274,68 @@ final class ClickFeedbackTests: XCTestCase {
         XCTAssertNil(app.inboxZeroBear, "archived from its row, with no pane on it")
     }
 
+    /// The row leaves the list once it has slid, not when the runner
+    /// answers: on a busy Mac that took seconds, with the row's blank space
+    /// left in the inbox till then (11 Nov). News from before the runner
+    /// had the archive doesn't bring the row back.
+    func testAnArchivedRowLeavesBeforeTheRunnerAnswers() async throws {
+        let (app, transport) = try await connected()
+        app.archive("th1")
+        try await until { transport.waiting("threads.update") }
+        XCTAssertEqual(app.threads["th1"]?.isArchived, true)
+        app.receiveForTesting(ThreadSummary(id: "th1", title: "Fix it", status: .idle))
+        XCTAssertEqual(app.threads["th1"]?.isArchived, true, "an older summary doesn't put the row back")
+        XCTAssertEqual(app.threads["th1"]?.status, .idle, "the rest of it lands")
+        // Nor does a whole list stored over it (a reconnect, another runner's).
+        app.threads = ["th1": ThreadSummary(id: "th1", title: "Fix it", status: .idle)]
+        XCTAssertEqual(app.threads["th1"]?.isArchived, true, "a list from before the archive doesn't either")
+        transport.answer("threads.update", ["thread": ["id": "th1", "title": "Fix it", "archivedAt": "2026-11-11T00:00:00Z"]])
+        try await until { app.archivesInFlight.isEmpty }
+        app.receiveForTesting(ThreadSummary(id: "th1", title: "Fix it", status: .idle))
+        XCTAssertEqual(app.threads["th1"]?.isArchived, false, "once it's answered, the runner's word goes")
+    }
+
+    func testARefusedArchiveBringsTheRowBack() async throws {
+        let (app, transport) = try await connected()
+        app.archive("th1")
+        try await until { transport.waiting("threads.update") }
+        transport.fail("threads.update", message: "Busy")
+        try await until { app.threads["th1"]?.isArchived == false }
+        try await until { app.slidingOff.isEmpty }
+        XCTAssertTrue(app.archivesInFlight.isEmpty)
+    }
+
+    /// Undo while the archive is still on its way: the row's back at once,
+    /// and the archive's late answer doesn't take it away again.
+    func testUndoWhileTheArchiveIsOnItsWay() async throws {
+        let (app, transport) = try await connected()
+        app.archive("th1")
+        try await until { transport.waiting("threads.update") }
+        app.undoArchive()
+        XCTAssertEqual(app.threads["th1"]?.isArchived, false)
+        transport.answer("threads.update", ["thread": ["id": "th1", "title": "Fix it", "archivedAt": "2026-11-11T00:00:00Z"]])
+        try await Task.sleep(for: .milliseconds(50))
+        XCTAssertEqual(app.threads["th1"]?.isArchived, false, "the archive's answer came after the undo")
+        try await until { transport.waiting("threads.update") }
+        transport.answer("threads.update", ["thread": ["id": "th1", "title": "Fix it"]])
+        try await Task.sleep(for: .milliseconds(50))
+        XCTAssertEqual(app.threads["th1"]?.isArchived, false)
+    }
+
+    /// Undo while the archive is on its way, then both refused: it's still
+    /// in the inbox, as the runner never archived it (Codex's review, 11 Nov).
+    func testUndoThenBothRefusedLeavesItInTheInbox() async throws {
+        let (app, transport) = try await connected()
+        app.archive("th1")
+        try await until { transport.waiting("threads.update") }
+        app.undoArchive()
+        transport.fail("threads.update", message: "Busy")
+        try await until { transport.waiting("threads.update") }
+        transport.fail("threads.update", message: "Busy")
+        try await Task.sleep(for: .milliseconds(50))
+        XCTAssertEqual(app.threads["th1"]?.isArchived, false)
+    }
+
     // MARK: The card settling in
 
     /// Rises and fades on its layer, so it runs whatever the main thread's

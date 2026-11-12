@@ -30,6 +30,20 @@ public struct TurnGap: Sendable, Hashable {
         return time + " · " + cause
     }
 
+    /// The label on one line: only up to the first line break, with "…"
+    /// when more followed. What finished can be a whole command, commit
+    /// message and all; drawn whole, its lines spilled out of the row's
+    /// fixed height (thread a92fcf9a, 12 Nov). Cutting it to the column's
+    /// width is the view's job.
+    public var labelLine: String {
+        let label = self.label
+        guard let cut = label.firstIndex(where: \.isNewline) else { return label }
+        var first = label[..<cut]
+        while first.last?.isWhitespace == true { first.removeLast() }
+        let rest = label[label.index(after: cut)...].trimmingCharacters(in: .whitespacesAndNewlines)
+        return rest.isEmpty ? String(first) : String(first) + "…"
+    }
+
     /// How long, in the words someone would say it.
     public static func later(_ milliseconds: Double) -> String {
         let seconds = max(0, Int(saturating: (milliseconds / 1000).rounded()))

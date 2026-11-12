@@ -9,9 +9,9 @@ Mike has four Claude logins and one Codex login. Before every thread he looks at
 ## What it's like when it's done
 
 - **Composer.** The account chip is gone. The model chip reads "Claude · Opus 5.5 · High". If a thread is pinned to one login, it reads "gmail · Opus 5.5 · High".
-- **Picker.** The rail down the left lists pools, not providers. Each one shows its title and a small "3 · 61%" (how many logins, and the best room among them). Picking a pool lists its models. A mixed pool lists them under a heading per provider. Under Effort, one quiet line describes the pool, for example "gangbusters 61% · gmail 16% · cannstudios resting until 5 am". Below that, "Pin to a login ›" opens the list of logins with their usage, for the rare times Mike wants one.
+- **Picker.** The rail down the left lists pools, not providers. Each one shows its title and a small "3 · 61%" (how many logins, and the best room among them). Picking a pool lists its models. A mixed pool lists them under a heading per provider. Under Effort, one quiet line describes the pool, for example "org 61% · gmail 16% · studio resting until 5 am". Below that, "Pin to a login ›" opens the list of logins with their usage, for the rare times Mike wants one.
 - **Folders choose the pool.** A new thread in a folder named in a pool's `folders` starts on that pool, so anything under `~/dev/convex` starts on Convex. Everywhere else, it starts on the pool Mike last picked.
-- **Moving mid-thread.** When a pool thread's login hits its limit, the runner moves the thread to the next login with room and carries on. The transcript gets one line: "Moved to mike@gangbusters.io: mike.cann@gmail.com hit its 5-hour limit, back at 6:10 pm." If nothing in the pool has room, the thread waits: "Every login in Claude is out of room. Carrying on at 5:00 am when mike@cannstudios.com is back." It carries on by itself at that time.
+- **Moving mid-thread.** When a pool thread's login hits its limit, the runner moves the thread to the next login with room and carries on. The transcript gets one line: "Moved to mike@example.org: mike@example.net hit its 5-hour limit, back at 6:10 pm." If nothing in the pool has room, the thread waits: "Every login in Claude is out of room. Carrying on at 5:00 am when mike@studio.example is back." It carries on by itself at that time.
 - **Settings › Pools** lists the pools. Mike can add, rename and delete pools, tick which logins are in each and drag them into order, and set the folders. The built-in ones are there to start with.
 
 ## Decisions
@@ -75,7 +75,7 @@ pools.updated { pools: Pool[] }     // after pools.save, and when the login list
 
 - `runner/src/pools.ts`: `defaultPools(accounts, notes, folders)`, `readPools(cfg, accounts)`, `validatePools`, `poolForFolder(pools, cwd)`, `pickInPool(pool, accounts, { provider, exclude, current })` (built on `usage.ts`'s `accountRoom` and `MIN_ROOM_PERCENT`), `nextLogin(pool, accounts, thread)` → `{ accountId, provider } | { waitUntil, accountId? }`. Pure functions with unit tests.
 - `config.ts`: `pools?` from runner.json, `DEFAULT_POOL_FOLDERS`.
-- `store.ts` `ThreadRecord`: `poolId?`, `waitingForRoom?`, `autoCarryOn?: string` (the turn id that already had its one automatic carry-on).
+- `store.ts` `ThreadRecord`: `poolId?`, `waitingForRoom?`, `autoCarryOn?: string` (the turn id that already had its one automatic carry-on; dropped 12 Nov 2026, when a carry-on that runs dry started moving on again).
 - `runner.ts`:
   - `threads.create` picks the pool (explicit, else folder, else the model's provider, else `defaults.poolId`) and the login;
   - a `beforeTurn` check where queued sends start;
@@ -94,7 +94,7 @@ pools.updated { pools: Pool[] }     // after pools.save, and when the login list
 - Transcript: the move and wait notes are `system.note`s, which already draw. A waiting thread's sidebar row reads "Waiting for room · 5:00 am" in the secondary colour.
 - Settings › Pools: list, add, rename, delete; login checkboxes with drag order; a folders field. Saving calls `pools.save`.
 - `Automation` and `AppDump` get the new picker parts, so scripts can check them. The mock runner and screenshot scenes get pools, and `Screenshots.swift` gets scenes for the picker, a pinned thread and Settings › Pools.
-- The model chip's tick bug: the account menu's tick and the chip disagreed in Mike's screenshot (tick on cannstudios, chip on gangbusters). Both read `ThreadSettings.account`, so one of the two views was stale. The account menu goes away, but the pin list must read the live value.
+- The model chip's tick bug: the account menu's tick and the chip disagreed in Mike's screenshot (tick on studio, chip on org). Both read `ThreadSettings.account`, so one of the two views was stale. The account menu goes away, but the pin list must read the live value.
 
 ## Order
 

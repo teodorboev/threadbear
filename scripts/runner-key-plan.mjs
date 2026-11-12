@@ -45,3 +45,33 @@ export function runnerKeyPlan({ envGet, nextGet, local, joining }) {
   if (value) return { action: 'copy' };
   return { action: 'set' };
 }
+
+// What setup prints at the end on a joining Mac (step 9), worked out here so
+// a test can check it. Wayne's second Mac (issue #39): the name it printed
+// had .local cut off, so it didn't resolve; Remote Login was off, which
+// nothing said was needed; and his user name there wasn't the first Mac's.
+//
+//   localHost  `scutil --get LocalHostName` (the Bonjour name, without .local), or ''
+//   hostname   os.hostname()
+//   user       this Mac's user name
+//   name       --name, if given
+//   sshOn      whether something answers on this Mac's port 22
+//
+// Returns the lines to print, in order.
+export function joinSteps({ localHost, hostname, user, name, sshOn }) {
+  // The Bonjour name is what other Macs on the network find this one by;
+  // os.hostname() can be a DHCP name (Mac.lan) or an address instead.
+  const bare = (localHost || hostname || 'this-mac').trim().replace(/\.local\.?$/i, '');
+  const host = /^[\d.]+$|:/.test(bare) || /\./.test(bare) ? bare : `${bare}.local`;
+  const target = user ? `${user}@${host}` : host;
+  const lines = [];
+  if (!sshOn) {
+    lines.push("Remote Login is off on this Mac, and your first Mac needs it for the next step (it hands this Mac its key over ssh). Turn it on in System Settings > General > Sharing > Remote Login, then carry on.");
+  }
+  lines.push(`On your first Mac, run: tb runner add ${name ?? bare} --ssh ${target}`);
+  lines.push("It gives this Mac's runner a key of its own and the deployment's address, over ssh. Then restart the runner here (tb restart) and its threads show on your phone and your first Mac.");
+  // Forwarding off, as tb runner add's own ssh has it (runner-keys.ts SSH_OPTIONS).
+  lines.push(`ssh from your first Mac has to work without a password or a question first, as tb runner add can't answer either. Run ssh -o ForwardAgent=no -o ClearAllForwardings=yes -o ForwardX11=no ${target} there once by hand: answer yes to the host key only if its fingerprint matches this Mac's (ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub here), and if it asks for a password, run ssh-copy-id -o ClearAllForwardings=yes ${target}. tb runner add says which it hit if it fails.`);
+  lines.push('tb runner check (here) says if a deploy key or Convex login from an earlier setup is still on this Mac, which you should remove.');
+  return lines;
+}

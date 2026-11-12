@@ -436,9 +436,18 @@ button.fold:hover > svg:last-child, button.fold:focus-visible > svg:last-child {
 .choice:hover { background: var(--hover); }
 .choice .radio { width: 15px; height: 15px; margin-top: 3px; border-radius: 50%; border: 1.5px solid var(--faint); flex: none; }
 .choice .radio.check { border-radius: 4px; }
+/* The done card's loose ends (docs/protocol.md, "Loose ends"), above its follow-ups. */
+.loose-ends { display: flex; flex-direction: column; gap: 6px; margin-bottom: 10px; }
+.loose-label { font-size: 12px; color: var(--muted); }
+.loose { display: flex; gap: 10px; align-items: baseline; }
+.loose-mark { flex: none; width: 16px; text-align: center; font-weight: 700; }
+.loose.open .loose-mark { color: #f09a37; }
+.loose.booked .loose-mark { font-size: 12px; }
 .choice.on .radio { border: 5px solid var(--accent); }
 .choice.on .radio.check { border: 0; background: var(--accent); }
-.choice .pick { color: var(--link); font-size: 12px; margin-left: 6px; }
+/* The agent's pick: a small gold star and "Recommended" in grey, as on the Mac (after Ghostex's, 9 Nov 2026). */
+.choice .pick { color: var(--muted); font-size: 12px; margin-left: 8px; }
+.choice .pick .star { color: #d9b154; font-size: 10px; }
 .choice .desc { display: block; color: var(--muted); font-size: 12.5px; }
 .ask-links { display: flex; gap: 8px; flex-wrap: wrap; }
 .approval-input { margin: 0; background: var(--code); border-radius: 8px; padding: 8px 10px; white-space: pre-wrap; max-height: 200px; overflow: auto; }
@@ -503,3 +512,23 @@ button.fold:hover > svg:last-child, button.fold:focus-visible > svg:last-child {
 @media (prefers-color-scheme: dark) { .reply-button.rb-pressed { color: #5fd17f; } }
 :root[data-theme='dark'] .reply-button.rb-pressed { color: #5fd17f; }
 :root[data-theme='light'] .reply-button.rb-pressed { color: #23863f; }
+
+.ask-run { margin: 10px 0; }
+.ask-run-command { margin: 0 0 6px; padding: 10px 12px; background: var(--hover); border: 1px solid var(--line); border-radius: 8px; font: 12.5px/1.5 ui-monospace, Menlo, monospace; white-space: pre-wrap; word-break: break-all; }
+.ask-run-note { font-size: 12px; color: var(--muted, #888); margin-bottom: 4px; }
+.ask-run-failed { color: #d9534f; }
+
+/* Another lab's review over its turn's reply (review-row.tsx): small and
+   quiet, as on the Mac, since it happens in the background. */
+.lab-review { font-size: 12.5px; line-height: 1.5; margin-top: 2px; margin-bottom: -4px; }
+.lab-review-head { display: block; color: var(--faint); text-decoration: none; }
+a.lab-review-head:hover { color: var(--muted); }
+.lab-finding { display: flex; gap: 8px; align-items: flex-start; margin-top: 4px; }
+.lab-mark { flex: none; width: 14px; height: 19px; display: flex; align-items: center; }
+.lab-mark svg { width: 13px; height: 13px; }
+.lab-mark.fixed { color: #34c759; }
+.lab-mark.disputed { color: var(--orange); }
+.lab-mark.left { color: var(--accent); }
+.lab-mark.none { color: var(--faint); }
+.lab-claim { color: var(--muted); }
+.lab-detail { color: var(--faint); }

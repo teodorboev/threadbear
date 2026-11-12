@@ -80,7 +80,7 @@ export const highlightsPart = {
   // Mike is looking at it. Resolves when the app says it has, or after
   // waitMs with shown false. Everything up to the wait runs before the
   // promise is returned, so the request is there as soon as this is called.
-  async showPanel(this: Runner, threadId: string, ask: { panel: string; where?: PanelPlace }, waitMs = PANEL_ACK_WAIT_MS): Promise<{ request: PanelRequest; shown: boolean }> {
+  async showPanel(this: Runner, threadId: string, ask: { panel: string; where?: PanelPlace; reload?: boolean }, waitMs = PANEL_ACK_WAIT_MS): Promise<{ request: PanelRequest; shown: boolean }> {
     const st = this.mustGet(threadId);
     if (ask.where !== undefined && !PANEL_PLACES.includes(ask.where)) {
       throw new RpcError(ErrorCode.badParams, `where is ${PANEL_PLACES.slice(0, -1).join(', ')} or ${PANEL_PLACES.at(-1)}.`);
@@ -94,6 +94,8 @@ export const highlightsPart = {
     }
     const request: PanelRequest = { id: crypto.randomUUID(), panel: panel.id, title: panel.title, at: this.isoNow() };
     if (ask.where) request.where = ask.where;
+    // A web panel's page, read again as it's shown: the agent has changed it.
+    if (ask.reload) request.reload = true;
     return { request, shown: await this.requestPanel(st, request, waitMs) };
   },
 

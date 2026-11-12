@@ -189,8 +189,8 @@ public final class RemoteFileCache: @unchecked Sendable {
             guard let data = read.data else { return nil }
             let file = Self.fileName(runnerId: runnerId, path: path)
             let url = root.appendingPathComponent(file)
-            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try data.write(to: url, options: .atomic)
+            // Another Mac's file: this user's only (PrivateFile).
+            try PrivateFile.write(data, to: url)
             entries[key] = Entry(runnerId: runnerId, path: path, file: file, stamp: read.stamp, truncated: read.truncated,
                                  mediaType: read.mediaType, bytes: data.count, usedAt: now())
             checked.insert(key)
@@ -245,8 +245,7 @@ public final class RemoteFileCache: @unchecked Sendable {
 
     private func saveLocked() {
         do {
-            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-            try JSONEncoder().encode(entries).write(to: indexURL, options: .atomic)
+            try PrivateFile.write(JSONEncoder().encode(entries), to: indexURL)
         } catch {
             // A cache that can't save its index just fetches again next time.
         }

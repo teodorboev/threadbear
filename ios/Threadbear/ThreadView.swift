@@ -28,18 +28,17 @@ struct ThreadView: View {
     /// arrive (the oldest seq changes) or the runner says it couldn't.
     /// (A backend before API 2.)
     @State private var loadingBefore: Int?
-    /// From API 2: the newest `limit` messages and tool lines live from
-    /// Convex, and older chunks once you've scrolled back past those.
+    /// From API 2: the newest `firstPage` messages and tool lines live from
+    /// Convex, and older chunks read once as you scroll back (MessageHistory).
     @State private var history = MessageHistory()
-    @State private var limit = ThreadView.firstPage
     /// A chunk of older rows has been asked for and hasn't come yet.
     @State private var loadingChunk = false
     /// A finger's on the list, or it's still gliding from a flick.
     @State private var scrolling = false
-    /// Older rows that came while `scrolling`, put in once it stops: a bigger
-    /// live page (with the limit it was asked for), or a chunk (with the seq
-    /// it comes before).
-    @State private var heldPage: (page: MessagePage, limit: Int)?
+    /// Older rows that came while `scrolling`, put in once it stops: a live
+    /// page reaching further back than the rows shown, or a chunk (with the
+    /// seq it comes before).
+    @State private var heldPage: MessagePage?
     @State private var heldChunk: (page: MessagePage, before: Int)?
     /// Older rows have just gone in above: until then, the list's next growth
     /// is theirs, and the view moves down by it to stay on the same rows.
@@ -71,6 +70,8 @@ struct ThreadView: View {
     @State private var answeredDone: Int?
     /// The working a work: link opened.
     @State private var workLink: ThreadLinks.Hit?
+    /// The plan open in its sheet, from its card or the card it waits on.
+    @State private var planShown: PhoneMessage?
     @Environment(\.pushThread) private var pushThread
     static let firstPage = 80
     static let morePerPage = 200
@@ -114,7 +115,8 @@ struct ThreadView: View {
                 model.draftText = nil
             }
         }
-        .task(id: "\(threadId):\(limit):\(model.hasMessagePages):\(model.connection)") { await followMessages() }
+        .task(id: "\(threadId):\(model.hasMessagePages):\(model.connection)") { await followMessages() }
+        .task(id: "\(threadId):\(history.lateImagesFrom ?? -1):\(model.connection):\(model.apiVersion ?? 0)") { await followLateImages() }
         .task(id: "\(sent?.id ?? ""):\(model.connection)") { await followCommand() }
         .task(id: answeredCommand) {
             guard let id = answeredCommand, let status = await model.commandOutcome(id), status.state == .failed,
@@ -136,9 +138,9 @@ struct ThreadView: View {
         let pins = pictures.pinned(in: items)
         let paged = model.hasMessagePages && history.live != nil
         let canLoadMore = paged ? history.hasMore : thread.hasEarlier(than: detail.messages.first?.seq)
-        // Paged: a bigger page or a chunk has been asked for, or is waiting
-        // for the list to stop, and isn't shown yet.
-        let loadingMore = paged ? (history.liveLimit != limit || loadingChunk || heldPage != nil || heldChunk != nil) : loadingBefore == detail.messages.first?.seq
+        // Paged: a chunk has been asked for, or is waiting for the list to
+        // stop, and isn't shown yet.
+        let loadingMore = paged ? (loadingChunk || heldPage != nil || heldChunk != nil) : loadingBefore == detail.messages.first?.seq
         return ScrollViewReader { proxy in
             ScrollView {
                 // Not a LazyVStack. Opening a long thread left the screen blank
@@ -165,8 +167,14 @@ struct ThreadView: View {
                             loadMore(thread, detail: detail, paged: paged)
                         }
                     }
+                    // Another lab's review goes over its turn's reply, as on the Mac (backend API 76).
+                    let reviewAt = thread.review == nil ? nil : LabReviewText.replySeq(in: messages, cardTurn: thread.cardTurn)
                     ForEach(items) { item in
                         switch item {
+                        case let .message(message) where message.plan: PlanCard(message: message)
+                        case let .message(message) where message.seq == reviewAt:
+                            if let review = thread.review { ReviewRow(review: review, openThread: { pushThread($0) }) }
+                            MessageView(message: message, pinned: pins.under[message.seq] ?? [])
                         case let .message(message): MessageView(message: message, pinned: pins.under[message.seq] ?? [])
                         case let .tools(run): ToolRunView(items: run)
                         case let .worked(worked): WorkedView(worked: worked)
@@ -182,7 +190,8 @@ struct ThreadView: View {
                                            cancelling: cancelling.contains(send.id)) { cancel(send) }
                     }
                     if let pending = thread.pendingApproval {
-                        PendingCard(threadId: thread.threadId, runnerId: thread.runnerId, pending: pending) { sent = ($0, nil) }
+                        PendingCard(threadId: thread.threadId, runnerId: thread.runnerId, pending: pending,
+                                    plan: Plans.plan(for: pending, in: messages)) { sent = ($0, nil) }
                             // Its own state per question: a tapped button doesn't carry over to the next.
                             .id(pending.id)
                             .transition(Juice.cardGoes)
@@ -190,9 +199,9 @@ struct ThreadView: View {
                         WorkingLine(text: thread.working)
                             .id("working:\(thread.status == .running)")
                     } else if let asks = thread.asks, !asks.isEmpty, showsAsks(thread) {
-                        AsksCard(asks: asks, picks: $picks, busy: sendingCard) {
+                        AsksCard(asks: asks, picks: $picks, busy: sendingCard, send: {
                             sendCard(thread, lastSeq: messages.last?.seq)
-                        }
+                        }, run: { model.pressRun(threadId: thread.threadId, buttonId: $0.buttonId) }, pressingRuns: model.pressingRuns)
                         .onChange(of: thread.asksSeq, initial: true) {
                             // A new card starts with nothing picked.
                             if pickedFor != thread.asksSeq { picks = [:]; pickedFor = thread.asksSeq }
@@ -205,7 +214,7 @@ struct ThreadView: View {
                     } else if isDone(thread, messages: messages) {
                         // Ticked follow-ups go from the card's Send on their
                         // own; anything typed stays in the box for later.
-                        DoneCard(next: thread.next ?? [], picked: $nextPicks, busy: sendingCard) {
+                        DoneCard(next: thread.next ?? [], looseEnds: thread.looseEnds ?? [], openThread: { pushThread($0) }, picked: $nextPicks, busy: sendingCard) {
                             sendCard(thread, lastSeq: messages.last?.seq)
                         } archive: {
                             archive()
@@ -235,8 +244,10 @@ struct ThreadView: View {
             .onScrollPhaseChange { _, phase in
                 scrolling = phase.isScrolling
                 guard !scrolling else { return }
-                if let held = heldPage { putIn(held.page, limit: held.limit) }
+                // The chunk first: it was asked for before the rows shown now,
+                // and a page reaching further back would make it too late.
                 if let held = heldChunk { putIn(chunk: held.page, before: held.before) }
+                if let held = heldPage { putIn(held) }
             }
             // Older rows have gone in above: down by their height, so the rows
             // on screen stay put. By height rather than back to a row, as a
@@ -265,6 +276,18 @@ struct ThreadView: View {
             .environment(\.threadLink) { url, seq in follow(url, from: seq, in: items) }
             .environment(\.buttonThreadId, threadId)
             .sheet(item: $workLink) { WorkingSheet(link: $0).environment(\.threadPictures, pictures) }
+            .environment(\.openPlan) { planShown = $0 }
+            .sheet(item: $planShown) { plan in
+                let pending = thread.pendingApproval
+                // Go ahead only on the card that waits on this very plan, when it can be allowed from here.
+                let waitsOnIt = Plans.plan(for: pending, in: messages)?.seq == plan.seq
+                PlanSheet(plan: plan, approvalId: waitsOnIt && Plans.canGoAhead(pending) ? pending?.id : nil, canSendBack: Plans.canSendBack(plan, pending: pending, in: messages)) { approvalId in
+                    goAhead(approvalId)
+                } sendBack: { text in
+                    await send(text, to: thread)
+                }
+                .environment(\.threadPictures, pictures)
+            }
             .onChange(of: messages.last?.seq) { proxy.scrollTo("bottom", anchor: .bottom) }
             // The first page takes over from phone:thread's newest text
             // messages, usually at a different height. Stay on the newest.
@@ -279,8 +302,14 @@ struct ThreadView: View {
                 if quick.voiceThreadId == threadId, !typing {
                     VoiceBar(threadId: threadId, afterSeq: messages.last?.seq ?? 0, working: thread.isBusy) { typing = true }
                 } else {
-                    Composer(text: $draft, placeholder: composerPlaceholder(thread), links: thread.links ?? [], threadId: thread.id, provider: thread.provider) { text, photos in
+                    Composer(text: $draft, placeholder: composerPlaceholder(thread), links: thread.links ?? [], threadId: thread.id, provider: thread.provider,
+                             running: thread.isBusy, stopping: model.stopping.contains(thread.threadId),
+                             onStop: model.canStop ? { model.stop(threadId: thread.threadId) } : nil) { text, photos in
                         await send(text, photos: photos, to: thread)
+                    }
+                    // The turn is over (stopped, or finished first): Stop's spinner goes.
+                    .onChange(of: thread.isBusy) { _, busy in
+                        if !busy { model.stopped(thread.threadId) }
                     }
                 }
             }
@@ -484,53 +513,58 @@ struct ThreadView: View {
         }
     }
 
-    /// API 2: the thread's newest `limit` messages, live from Convex.
+    /// API 2: the thread's newest `firstPage` messages, live from Convex.
+    /// Only those: a live query reads its whole page again for each new
+    /// message, so older rows come once each in chunks (loadChunk).
     private func followMessages() async {
         guard model.hasMessagePages, let backend = model.backend else { return }
         do {
-            let asked = limit
-            for try await value in backend.messages(threadId, limit: asked) { receive(value, limit: asked) }
+            for try await value in backend.messages(threadId, limit: ThreadView.firstPage) { receive(value) }
         } catch {
             model.report(error)
         }
     }
 
-    /// Older rows wait while the list is moving. Scrolling up to the top
-    /// loads them, so they often land mid-flick or while the list is still
-    /// bouncing off the top, and a scroll made then was ignored: you were
-    /// left at the very top of the new rows with Load earlier showing, so
-    /// the next pull loaded another page, and so on (8 Nov, seen on a real
-    /// 7,500-message thread with real flicks on Tinker Desk). Meanwhile the
-    /// rows already on screen keep up, so a new message isn't held back.
-    private func receive(_ value: MessagePage, limit asked: Int) {
-        guard let shown = history.live?.messages.first?.seq, let first = value.messages.first?.seq, first < shown else {
+    /// The page reaching further back than the rows shown (big rows above
+    /// its byte cap that got smaller) puts rows in above. Those wait while
+    /// the list is moving, as a chunk does: a scroll made mid-flick to keep
+    /// the place is ignored. The rows already shown keep up meanwhile.
+    private func receive(_ value: MessagePage) {
+        guard let shown = history.firstSeq, let first = value.messages.first?.seq, first < shown else {
             heldPage = nil
-            history.takeLive(value, limit: asked)
+            history.takeLive(value)
             return
         }
         if scrolling {
-            heldPage = (value, asked)
-            // And only their pictures: one pinned above them would find no
-            // reply of its own and land under the first one shown. Still the
-            // old limit, so it shows as loading.
-            history.takeLive(MessagePage(messages: value.messages.filter { $0.seq >= shown }, hasMore: true, images: value.images.filter { $0.seq >= shown }), limit: history.liveLimit)
+            heldPage = value
+            history.takeLive(MessagePage(messages: value.messages.filter { $0.seq >= shown }, hasMore: true, images: value.images.filter { $0.seq >= shown }))
         } else {
-            putIn(value, limit: asked)
+            putIn(value)
         }
     }
 
-    /// A live page with older rows above the ones shown, in place.
-    private func putIn(_ value: MessagePage, limit asked: Int) {
+    private func putIn(_ value: MessagePage) {
         heldPage = nil
         prependedUntil = .now + 5
-        history.takeLive(value, limit: asked)
+        history.takeLive(value)
     }
 
-    /// Older rows than the live page holds, once the server won't make it
-    /// any bigger (MessageHistory).
+    /// API 37: pictures of rows read once. A picture can finish uploading
+    /// after its row went into a chunk or slid off the live page, and neither
+    /// is read again. This re-runs only when a picture row changes.
+    private func followLateImages() async {
+        guard let from = history.lateImagesFrom, let backend = model.backend,
+              model.isFake || (model.apiVersion ?? 0) >= BackendCompatibility.imagesAPIVersion else { return }
+        do {
+            for try await images in backend.images(threadId, from: from) { history.takeLateImages(images) }
+        } catch {
+            model.report(error)
+        }
+    }
+
+    /// Older rows than the live page holds, read once (MessageHistory).
     private func loadChunk(before seq: Int) {
         guard let backend = model.backend else { return }
-        history.startChunks()
         loadingChunk = true
         Task {
             defer { loadingChunk = false }
@@ -548,17 +582,12 @@ struct ThreadView: View {
         if history.takeOlder(chunk, before: seq) { prependedUntil = .now + 5 }
     }
 
-    /// Older messages: from API 2 a bigger page from Convex (works with the
-    /// Mac asleep), then chunks past what one page may hold; before that,
-    /// the runner pages them in.
+    /// Older messages: from API 2 a chunk from Convex (works with the Mac
+    /// asleep); before that, the runner pages them in.
     private func loadMore(_ thread: PhoneThread, detail: ThreadDetail, paged: Bool) {
         if paged {
-            guard heldPage == nil, heldChunk == nil, !loadingChunk else { return }
-            switch history.next(limit: limit, step: ThreadView.morePerPage) {
-            case let .grow(next): limit = next
-            case let .older(before): loadChunk(before: before)
-            case .none: break
-            }
+            guard heldPage == nil, heldChunk == nil, !loadingChunk, let before = history.nextBefore else { return }
+            loadChunk(before: before)
         } else {
             loadEarlier(thread, before: detail.messages.first?.seq)
         }
@@ -593,7 +622,7 @@ struct ThreadView: View {
     /// A finished turn that needs nothing from Mike: the done card's place.
     private func isDone(_ thread: PhoneThread, messages: [PhoneMessage]) -> Bool {
         thread.status == .idle && !thread.needsYou && thread.archivedAt == nil && thread.working == nil
-            && messages.last?.role == .assistant && nothingOnItsWay
+            && Turns.lastShown(messages)?.role == .assistant && nothingOnItsWay
             && (answeredDone == nil || answeredDone != messages.last?.seq)
     }
 
@@ -651,6 +680,15 @@ struct ThreadView: View {
             model.report(error)
             return false
         }
+    }
+
+    /// Go ahead on a waiting plan from its sheet: Allow on its card, as the
+    /// card's own button does, spinning until the card goes.
+    private func goAhead(_ approvalId: String) {
+        let threadId = threadId
+        _ = model.answerCard(approvalId, choice: ApprovalOption.allow.rawValue, send: { backend in
+            try await backend.respond(threadId: threadId, approvalId: approvalId, decision: .allow)
+        }, sent: { sent = ($0, nil) })
     }
 
     private func loadEarlier(_ thread: PhoneThread, before seq: Int?) {

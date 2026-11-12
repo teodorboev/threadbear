@@ -120,20 +120,51 @@ final class SlashPaletteCoordinator: NSObject, NSWindowDelegate {
 
     /// Where it goes: on the box's top edge with a gap, centred on the
     /// box, as wide as the box unless Mike chose a width, and never past
-    /// the window's sides.
+    /// the window's content or the edges of the screen the box is on.
     func place() {
         guard let panel, let anchor, let parent = anchor.window else { return }
         let box = parent.convertToScreen(anchor.convert(anchor.bounds, to: nil))
         let window = parent.frame
+        // The box's screen, not the window's: with the window across two
+        // displays macOS draws it on one only, and the picker went off on
+        // the other (Wayne Sutton's fork, 10 Nov).
+        let boxScreen = NSScreen.screens.first { $0.frame.contains(NSPoint(x: box.midX, y: box.midY)) }
+        let screen = (boxScreen ?? parent.screen ?? NSScreen.main)?.visibleFrame ?? window
         // A drag going on wins over what's kept.
         let chosen = live ?? layout?.wrappedValue
-        let width = CGFloat(chosen?.width.map { SlashPalette.Layout.width($0, window: window.width + 64) } ?? box.width)
-        let height = CGFloat(chosen?.height.map { SlashPalette.Layout.height($0, window: window.height) } ?? autoHeight)
+        let placed = Self.placement(
+            box: box, window: window,
+            content: parent.convertToScreen(parent.contentLayoutRect), screen: screen,
+            width: CGFloat(chosen?.width.map { SlashPalette.Layout.width($0, window: window.width + 64) } ?? box.width),
+            height: CGFloat(chosen?.height.map { SlashPalette.Layout.height($0, window: window.height) } ?? autoHeight),
+            gap: zoomed(8))
+        if panel.frame != placed.frame { panel.setFrame(placed.frame, display: true) }
+        panel.maxSize = placed.maxSize
+    }
+
+    /// The sums behind `place()`, apart so tests can try boxes at a
+    /// screen's edges. Sideways it stays inside both the window and the
+    /// screen. Upwards it stops at the top of the window's content (a new
+    /// thread's box sits mid-window and the palette ran up off the window,
+    /// 10 Nov) and at the top of the screen (a window pushed up against
+    /// it cut off the first rows, Wayne Sutton's fork, 10 Nov). When there
+    /// isn't room above for what it wants and there's more below, it
+    /// goes under the box instead.
+    nonisolated static func placement(box: NSRect, window: NSRect, content: NSRect, screen: NSRect,
+                          width wanted: CGFloat, height wantedHeight: CGFloat, gap: CGFloat) -> (frame: NSRect, maxSize: NSSize) {
+        let margin: CGFloat = 8
+        let left = max(window.minX, screen.minX) + margin
+        let right = min(window.maxX, screen.maxX) - margin
+        let width = max(min(wanted, right - left), 0)
+        let above = min(content.maxY, screen.maxY) - margin - (box.maxY + gap)
+        let below = (box.minY - gap) - (max(content.minY, screen.minY) + margin)
+        let goBelow = wantedHeight > above && below > above
+        let height = max(min(wantedHeight, goBelow ? below : above), 0)
         var x = box.midX - width / 2
-        x = min(max(x, window.minX + 8), window.maxX - 8 - width)
-        let frame = NSRect(x: x, y: box.maxY + zoomed(8), width: width, height: height)
-        if panel.frame != frame { panel.setFrame(frame, display: true) }
-        panel.maxSize = NSSize(width: window.width - 16, height: window.height * 0.85)
+        x = min(max(x, left), right - width)
+        let y = goBelow ? box.minY - gap - height : box.maxY + gap
+        let maxSize = NSSize(width: max(right - left, 0), height: max(min(window.height * 0.85, max(above, below)), 0))
+        return (NSRect(x: x, y: y, width: width, height: height), maxSize)
     }
 
     // A drag of one of PaletteFrame's edges. Worked from where the

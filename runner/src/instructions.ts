@@ -17,7 +17,6 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { experimentOn } from './experiments.ts';
 import { atomicWriteFileSync } from './fsutil.ts';
 import { ErrorCode, RpcError } from './protocol.ts';
 import type { Notification } from './runner.ts';
@@ -43,7 +42,6 @@ const SIGNING_CONTEXT = 'threadbear-standing-instructions-v1\n';
 const OUTSIDE_NOTICE = "Your standing instructions were changed outside Settings, so agents aren't being given them. Look in Settings > General to keep or clear them.";
 
 export class InstructionsStore {
-  private home: string;
   private file: string;
   private sig: string;
   private token: string;
@@ -52,21 +50,15 @@ export class InstructionsStore {
   private noticed?: string;
 
   constructor(opts: { home: string; token: string; publish: (n: Notification) => void }) {
-    this.home = opts.home;
     this.token = opts.token;
     this.file = path.join(opts.home, 'instructions.md');
     this.sig = path.join(opts.home, 'instructions.sig');
     this.publish = opts.publish;
   }
 
-  on(): boolean {
-    return experimentOn(this.home, 'standingInstructions');
-  }
-
   // What a session is told: the text only if Settings saved it. '' for none,
-  // with the experiment off, or when the file is anything else.
+  // or when the file is anything else.
   given(): string {
-    if (!this.on()) return '';
     const now = this.read();
     return now.outside ? '' : now.text;
   }
@@ -100,7 +92,7 @@ export class InstructionsStore {
 
   // While they're changed outside, for a client that's just said hello.
   helloNotices(): { level: 'warning'; message: string }[] {
-    return this.on() && this.read().outside ? [{ level: 'warning', message: OUTSIDE_NOTICE }] : [];
+    return this.read().outside ? [{ level: 'warning', message: OUTSIDE_NOTICE }] : [];
   }
 
   // One read of each file, so what's checked is what's given.
@@ -170,17 +162,11 @@ function readPlain(file: string): Buffer | 'missing' | 'unusable' {
 }
 
 export function instructionsMethods(s: InstructionsStore): Record<string, (p: Record<string, unknown>) => unknown> {
-  // As a runner without them would: the app shows no box.
-  const needOn = () => {
-    if (!s.on()) throw new RpcError(ErrorCode.methodNotFound, 'Standing instructions are an experiment, and this one is off.');
-  };
   return {
     'instructions.get': () => {
-      needOn();
       return { instructions: s.status() };
     },
     'instructions.set': (p) => {
-      needOn();
       if (typeof p.text !== 'string') throw new RpcError(ErrorCode.badParams, 'text must be a string');
       return { instructions: s.set(p.text) };
     },

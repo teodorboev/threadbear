@@ -163,6 +163,16 @@ test('pools: a runner key sees members named by email and its own runner id, nev
   assert.deepEqual(((await call(s.ctx, sync.pools, { key: OWNER })) as any[])[0].members, members);
 });
 
+test('pools: a member with an email and an id goes to every runner key, without another runner\'s id (API 75)', async () => {
+  const s = await setup();
+  const members = [{ provider: 'claude', email: MINE, runnerId: M5, accountId: 'claude-2' }, { provider: 'claude', email: MINE, runnerId: BRUCE, accountId: 'claude-1' }];
+  await call(s.ctx, sync.savePools, { key: OWNER, runnerId: M5, pools: [{ id: 'work', title: 'Work', members }] });
+  const bruce = (await call(s.ctx, sync.pools, { key: BRUCE_KEY })) as any[];
+  assert.deepEqual(bruce[0].members, [{ provider: 'claude', email: MINE }, members[1]], "the Mac's by email alone, bruce's own as saved");
+  assert.equal(JSON.stringify(bruce).includes(M5), false);
+  assert.deepEqual(((await call(s.ctx, sync.pools, { key: OWNER })) as any[])[0].members, members);
+});
+
 test('fitUsage: never later than now, resets inside their window, room 0 to 100', () => {
   const now = Date.parse('2026-11-06T00:00:00Z');
   const f = access.fitUsage as (u: any, now: number) => any;

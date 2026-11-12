@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { subagentEvents } from '../../src/adapters/claude/subagents.ts';
+import { subagentEvents, subagentModel } from '../../src/adapters/claude/subagents.ts';
 import { fileContext } from '../../src/adapters/claude/normalize.ts';
 import { subagentTranscriptPath } from '../../src/transcripts.ts';
 import { checkEvent } from '../helpers/protocol-check.ts';
@@ -138,10 +138,22 @@ test('threads.subagent reads the transcript where the sub-agent ran', () => {
   s.out({ kind: 'subagent', update: { id: 'a1', started: true, status: 'running', background: false, description: 'List files' } });
   const r = h.runner.subagent(thread.id, 'a1');
   assert.equal(r.subagent?.id, 'a1');
+  // Reading it fills in the model and effort, for the sub-agent's header.
+  assert.deepEqual([r.subagent?.model, r.subagent?.effort], ['claude-haiku-5-5', 'medium']);
+  h.runner.flush();
+  assert.equal(h.runner.get(thread.id).subagents![0].effort, 'medium');
   assert.ok(r.events.length > 2);
   assert.deepEqual(r.events.map((e) => e.seq), r.events.map((_, i) => i + 1));
   assert.ok(r.events.every((e) => e.threadId === thread.id && e.turnId === undefined));
   const rec = h.store.loadAll().records.find((x) => x.id === thread.id)!;
   assert.deepEqual(seen[0].slice(1), [rec.cwd, rec.nativeSessionId, 'a1']);
   assert.throws(() => h.runner.subagent(thread.id, 'zz'), (e: unknown) => e instanceof RpcError && e.code === -32006);
+});
+
+test("a sub-agent transcript says the model and effort its latest reply ran at", () => {
+  assert.deepEqual(subagentModel(fs.readFileSync(TRANSCRIPT, 'utf8')), { model: 'claude-haiku-5-5', effort: 'medium' });
+  const line = (model: string, effort?: string) => JSON.stringify({ type: 'assistant', message: { model, content: [] }, ...(effort ? { effort } : {}) });
+  assert.deepEqual(subagentModel([line('claude-haiku-5-5', 'low'), line('claude-opus-5-5', 'high'), line('<synthetic>'), '{"type":"assis'].join('\n')), { model: 'claude-opus-5-5', effort: 'high' });
+  assert.deepEqual(subagentModel(line('claude-opus-5-5')), { model: 'claude-opus-5-5' });
+  assert.deepEqual(subagentModel(''), {});
 });

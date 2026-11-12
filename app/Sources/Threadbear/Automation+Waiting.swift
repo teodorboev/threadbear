@@ -172,6 +172,8 @@ extension Automation {
             app.reviewWindows[key]?.close()
             return "ok closed"
         }
+        // {"open": false}: only reads one that's open, as after a click on its card.
+        if c["open"] as? Bool == false, app.reviewWindows[key] == nil { return "error that review isn't open" }
         app.openReview(threadId: threadId, review: snapshot)
         guard let controller = app.reviewWindows[key] else { return "error couldn't open review" }
         let session = controller.session
@@ -189,6 +191,7 @@ extension Automation {
         if c["save"] as? Bool == true { await session.saveNow() }
         if c["submit"] as? Bool == true { await session.submit() }
         if c["cancel"] as? Bool == true { await session.cancelReview() }
+        if let browse = c["browse"] as? Int { session.browse(browse) }
         controller.window?.tuckBehind()
         try? await Task.sleep(for: .milliseconds(250))
         return "ok " + json([
@@ -198,6 +201,12 @@ extension Automation {
             "pickedId": session.draft.pickedId ?? "", "pickedIds": session.draft.pickedIds, "notes": session.draft.notes,
             "reply": session.draft.reply ?? "", "none": session.draft.none, "shot": session.shot, "peeking": session.peeking,
             "dirty": session.dirty, "error": session.error ?? "",
+            // What the window shows, for the specs (features/review.feature).
+            "focused": session.focusedOption?.id ?? "", "sendLabel": session.sendLabel, "editable": session.editable,
+            "minimap": find(ReviewImageScroll.self, in: controller.window?.contentView).map { !$0.minimap.isHidden } ?? false,
+            // What the stage draws, and what Open live would open.
+            "stage": session.mode == .all ? "all" : session.shownShot?.video != nil ? "player" : session.shownShot?.page != nil ? "page" : "picture",
+            "live": session.mode == .single ? (session.shownOption.flatMap { LinkPolicy.web($0.url) }?.absoluteString ?? "") : "",
         ] as [String: Any])
     }
 

@@ -14,10 +14,9 @@ import { makeHarness, tick, tmpDir } from '../helpers/fakes.ts';
 
 const TOKEN = 'the token the runner started with';
 
-function store(on = true) {
+function store() {
   const home = tmpDir();
   ensureHome(home);
-  if (on) fs.writeFileSync(path.join(home, 'runner.json'), JSON.stringify({ experiments: { standingInstructions: true } }));
   const published: { method: string; params: any }[] = [];
   const s = new InstructionsStore({ home, token: TOKEN, publish: (n) => published.push(n as { method: string; params: any }) });
   return { home, s, published, md: path.join(home, 'instructions.md'), sig: path.join(home, 'instructions.sig'), notices: () => published.filter((n) => n.method === 'runner.notice') };
@@ -136,21 +135,6 @@ test('half of the pair, a link, a FIFO or a huge file reads as changed outside, 
   }
 });
 
-test('with the experiment off, nothing is given or said, and the methods are as on an older runner', () => {
-  const { s, home, md, notices } = store(true);
-  s.set('Be brief.');
-  fs.writeFileSync(path.join(home, 'runner.json'), JSON.stringify({}));
-  assert.equal(s.given(), '');
-  fs.writeFileSync(md, 'changed');
-  assert.equal(s.given(), '');
-  assert.deepEqual(s.helloNotices(), []);
-  assert.equal(notices().length, 0);
-  const methods = instructionsMethods(s);
-  for (const [name, params] of [['instructions.get', {}], ['instructions.set', { text: 'x' }]] as const) {
-    assert.throws(() => methods[name](params), (e: { code: number }) => e.code === ErrorCode.methodNotFound);
-  }
-});
-
 test('instructions.get and instructions.set', () => {
   const { s } = store();
   const methods = instructionsMethods(s);
@@ -164,7 +148,6 @@ test('instructions.get and instructions.set', () => {
 test("the whole way: an agent's write reaches no session, and Ask and Auto edits of either file always ask", async () => {
   const home = tmpDir();
   ensureHome(home);
-  fs.writeFileSync(path.join(home, 'runner.json'), JSON.stringify({ experiments: { standingInstructions: true } }));
   const s = new InstructionsStore({ home, token: TOKEN, publish: () => {} });
   const h = makeHarness(home, {}, { standingInstructions: () => s.given() });
   const cwd = tmpDir();

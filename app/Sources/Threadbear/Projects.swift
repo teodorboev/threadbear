@@ -47,7 +47,7 @@ extension AppModel {
 
     var openProject: Project? { openProjectId.flatMap(project) }
 
-    var projectCards: [ProjectCard] { ProjectCard.build(projectSections) }
+    var projectCards: [ProjectCard] { ProjectCard.build(projectSections, decisions: projectDecisionsOn) }
 
     /// Projects a thread could be put in: the live ones it isn't in.
     func projectsToAdd(_ thread: ThreadSummary) -> [Project] {
@@ -71,9 +71,53 @@ extension AppModel {
         showsLibrarianHome = true
     }
 
+    // MARK: A project's page tabs (projectDecisions experiment)
+
+    /// The open project's page is in tabs: Decisions and Project.
+    var projectTabsShowing: Bool { projectDecisionsOn && openProject != nil }
+
+    /// Decisions waiting in the project and its parts.
+    func projectDecisionCount(_ id: String) -> Int {
+        let built = projectSections
+        guard let section = built.sections.first(where: { $0.id == id }) else { return 0 }
+        return ProjectDecisions.count(built.threadsWithParts(section))
+    }
+
+    func projectTab(_ id: String) -> ProjectTab {
+        ProjectTabs.current(picked: projectTabsPicked[id], openedOn: projectTabsOpenedOn[id], decisions: projectDecisionCount(id))
+    }
+
+    /// Its page has just opened: the tab it opens on for this visit, unless
+    /// one was picked for it before.
+    func projectPageOpened(_ id: String) {
+        projectTabsOpenedOn[id] = ProjectTabs.opening(decisions: projectDecisionCount(id))
+    }
+
+    /// A tab picked: kept for the project while the app runs. Picking the
+    /// one showing changes nothing, so it isn't kept as a choice either
+    /// (Codex review: a press that did nothing later held the page there).
+    func pickProjectTab(_ id: String, _ tab: ProjectTab) {
+        guard tab != projectTab(id) else { return }
+        projectTabsPicked[id] = tab
+    }
+
+    /// Whether ⇧⌘[ (-1) or ⇧⌘] (1) has a tab to go to: they stop at the ends.
+    func canStepProjectTab(by delta: Int) -> Bool {
+        guard projectTabsShowing, let id = openProjectId else { return false }
+        let tab = projectTab(id)
+        return ProjectTabs.step(tab, by: delta) != tab
+    }
+
+    /// ⇧⌘[ and ⇧⌘] on a project's page.
+    func stepProjectTab(by delta: Int) {
+        guard canStepProjectTab(by: delta), let id = openProjectId else { return }
+        pickProjectTab(id, ProjectTabs.step(projectTab(id), by: delta))
+    }
+
     /// The project's page in the detail area. The sidebar stays where it is.
     func openProjectPage(_ id: String) {
         guard project(id) != nil else { return }
+        projectPageOpened(id)
         openProjectId = id
         showsProjectsHome = false
         showsLibrarianHome = false

@@ -147,6 +147,7 @@ final class TranscriptController: NSObject, NSTableViewDataSource, NSTableViewDe
     @objc private func buttonsChanged() {
         guard !buttonsPending else { return }
         buttonsPending = true
+        composerCard?.buttonsChanged()
         rerender { [weak self] in self?.buttonsPending = false } where: { RenderCache.holdsButtons($0) }
     }
 
@@ -1035,10 +1036,19 @@ final class TranscriptController: NSObject, NSTableViewDataSource, NSTableViewDe
         if composerCard?.page != next, composerCard?.showAsk(next) == true {
             app.focusComposer(thread.id)
         } else {
+            #if DEBUG
+            Self.returnBeeps += 1
+            #endif
             NSSound.beep()
         }
         return true
     }
+
+    #if DEBUG
+    /// The beeps when Return has nowhere to go on the card, for the
+    /// automation's `beeps` (a script can't hear one).
+    nonisolated(unsafe) static var returnBeeps = 0
+    #endif
 
     /// Puts the cursor in ask `ask`'s Something else box on the card from `seq`.
     /// The open card is in the composer (ComposerCard).
@@ -1074,6 +1084,9 @@ final class TranscriptController: NSObject, NSTableViewDataSource, NSTableViewDe
             app.toggleCardCollapsed(threadId: thread.id, seq: card.seq)
             return
         }
+        // The composer stops clicks reaching the card during a move; this is
+        // for anything else pressing it, as an answer now would miss the move.
+        if thread.moving?.ended == false { return }
         if action.hasPrefix("next:") {
             guard card.isOpen, let n = Int(action.dropFirst(5)), card.next.indices.contains(n) else { return }
             app.toggleFollowUp(threadId: thread.id, card: card, index: n)
@@ -1100,6 +1113,9 @@ final class TranscriptController: NSObject, NSTableViewDataSource, NSTableViewDe
             else if n != Decisions.ownAnswer, let now = app.threads[thread.id], app.picks(for: now)[index] == n {
                 composerCard?.pagePast(index)
             }
+        case "run":
+            guard thread.asksSeq == card.seq, let id = ask.run?.buttonId else { return }
+            app.pressRunButton(id, threadId: thread.id)
         case "link":
             guard ask.links.indices.contains(n), let url = ask.links[n].target else { return }
             if WorkLinks.reviewId(of: url) != nil { return openReviewLink(url) }
@@ -1122,8 +1138,13 @@ final class TranscriptController: NSObject, NSTableViewDataSource, NSTableViewDe
     /// The pencil by one of Mike's messages: its text and pictures go into
     /// the composer, and sending replaces it (docs/protocol.md, "Editing a
     /// message").
+    var canGoBack: Bool {
+        guard let session, let thread = session.app?.threads[session.threadId] else { return true }
+        return Providers.info(thread.provider).rewind
+    }
+
     func editMessage(rowId: String) {
-        guard let session, let app = session.app,
+        guard canGoBack, let session, let app = session.app,
               case .user(let message)? = session.model.item(id: rowId)?.content, message.editable,
               let row = session.model.item(id: rowId) else { return }
         app.startEditing(threadId: session.threadId, seq: row.seq, text: message.text, images: message.images)
@@ -1181,9 +1202,14 @@ final class TranscriptHost: ComposerDropView {
             // Nothing inside the transcript registers for drags (its text is
             // read-only), so a file over any of it ends up here.
             registerForDraggedTypes(ComposerTextView.droppedTypes)
+            Self.live.add(self)
             claim()
         }
     }
+
+    /// Every non-ghost host, so one leaving the window can pass the scroll
+    /// view on (viewDidMoveToWindow).
+    private static let live = NSHashTable<TranscriptHost>.weakObjects()
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been used") }
 
@@ -1208,6 +1234,20 @@ final class TranscriptHost: ComposerDropView {
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
-        if window != nil { claim() }
+        if window != nil {
+            claim()
+            return
+        }
+        // Leaving the window with the scroll view: give it to another host of
+        // the same transcript that's still on screen. Closing the Terminal
+        // (⌘J) rebuilds the dock, and the outgoing host, updated once more
+        // before it went, took the scroll view back from the new one and
+        // carried it out of the window, leaving the thread blank until
+        // something updated the new host (switching threads did) (11 Nov).
+        guard !ghost, controller.scrollView.superview === self else { return }
+        for host in Self.live.allObjects where host !== self && host.controller === controller && !host.ghost && host.window != nil {
+            host.claim()
+            return
+        }
     }
 }

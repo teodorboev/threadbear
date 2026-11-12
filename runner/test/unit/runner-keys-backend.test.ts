@@ -3,7 +3,7 @@
 // attacks a review reproduced with Bruce's runner key, each shut.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { call, load, memoryBackend, outcome } from '../helpers/convex-memory.ts';
+import { call, load, memoryBackend, outcome, THREAD_BASICS } from '../helpers/convex-memory.ts';
 
 const OWNER = 'owner-key';
 const BRUCE_KEY = 'tbr_bruce';
@@ -30,7 +30,7 @@ async function setup() {
   return { ...b, owner: as(OWNER), bruce: as(BRUCE_KEY) };
 }
 
-const thread = (threadId: string, runnerId: string, extra: Record<string, unknown> = {}) => ({ threadId, runnerId, title: 'T', view: 'inbox', needsYou: false, ...extra });
+const thread = (threadId: string, runnerId: string, extra: Record<string, unknown> = {}) => ({ threadId, runnerId, ...THREAD_BASICS, title: 'T', view: 'inbox', needsYou: false, ...extra });
 const textsOf = (rows: Record<string, any>[], threadId: string) => rows.filter((m) => m.threadId === threadId).map((m) => m.text);
 
 test("Bruce's key can't put messages or pictures on a thread id that has no row", async () => {
@@ -350,7 +350,7 @@ const indexRow = (threadId: string) => ({ threadId, title: 'x', cwd: '/', accoun
 
 test('the old mirrored-schedule writers and the runner list are the main key\'s only', async () => {
   const s = await setup();
-  assert.equal(await outcome(call(s.ctx, sync.setSchedules, { key: BRUCE_KEY, runnerId: BRUCE, schedules: [sched('S', BRUCE)] })), 'forbidden');
+  assert.equal(await outcome(call(s.ctx, sync.setSchedules, { key: BRUCE_KEY, runnerId: BRUCE, schedules: [(({ runnerId: _r, ...doc }) => doc)(sched('S', BRUCE))] })), 'forbidden');
   assert.equal(await outcome(call(s.ctx, sync.runnersList, { key: BRUCE_KEY })), 'forbidden');
   await call(s.ctx, sync.runnersList, { key: OWNER });
 });
@@ -776,6 +776,24 @@ test('a message row is capped whole, and a runner key keeps a bounded number of 
   for (const m of s.rows('messages')) assert.ok(bytes(m) <= 12_288, String(bytes(m)));
 });
 
+test("a runner key's plan row goes whole up to a plan's cap, only an agent's text gets that room, and it can still be paged", async () => {
+  const s = await setup();
+  await s.bruce.upsert(thread('B', BRUCE));
+  const plan = '# Plan\n' + 'step\n'.repeat(4000); // 20 KB, past a message's 10,000 bytes
+  const send = (seq: number, role: string, extra: Record<string, unknown> = {}) => call(s.ctx, sync.appendMessages, { key: BRUCE_KEY, messages: [{ threadId: 'B', seq, role, text: plan, plan: true, at: 'a', ...extra }] });
+  await send(1, 'assistant');
+  await send(2, 'tool');
+  const row = (seq: number) => s.rows('messages').find((m) => m.seq === seq)!;
+  assert.equal(row(1).text, plan, 'the plan whole');
+  assert.ok(Buffer.byteLength(row(2).text) <= 10_000, 'a tool row marked plan is cut as any message is');
+  // An old phone's "Load earlier" marks the row it already has.
+  await send(1, 'assistant', { pagedAt: 5 });
+  assert.equal(row(1).pagedAt, 5);
+  const huge = 'é'.repeat(60_000);
+  await call(s.ctx, sync.appendMessages, { key: BRUCE_KEY, messages: [{ threadId: 'B', seq: 3, role: 'assistant', text: huge, plan: true, at: 'a' }] });
+  assert.ok(bytes(row(3)) <= 84_000 + 1_000);
+});
+
 test('den threads and pushes have per-key budgets, and old thread tombstones go', async () => {
   const s = await setup();
   const before = s.scheduled.length;
@@ -1133,4 +1151,79 @@ test("codex 8 Nov: a count left above what a runner key's rows hold is put back 
   assert.deepEqual(textsOf(s.rows('messages'), 'B'), ['next']);
   const after = s.rows('runnerStorage').find((x) => x.runnerId === BRUCE)!.messageBytes;
   assert.ok(after < 10_000, `count back to what's stored, not ${after}`);
+});
+
+// ------------------------------------------------------------ Daybreak, 11 Nov 2026
+
+// Findings 99 and 100: a runner key's own thread and schedule carried times
+// Android parsed and then threw drawing (toEpochMilli, atZone). What phones
+// read is only ever a time the apps can read; the Android kit holds them too.
+test("a runner key's thread and schedule times are ones the apps can read", async () => {
+  const s = await setup();
+  const far = '+999999999-12-31T23:59:59Z';
+  await s.bruce.upsert(thread('FAR', BRUCE, { status: 'idle', lastActivityAt: far, createdAt: far, snoozedUntil: far, starredAt: '+1000000000-06-01T00:00:00Z', archivedAt: 'x', woke: { at: far } }));
+  const t = s.rows('threads').find((r) => r.threadId === 'FAR')!;
+  assert.equal(t.lastActivityAt, new Date(t.lastActivityMs).toISOString());
+  assert.equal(t.createdAt, t.lastActivityAt);
+  for (const f of ['snoozedUntil', 'starredAt', 'archivedAt', 'woke']) assert.equal(t[f], undefined, f);
+  await s.bruce.upsert(thread('SINCE', BRUCE, { woke: { at: '2026-11-11T00:00:00.000Z', since: far } }));
+  assert.deepEqual(s.rows('threads').find((r) => r.threadId === 'SINCE')!.woke, { at: '2026-11-11T00:00:00.000Z' });
+  // Ordinary times are kept as written.
+  await s.bruce.upsert(thread('OK', BRUCE, { starredAt: '2026-11-11T03:06:54.388Z', snoozedUntil: '2026-11-12T09:00:00+01:00' }));
+  const ok = s.rows('threads').find((r) => r.threadId === 'OK')!;
+  assert.equal(ok.starredAt, '2026-11-11T03:06:54.388Z');
+  assert.equal(ok.snoozedUntil, '2026-11-12T09:00:00+01:00');
+  // The owner's runner is trusted as it was.
+  await s.owner.upsert(thread('MINE', M5, { starredAt: 'whatever' }));
+  assert.equal(s.rows('threads').find((r) => r.threadId === 'MINE')!.starredAt, 'whatever');
+
+  const token = 'phone-token';
+  await s.ctx.db.insert('tokens', { hash: await sha256(token), name: 'phone', expiresAt: Date.now() + 100_000, createdAt: Date.now() });
+  // A row stored before the check (or the owner's): what a phone reads is held all the same.
+  const stored = s.rows('threads').find((r) => r.threadId === 'MINE')!;
+  await s.ctx.db.patch(stored._id, { lastActivityAt: far, woke: { at: far } });
+  const read = ((await call(s.ctx, phone.thread, { token, threadId: 'MINE' })) as { thread: Record<string, any> }).thread;
+  assert.equal(read.lastActivityAt, new Date(stored.lastActivityMs).toISOString());
+  assert.equal(read.starredAt, undefined);
+  assert.equal(read.woke, undefined);
+  // A time the owner's runner takes (a snooze past 9999, as toISOString writes
+  // it) still reads as written; one past JavaScript's own range doesn't.
+  await s.ctx.db.patch(stored._id, { snoozedUntil: '+010000-01-01T00:00:00.000Z', archivedAt: '+275761-01-01T00:00:00.000Z' });
+  const wide = ((await call(s.ctx, phone.thread, { token, threadId: 'MINE' })) as { thread: Record<string, any> }).thread;
+  assert.equal(wide.snoozedUntil, '+010000-01-01T00:00:00.000Z');
+  assert.equal(wide.archivedAt, undefined);
+  await call(s.ctx, sync.saveSchedule, { key: BRUCE_KEY, schedule: sched(UUID(7), BRUCE, { threadId: 'FAR', nextRunAt: '+1000000000-06-01T00:00:00Z' }) });
+  await call(s.ctx, sync.saveSchedule, { key: BRUCE_KEY, schedule: sched(UUID(8), BRUCE, { threadId: 'OK', nextRunAt: '2026-11-12T09:00:00.000Z' }) });
+  // A wake stored before the check is held to it when read.
+  await s.ctx.db.insert('scheduleWakes', { scheduleId: 'old', runnerId: BRUCE, threadId: 'SINCE', nextRunAt: far });
+  const wakes = await call(s.ctx, phone.wakes, { token });
+  assert.deepEqual(wakes.find((w: any) => w.scheduleId === UUID(7)), { scheduleId: UUID(7), threadId: 'FAR' });
+  assert.deepEqual(wakes.find((w: any) => w.scheduleId === UUID(8)), { scheduleId: UUID(8), threadId: 'OK', nextRunAt: '2026-11-12T09:00:00.000Z' });
+  assert.deepEqual(wakes.find((w: any) => w.scheduleId === 'old'), { scheduleId: 'old', threadId: 'SINCE' });
+  // A run that moves it on is checked the same way.
+  await call(s.ctx, sync.scheduleRan, { key: BRUCE_KEY, scheduleId: UUID(8), holder: 'h', lastRun: { at: 'a', outcome: 'sent' }, sent: true, expectUpdatedAt: 'u', nextRunAt: far });
+  assert.equal(s.rows('scheduleWakes').find((w) => w.scheduleId === UUID(8))!.nextRunAt, undefined);
+});
+
+// ------------------------------------------------------------ Daybreak 87 and 102 (11 Nov 2026)
+
+// A thread id goes into a shell line (Copy debug info), a chip's link and
+// the main Mac's paths, so a runner key makes rows only under ids of a
+// thread id's shape. The owner's own runner is trusted as before.
+test("Bruce's key can't make a thread or a sidebar row under an id with shell or markdown in it", async () => {
+  const s = await setup();
+  const bad = ['remote$(printf TB_ID_EXECUTED >&2)', 'deadbeef) ![local](/tmp/private.png', 'decafbad) # heading', '../../etc', 'a b', 'x'.repeat(65)];
+  for (const id of bad) {
+    assert.equal(await outcome(s.bruce.upsert(thread(id, BRUCE))), 'forbidden', id);
+    await call(s.ctx, sync.setThreadIndex, { key: BRUCE_KEY, runnerId: BRUCE, rows: [indexRow(id)], removed: [] });
+    await s.bruce.append(id, 'x');
+  }
+  assert.deepEqual(s.rows('threads').map((r) => r.threadId), []);
+  assert.deepEqual(s.rows('threadIndex').map((r) => r.threadId), []);
+  assert.deepEqual(s.rows('messages'), []);
+  // A runner's own ids still go in.
+  await s.bruce.upsert(thread(UUID(7), BRUCE), thread('demo_upload', BRUCE));
+  await call(s.ctx, sync.setThreadIndex, { key: BRUCE_KEY, runnerId: BRUCE, rows: [indexRow(UUID(7))], removed: [] });
+  assert.deepEqual(s.rows('threads').map((r) => r.threadId).sort(), [UUID(7), 'demo_upload']);
+  assert.deepEqual(s.rows('threadIndex').map((r) => r.threadId), [UUID(7)]);
 });

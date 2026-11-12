@@ -24,6 +24,11 @@ export const Up = () => (
     <path d="M8 13.5v-11M3.5 7 8 2.5 12.5 7" />
   </svg>
 );
+export const Stop = () => (
+  <svg {...base} fill="currentColor" stroke="none">
+    <rect x="4" y="4" width="8" height="8" rx="1.5" />
+  </svg>
+);
 export const Chevron = ({ className }: { className?: string }) => (
   <svg {...base} className={className}>
     <path d="m6 3.5 4.5 4.5L6 12.5" />
@@ -193,5 +198,31 @@ export const Pause = () => (
 export const Play = () => (
   <svg {...base}>
     <path d="M4.5 2.5 13 8l-8.5 5.5z" />
+  </svg>
+);
+// What was done about another lab's finding (review-row.tsx), as the Mac's
+// marks: a ticked circle, a speech bubble with a mark, a person, an empty circle.
+export const CircleCheck = () => (
+  <svg {...base}>
+    <circle cx="8" cy="8" r="6.2" />
+    <path d="m5.4 8.2 1.8 1.8 3.5-3.6" />
+  </svg>
+);
+export const BubbleWarning = () => (
+  <svg {...base}>
+    <path d="M2.5 3.5h11v7.5H8l-3 2.5V11H2.5z" />
+    <path d="M8 5.3v2.6M8 9.4v.1" />
+  </svg>
+);
+export const CircleUser = () => (
+  <svg {...base}>
+    <circle cx="8" cy="8" r="6.2" />
+    <circle cx="8" cy="6.6" r="1.9" />
+    <path d="M4.4 12.4c.8-1.4 2.1-2.1 3.6-2.1s2.8.7 3.6 2.1" />
+  </svg>
+);
+export const Circle = () => (
+  <svg {...base}>
+    <circle cx="8" cy="8" r="6.2" />
   </svg>
 );

@@ -16,6 +16,12 @@ import ThreadbearCore
 /// opens and once a minute while it's open.
 struct UsagePanel: View {
     @Environment(AppModel.self) private var app
+    @AppStorage(UsagePanel.showModelWeeksKey) private var showModelWeeks = true
+
+    /// Whether the logins show a model's own week ("Weekly Fable"). On by
+    /// default; Mike turned it off (11 Nov: "Opus is so good that I don't
+    /// need to see Fable really, but I know some people probably would").
+    static let showModelWeeksKey = "usage.showModelWeeks"
 
     var body: some View {
         let groups = UsageGroups.build(pools: app.poolsSupported ? app.pools : [], accounts: app.accounts)
@@ -32,7 +38,13 @@ struct UsagePanel: View {
                     SpendSection(stats: stats, accounts: app.accounts, colours: colours, now: app.now)
                 }
                 ForEach(groups) { group in
-                    PoolCard(group: group, allAccounts: app.accounts, notices: notices.own, stats: app.usageStats, colours: colours, now: app.now)
+                    PoolCard(group: group, allAccounts: app.accounts, notices: notices.own, stats: app.usageStats, colours: colours, now: app.now, showModelWeeks: showModelWeeks)
+                }
+                // Only when some login has a model's own week, or the
+                // switch would do nothing.
+                let modelWeeks = Self.modelWeekTitles(app.accounts)
+                if !modelWeeks.isEmpty {
+                    UsageSettings(modelWeeks: modelWeeks, showModelWeeks: $showModelWeeks)
                 }
                 // Where the numbers came from, and what Token Stats says
                 // about all of them, once.
@@ -55,6 +67,50 @@ struct UsagePanel: View {
                 try? await Task.sleep(for: .seconds(60))
             }
         }
+    }
+
+    /// "Weekly Fable": each model's own week any login has, once each.
+    static func modelWeekTitles(_ accounts: [Account]) -> [String] {
+        var seen: [String] = []
+        for account in accounts {
+            for window in AccountUsageText.modelWeeks(account.usage) where !seen.contains(window.title) {
+                seen.append(window.title)
+            }
+        }
+        return seen
+    }
+}
+
+/// The panel's own settings, at its foot: for now whether to show the
+/// models' own weeks, for someone who never runs that model.
+private struct UsageSettings: View {
+    let modelWeeks: [String]
+    @Binding var showModelWeeks: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: zoomed(8)) {
+            HStack(spacing: zoomed(7)) {
+                Image(systemName: "gearshape").foregroundStyle(.secondary)
+                Text("Settings")
+                    .font(.system(size: zoomed(13), weight: .semibold))
+                    .accessibilityAddTraits(.isHeader)
+            }
+            // The switch at the right edge, in line with the numbers above.
+            HStack {
+                Text("Show " + modelWeeks.joined(separator: ", "))
+                    .font(.system(size: zoomed(12)))
+                Spacer()
+                Toggle("Show " + modelWeeks.joined(separator: ", "), isOn: $showModelWeeks)
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+                    .controlSize(.small)
+                    .tip("A login's own limit on one model. Hide it if you don't use that model")
+            }
+        }
+        .padding(.horizontal, zoomed(12))
+        .padding(.vertical, zoomed(10))
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Card())
     }
 }
 
@@ -265,7 +321,7 @@ private struct TokensChart: View {
             if spending.count > 1 {
                 // Wrapped a whole name at a time: in the narrow dock an
                 // HStack broke "mike+3" over two lines.
-                LegendFlow(spacing: zoomed(12), lineSpacing: zoomed(4)) {
+                FlowRows(spacing: zoomed(12), lineSpacing: zoomed(4)) {
                     ForEach(spending, id: \.self) { id in
                         HStack(spacing: zoomed(5)) {
                             LoginDot(colour: colours.colour(id, dark: scheme == .dark))
@@ -287,49 +343,6 @@ private struct TokensChart: View {
         if Calendar.current.isDate(date, inSameDayAs: now) { return "Today" }
         let names = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
         return names[(Calendar.current.component(.weekday, from: date) - 1) % 7]
-    }
-}
-
-/// Lays its children out left to right, wrapping to a new line when the
-/// next one doesn't fit, for the chart's legend.
-private struct LegendFlow: Layout {
-    var spacing: CGFloat
-    var lineSpacing: CGFloat
-
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        let rows = rows(width: proposal.width ?? .infinity, subviews: subviews)
-        let width = rows.map { $0.width }.max() ?? 0
-        let height = rows.map(\.height).reduce(0, +) + lineSpacing * CGFloat(max(0, rows.count - 1))
-        return CGSize(width: width, height: height)
-    }
-
-    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        var y = bounds.minY
-        for row in rows(width: bounds.width, subviews: subviews) {
-            var x = bounds.minX
-            for index in row.indices {
-                let size = subviews[index].sizeThatFits(.unspecified)
-                subviews[index].place(at: CGPoint(x: x, y: y + (row.height - size.height) / 2), proposal: .unspecified)
-                x += size.width + spacing
-            }
-            y += row.height + lineSpacing
-        }
-    }
-
-    private func rows(width: CGFloat, subviews: Subviews) -> [(indices: [Int], width: CGFloat, height: CGFloat)] {
-        var rows: [(indices: [Int], width: CGFloat, height: CGFloat)] = []
-        for (index, subview) in subviews.enumerated() {
-            let size = subview.sizeThatFits(.unspecified)
-            if var last = rows.last, last.width + spacing + size.width <= width {
-                last.indices.append(index)
-                last.width += spacing + size.width
-                last.height = max(last.height, size.height)
-                rows[rows.count - 1] = last
-            } else {
-                rows.append(([index], size.width, size.height))
-            }
-        }
-        return rows
     }
 }
 
@@ -380,6 +393,7 @@ private struct PoolCard: View {
     let stats: UsageStats?
     let colours: LoginColours
     let now: Date
+    let showModelWeeks: Bool
 
     var body: some View {
         let today = stats.map { UsageStatsMath.today($0, accounts: group.accounts.map(\.id), now: now) }
@@ -412,7 +426,7 @@ private struct PoolCard: View {
                 }
                 ForEach(section.accounts) { account in
                     Divider().opacity(0.6)
-                    LoginRow(account: account, allAccounts: allAccounts, notice: notices[account.id], stats: stats, colours: colours, now: now)
+                    LoginRow(account: account, allAccounts: allAccounts, notice: notices[account.id], stats: stats, colours: colours, now: now, showModelWeeks: showModelWeeks)
                         .padding(.horizontal, zoomed(12))
                         .padding(.vertical, zoomed(10))
                 }
@@ -426,7 +440,8 @@ private struct PoolCard: View {
 /// windows side by side (one over the other in a narrow panel), then a
 /// model's own week ("Weekly Fable") with its own chart, as Claude Code's
 /// /usage has (Ayush, 6 Nov), then only the extras that decide something
-/// (`AccountUsageText.extraLines`).
+/// (`AccountUsageText.extraLines`). The model's week can be switched off in
+/// the panel's settings.
 private struct LoginRow: View {
     let account: Account
     let allAccounts: [Account]
@@ -434,11 +449,12 @@ private struct LoginRow: View {
     let stats: UsageStats?
     let colours: LoginColours
     let now: Date
+    let showModelWeeks: Bool
     @Environment(\.colorScheme) private var scheme
 
     var body: some View {
         let usage = account.usage
-        let windows = AccountUsageText.mainWindows(usage) + AccountUsageText.modelWeeks(usage)
+        let windows = AccountUsageText.mainWindows(usage) + (showModelWeeks ? AccountUsageText.modelWeeks(usage) : [])
         let today = stats.map { UsageStatsMath.today($0, accounts: [account.id], now: now) }
         let colour = colours.colour(account.id, dark: scheme == .dark)
         VStack(alignment: .leading, spacing: zoomed(8)) {
@@ -548,7 +564,7 @@ private struct WindowMeter: View {
             // is charted the same way.
             if window.kind == "weekly" || window.kind == "weekly_model" {
                 WeekChart(window: window, samples: samples, pace: stale ? nil : pace, colour: colour, now: now)
-                    .frame(height: zoomed(44))
+                    .frame(height: zoomed(58))
             } else {
                 ZStack(alignment: .leading) {
                     Capsule().fill(Color.primary.opacity(0.08))
@@ -600,8 +616,11 @@ private struct WindowMeter: View {
     }
 }
 
-/// The weekly window from its start to its reset: what was left over time
-/// (full at the start, by definition), then this pace dashed on from now.
+/// The last seven days of a weekly window, rolling: what was left over
+/// time, last week's readings too, breaking at each reset, then this pace
+/// dashed on from now to the reset. Days along the bottom. A week that
+/// hasn't started since its reset (no reset time yet) still shows the
+/// week before, rather than an empty box (Mike, 11 Nov).
 private struct WeekChart: View {
     let window: UsageWindow
     let samples: [LimitSample]
@@ -610,56 +629,70 @@ private struct WeekChart: View {
     let now: Date
 
     var body: some View {
-        if let reset = window.resetsAt {
-            let start = reset.addingTimeInterval(-7 * 86400)
-            let points = [LimitSample(at: start, remainingPercent: 100)]
-                + samples.filter { $0.at > start && $0.at < now }
-                + [LimitSample(at: now, remainingPercent: window.remainingPercent)]
-            let ahead: [LimitSample] = pace.map { pace in
-                [LimitSample(at: now, remainingPercent: window.remainingPercent),
-                 pace.runsOutAt.map { LimitSample(at: $0, remainingPercent: 0) } ?? LimitSample(at: reset, remainingPercent: pace.leftAtReset ?? window.remainingPercent)]
-            } ?? []
-            let short = pace?.runsOutAt != nil
-            Chart {
-                // A faint line at each day of the week, so how far in it is
-                // and when it runs out read without a hover.
-                ForEach(1..<7, id: \.self) { day in
-                    RuleMark(x: .value("Day", start.addingTimeInterval(Double(day) * 86400)))
-                        .foregroundStyle(Color.primary.opacity(0.06))
-                        .lineStyle(StrokeStyle(lineWidth: 1))
-                }
-                ForEach(Array(points.enumerated()), id: \.offset) { _, point in
-                    AreaMark(x: .value("Time", point.at), yStart: .value("Floor", 0), yEnd: .value("Left", point.remainingPercent), series: .value("Part", "past"))
+        let from = now.addingTimeInterval(-RollingWeek.span)
+        let reset = window.resetsAt.flatMap { $0 > now ? $0 : nil }
+        let to = reset ?? now
+        let runs = RollingWeek.runs(samples: samples, current: window.remainingPercent, windowStart: reset?.addingTimeInterval(-RollingWeek.span), now: now)
+        let midnights = RollingWeek.midnights(from: from, to: to)
+        // Each day's name under the middle of its day, where that's on the chart.
+        let noons = RollingWeek.midnights(from: Calendar.current.startOfDay(for: from), to: to)
+            .map { $0.addingTimeInterval(12 * 3600) }
+            .filter { $0 > from && $0 < to }
+        let ahead: [LimitSample] = (reset != nil ? pace : nil).map { pace in
+            [LimitSample(at: now, remainingPercent: window.remainingPercent),
+             pace.runsOutAt.map { LimitSample(at: $0, remainingPercent: 0) } ?? LimitSample(at: to, remainingPercent: pace.leftAtReset ?? window.remainingPercent)]
+        } ?? []
+        let short = pace?.runsOutAt != nil
+        Chart {
+            ForEach(Array(runs.enumerated()), id: \.offset) { index, run in
+                ForEach(Array(run.enumerated()), id: \.offset) { _, point in
+                    AreaMark(x: .value("Time", point.at), yStart: .value("Floor", 0), yEnd: .value("Left", point.remainingPercent), series: .value("Part", "past \(index)"))
                         .foregroundStyle(colour.opacity(0.07))
                         .interpolationMethod(.monotone)
-                    LineMark(x: .value("Time", point.at), y: .value("Left", point.remainingPercent), series: .value("Part", "past"))
+                    LineMark(x: .value("Time", point.at), y: .value("Left", point.remainingPercent), series: .value("Part", "past \(index)"))
                         .foregroundStyle(colour)
                         .lineStyle(StrokeStyle(lineWidth: 1.5))
                         .interpolationMethod(.monotone)
                 }
-                ForEach(Array(ahead.enumerated()), id: \.offset) { _, point in
-                    LineMark(x: .value("Time", point.at), y: .value("Left", point.remainingPercent), series: .value("Part", "ahead"))
-                        .foregroundStyle(short ? Color.orange.opacity(0.8) : colour.opacity(0.6))
-                        .lineStyle(StrokeStyle(lineWidth: 1, dash: [3, 3]))
-                }
-                PointMark(x: .value("Time", now), y: .value("Left", window.remainingPercent))
-                    .foregroundStyle(colour)
-                    .symbolSize(zoomed(18))
-                if let out = pace?.runsOutAt {
-                    PointMark(x: .value("Time", out), y: .value("Left", 0))
-                        .foregroundStyle(Color.orange)
-                        .symbolSize(zoomed(18))
-                }
             }
-            .chartXScale(domain: start...reset)
-            // A little room top and bottom, so the dots at full and empty
-            // aren't cut in half by the edge.
-            .chartYScale(domain: 0...100, range: .plotDimension(padding: zoomed(3)))
-            .chartXAxis(.hidden)
-            .chartYAxis(.hidden)
-            .chartPlotStyle { $0.background(Color.primary.opacity(0.025)) }
-        } else {
-            Color.clear
+            ForEach(Array(ahead.enumerated()), id: \.offset) { _, point in
+                LineMark(x: .value("Time", point.at), y: .value("Left", point.remainingPercent), series: .value("Part", "ahead"))
+                    .foregroundStyle(short ? Color.orange.opacity(0.8) : colour.opacity(0.6))
+                    .lineStyle(StrokeStyle(lineWidth: 1, dash: [3, 3]))
+            }
+            PointMark(x: .value("Time", now), y: .value("Left", window.remainingPercent))
+                .foregroundStyle(colour)
+                .symbolSize(zoomed(18))
+            if let out = pace?.runsOutAt, reset != nil {
+                PointMark(x: .value("Time", out), y: .value("Left", 0))
+                    .foregroundStyle(Color.orange)
+                    .symbolSize(zoomed(18))
+            }
         }
+        .chartXScale(domain: from...to)
+        // A little room top and bottom, so the dots at full and empty
+        // aren't cut in half by the edge.
+        .chartYScale(domain: 0...100, range: .plotDimension(padding: zoomed(3)))
+        .chartXAxis {
+            // A faint line at each midnight, the day's name under its middle.
+            AxisMarks(values: midnights) { _ in
+                AxisGridLine().foregroundStyle(Color.primary.opacity(0.06))
+            }
+            AxisMarks(values: noons) { value in
+                AxisValueLabel(collisionResolution: .greedy) {
+                    if let date = value.as(Date.self) { Text(Self.day(date)) }
+                }
+                .font(.system(size: zoomed(9.5)))
+                .foregroundStyle(Color.secondary)
+            }
+        }
+        .chartYAxis(.hidden)
+        .chartPlotStyle { $0.background(Color.primary.opacity(0.025)) }
+    }
+
+    /// "Mon", "Tue".
+    static func day(_ date: Date) -> String {
+        let names = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
+        return names[(Calendar.current.component(.weekday, from: date) - 1) % 7]
     }
 }

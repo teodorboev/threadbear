@@ -9,13 +9,29 @@ import type { Runner } from './runner.ts';
 // Mike to Restart to Update and ends its turn; the app says `hello` with
 // its build when it comes back, and each thread waiting for that gets a
 // note and a message, so it can check its change in the running app.
+//
+// Two apps say so: the Swift Mac app (`mac`, its tree app/'s and dock/'s) and
+// the GPUI app (`desktop`, desktop/'s), each followed on its own, so one of
+// them reconnecting on the build it had doesn't count as the other restarting.
 
 export type AppBuild = { commit: string; short: string; tree: string };
+export type AppKind = 'mac' | 'desktop';
 
 // `due`: the app has come back on this build, but the thread was on a
 // draining runner then; it hears once it comes across (adopted).
-type Watch = { threadId: string; text?: string; requestedAt: string; fromTree?: string; fromShort?: string; due?: AppBuild };
-type SavedState = { build?: AppBuild; watching: Watch[] };
+// `fromTree`/`fromShort` are the Swift app's, from before there were two.
+type Watch = {
+  threadId: string;
+  text?: string;
+  requestedAt: string;
+  fromTree?: string;
+  fromShort?: string;
+  fromDesktopTree?: string;
+  fromDesktopShort?: string;
+  due?: AppBuild;
+  dueApp?: AppKind;
+};
+type SavedState = { build?: AppBuild; desktopBuild?: AppBuild; watching: Watch[] };
 
 // After a day the request has likely been forgotten: only the note.
 const MAX_AGE_MS = 24 * 60 * 60_000;
@@ -34,6 +50,8 @@ export function asksForAppRestart(asks: { action?: unknown; why?: unknown; where
 // Peers), so it isn't here yet but will be.
 type Deps = { runner: Pick<Runner, 'get' | 'note' | 'send' | 'has'>; home: string; clock: Clock; log: Logger; away?: (threadId: string) => boolean };
 
+const appName = (app: AppKind) => (app === 'desktop' ? 'Threadbear GPUI app' : 'Threadbear app');
+
 export class AppRestarts {
   private deps: Deps;
 
@@ -41,8 +59,8 @@ export class AppRestarts {
     this.deps = deps;
   }
 
-  // Sends a message to the thread when the app next comes back on a build
-  // other than the one running now. Asking again replaces the request.
+  // Sends a message to the thread when either app next comes back on a build
+  // other than the one it's running now. Asking again replaces the request.
   watch(threadId: string, text?: string): { build?: AppBuild } {
     const state = this.read();
     state.watching = state.watching.filter((w) => w.threadId !== threadId);
@@ -51,33 +69,42 @@ export class AppRestarts {
       ...(text?.trim() ? { text: text.trim() } : {}),
       requestedAt: new Date(this.deps.clock.now()).toISOString(),
       ...(state.build ? { fromTree: state.build.tree, fromShort: state.build.short } : {}),
+      ...(state.desktopBuild ? { fromDesktopTree: state.desktopBuild.tree, fromDesktopShort: state.desktopBuild.short } : {}),
     });
     this.write(state);
-    return state.build ? { build: state.build } : {};
+    const build = state.build ?? state.desktopBuild;
+    return build ? { build } : {};
   }
 
   isWatching(threadId: string): boolean {
     return this.read().watching.some((w) => w.threadId === threadId);
   }
 
-  // The Mac app's `hello`, with the build it's running.
-  appHello(build: AppBuild): void {
+  // An app's `hello`, with the build it's running.
+  appHello(build: AppBuild, app: AppKind = 'mac'): void {
     const state = this.read();
     const { runner, log, away } = this.deps;
     const now: Watch[] = [];
     const kept: Watch[] = [];
     for (const w of state.watching) {
-      if (w.fromTree === build.tree) kept.push(w);
+      const known = app === 'desktop' ? w.fromDesktopTree : w.fromTree;
+      const other = app === 'desktop' ? w.fromTree : w.fromDesktopTree;
+      // A build of an app the watch had no build of counts only when it
+      // knew neither app's: else the request was about the other one (and
+      // the GPUI app's first hello with a build isn't a restart).
+      const counts = known !== undefined ? known !== build.tree : other === undefined;
+      if (!counts) kept.push(w);
       else if (runner.has(w.threadId)) now.push(w);
       // Finishing a turn on the old runner after a handover: told when it
       // comes across (THREADBEAR-5).
-      else if (away?.(w.threadId)) kept.push({ ...w, due: build });
+      else if (away?.(w.threadId)) kept.push({ ...w, due: build, dueApp: app });
       else log.info('dropped an app restart watch for a thread that has gone', { threadId: w.threadId });
     }
-    state.build = build;
+    if (app === 'desktop') state.desktopBuild = build;
+    else state.build = build;
     state.watching = kept;
     this.write(state);
-    for (const w of now) this.tell(w, build);
+    for (const w of now) this.tell(w, build, app);
   }
 
   // A thread a draining runner has handed over: if the app came back
@@ -88,10 +115,10 @@ export class AppRestarts {
     if (!w?.due) return;
     state.watching = state.watching.filter((x) => x !== w);
     this.write(state);
-    this.tell(w, w.due);
+    this.tell(w, w.due, w.dueApp ?? 'mac');
   }
 
-  private tell(w: Watch, build: AppBuild): void {
+  private tell(w: Watch, build: AppBuild, app: AppKind): void {
     const { runner, log, clock } = this.deps;
     try {
       const thread = runner.get(w.threadId);
@@ -101,13 +128,14 @@ export class AppRestarts {
         : !(age < MAX_AGE_MS)
           ? 'the request is more than a day old'
           : undefined;
-      let note = `Threadbear app restarted: ${w.fromShort ?? 'an earlier build'} to ${build.short}`;
+      const fromShort = app === 'desktop' ? w.fromDesktopShort : w.fromShort;
+      let note = `${appName(app)} restarted: ${fromShort ?? 'an earlier build'} to ${build.short}`;
       if (why) note += `\n\nNot carrying on by itself: ${why}.`;
       runner.note(w.threadId, note);
       if (why) return;
-      const head = `The Threadbear app has restarted onto ${build.short} (${build.commit}), as you asked to hear.`;
+      const head = `The ${appName(app)} has restarted onto ${build.short} (${build.commit}), as you asked to hear.`;
       runner.send(w.threadId, w.text ? `${head}\n\n${w.text}` : `${head} Check your change in the running app.`, [], { origin: 'runner' });
-      log.info('told a thread the app restarted', { threadId: w.threadId, build: build.short });
+      log.info('told a thread the app restarted', { threadId: w.threadId, build: build.short, app });
     } catch (e) {
       log.warn('could not tell a thread the app restarted', { threadId: w.threadId, error: String(e) });
     }
@@ -116,7 +144,11 @@ export class AppRestarts {
   private read(): SavedState {
     try {
       const saved = JSON.parse(fs.readFileSync(appRestartsPath(this.deps.home), 'utf8')) as Partial<SavedState>;
-      return { ...(saved.build ? { build: saved.build } : {}), watching: Array.isArray(saved.watching) ? saved.watching : [] };
+      return {
+        ...(saved.build ? { build: saved.build } : {}),
+        ...(saved.desktopBuild ? { desktopBuild: saved.desktopBuild } : {}),
+        watching: Array.isArray(saved.watching) ? saved.watching : [],
+      };
     } catch {
       return { watching: [] };
     }

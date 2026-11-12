@@ -32,6 +32,8 @@ rm -rf "$HOME/Applications/Threadbear.app" "$HOME/Applications/Threadbear Runner
   "$DATA" "$HOME/threadbear" "$HOME/ThreadbearThreads" "$HOME/install-threadbear" "$HOME/.local/bin/threadbear" \
   "$HOME/Library/Caches/Threadbear" "$HOME/Library/Logs/Threadbear" \
   "$HOME/Library/Logs/threadbear-runner.log" "$HOME/Library/Logs/threadbear-update.log"
+# Only the tb install-runner.sh wrote (runner/scripts/link-tb.sh), never one of the Mac's own.
+! grep -qF 'Written by Threadbear' "$HOME/.local/bin/tb" 2>/dev/null || rm -f "$HOME/.local/bin/tb"
 if [[ -n "$PREFS" ]]; then
   defaults import com.mikerosoft.threadbear "$PREFS"
 else

@@ -18,8 +18,8 @@ const HOSTS: Record<Provider, string> = {
   claude: 'api.anthropic.com',
   // Codex logins are ChatGPT ones; its requests go to chatgpt.com.
   codex: 'chatgpt.com',
-  // OpenCode reaches many model providers (some local); its own Zen gateway
-  // stands in for them.
+  cursor: 'api2.cursor.sh',
+  // Its free models; a login's own provider may be elsewhere.
   opencode: 'opencode.ai',
 };
 

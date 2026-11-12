@@ -20,6 +20,37 @@ enum SidebarMetrics {
     static let faint = Color(nsColor: Theme.faintText)
 }
 
+extension View {
+    /// A view kept in the window while hidden (SidebarView, DetailView): it
+    /// fades and settles in as a view coming in does, and while hidden it
+    /// takes no clicks and isn't read out. It keeps its scroll position and
+    /// folds meanwhile. What in it takes keys or is pointed at reads
+    /// `keptShown`: a list or search box gives up the cursor while hidden
+    /// and leaves the Tab order (or the arrow keys and typing would go to a
+    /// list nobody can see), and the tour and the archive flight don't aim
+    /// at it.
+    func keptAlive(shown: Bool) -> some View {
+        opacity(shown ? 1 : 0)
+            .offset(y: shown || Juice.reduceMotion ? 0 : zoomed(6))
+            .allowsHitTesting(shown)
+            .accessibilityHidden(!shown)
+            .environment(\.keptShown, shown)
+    }
+}
+
+extension EnvironmentValues {
+    /// False inside a view `keptAlive` while it's hidden. Written out
+    /// rather than @Entry, as Juice.swift's are, for the command line tools.
+    var keptShown: Bool {
+        get { self[KeptShownKey.self] }
+        set { self[KeptShownKey.self] = newValue }
+    }
+}
+
+private struct KeptShownKey: EnvironmentKey {
+    static var defaultValue: Bool { true }
+}
+
 struct SidebarView: View {
     @Environment(AppModel.self) private var app
 
@@ -29,12 +60,24 @@ struct SidebarView: View {
         // the new one share the space while one fades out and the other
         // fades in and settles.
         ZStack {
+            // The Projects list stays built once it's been shown, hidden
+            // while another view is up, so coming back to it is a fade
+            // rather than SwiftUI building every row again: that rebuild
+            // was much of the half second Mike saw clicking Projects
+            // (11 Nov). The other views are built as they're shown, as
+            // before. The Inbox was kept too at first, but hidden it went on
+            // filtering every thread change and held the archive flight's
+            // landing marks (Codex's review), for a few milliseconds a switch.
+            if keepProjects || app.sidebarMode == .projects {
+                ProjectsList(shown: app.sidebarMode == .projects)
+                    .keptAlive(shown: app.sidebarMode == .projects)
+            }
             Group {
                 switch app.sidebarMode {
                 case .inbox: InboxList()
                 case .scheduled: ScheduledList()
-                case .projects: ProjectsList()
                 case .librarian: LibrarianView()
+                case .projects: EmptyView()
                 }
             }
             .transition(Juice.reduceMotion ? .opacity : .asymmetric(
@@ -44,14 +87,15 @@ struct SidebarView: View {
         }
         .frame(maxWidth: .infinity)
         .animation(Juice.reduceMotion ? .easeOut(duration: 0.12) : .snappy(duration: 0.22), value: app.sidebarMode)
+        .onChange(of: app.sidebarMode, initial: true) { _, mode in if mode == .projects { keepProjects = true } }
     }
+
+    /// Projects has been shown, so its list is kept.
+    @State private var keepProjects = false
 }
 
 private struct InboxList: View {
     @Environment(AppModel.self) private var app
-
-    /// How many archived threads the Archived section shows (`ArchiveRows`).
-    @State private var archiveLimit = ArchiveRows.first
 
     var body: some View {
         // The search at the top cuts every section down to its matches.
@@ -67,7 +111,7 @@ private struct InboxList: View {
         let hibernating = tucking.isEmpty ? sections.hibernating : sections.hibernating.filter { !tucking.contains($0.id) }
         // The Archived section shows the most recent few, or every match
         // while searching.
-        let archive = ArchiveRows.shown(archived, limit: archiveLimit, searching: searching, selection: app.selection)
+        let archive = ArchiveRows.shown(archived, limit: app.archiveLimit, searching: searching, selection: app.selection)
         // Each section's rows as drawn.
         let drawn: (InboxSection) -> [ThreadSummary] = { $0 == .archived ? archive.rows : $0 == .hibernating ? hibernating : sections[$0] }
         // A folded section's rows aren't drawn, so the arrow keys skip
@@ -106,8 +150,11 @@ private struct InboxList: View {
                     }
                     ForEach(InboxSection.allCases, id: \.self) { section in
                         if section == .archived {
+                            // Directly under the other sections, on purpose:
+                            // pinning it to the foot of the column was tried
+                            // on 8 Nov and Mike undid it on 9 Nov.
                             ThreadSection(section: section, threads: archive.rows, total: archived.count, more: archive.more,
-                                          searching: searching, showMore: { archiveLimit += ArchiveRows.step }, select: select)
+                                          searching: searching, showMore: { app.archiveLimit += ArchiveRows.step }, select: select)
                         } else if section == .hibernating {
                             // The heading comes up as the first thread sets
                             // off for it, so there's a moon to land in.
@@ -494,6 +541,7 @@ struct ThreadList<Content: View>: View {
     var scrollID: (String) -> String = { $0 }
     @ViewBuilder let content: (_ select: @escaping (String) -> Void) -> Content
     @FocusState private var focused: Bool
+    @Environment(\.keptShown) private var shown
     @Namespace private var rowSpace
 
     var body: some View {
@@ -533,10 +581,13 @@ struct ThreadList<Content: View>: View {
                     Color.clear.frame(height: zoomed(4))
                 }
             }
-            .focusable()
+            .focusable(shown)
             .focused($focused)
             .focusEffectDisabled()
+            // Hidden (keptAlive), it lets the cursor go to the list in view.
+            .onChange(of: shown) { _, now in if !now { focused = false } }
             .onMoveCommand { direction in
+                guard shown else { return }
                 let step: Int
                 switch direction {
                 case .up: step = -1
@@ -554,6 +605,7 @@ struct ThreadList<Content: View>: View {
                 withAnimation(Juice.selection) { proxy.scrollTo(scrollID(id)) }
             }
             .onExitCommand {
+                guard shown else { return }
                 if app.sidebarMode != .inbox { app.sidebarMode = .inbox }
             }
         }
@@ -596,6 +648,26 @@ enum RowAction {
     case star, snooze, archive, unsnooze, unarchive, delete
 }
 
+/// Its content's own width, up to `limit`. `.frame(maxWidth:)` would grow to
+/// the limit whenever it's offered more, taking room from the text beside a
+/// short name.
+private struct CappedWidth: Layout {
+    var limit: CGFloat
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        subviews.first?.sizeThatFits(ProposedViewSize(width: min(proposal.width ?? limit, limit), height: proposal.height)) ?? .zero
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        subviews.first?.place(at: bounds.origin, proposal: ProposedViewSize(bounds.size))
+    }
+
+    /// Passes the text's baseline up, so it lines up with the project's.
+    func explicitAlignment(of guide: VerticalAlignment, in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGFloat? {
+        subviews.first.map { bounds.minY + $0.dimensions(in: ProposedViewSize(bounds.size))[guide] }
+    }
+}
+
 struct ThreadRowView: View {
     @Environment(AppModel.self) private var app
     @Environment(\.controlActiveState) private var activeState
@@ -607,6 +679,7 @@ struct ThreadRowView: View {
     /// the row doesn't name it again.
     var heading: String? = nil
     let select: () -> Void
+    @Environment(\.keptShown) private var keptShown
     @State private var hovering = false
     @State private var pressed = false
     /// A brief accent wash over a row that's just finished, so a reply
@@ -627,7 +700,10 @@ struct ThreadRowView: View {
     /// Not while one of its sub-agents is showing: that row is highlighted.
     private var isSelected: Bool { app.selection == thread.id && app.subagentSelection == nil && app.openProjectId == nil && !app.showsHomePage }
     /// The screenshot run shows one row as if the pointer were over it.
-    private var pointerOver: Bool { hovering || app.hoverOverride == thread.id }
+    /// While a script has a row hovered, the real pointer doesn't count: on a
+    /// shared desktop it can be resting on another row, whose buttons would
+    /// then show as well and take the script's click.
+    private var pointerOver: Bool { app.hoverOverride.map { $0 == thread.id } ?? hovering }
     /// Archived from somewhere other than a swipe: slides off all the same.
     private var slidingOff: Bool { app.slidingOff.contains(thread.id) }
     /// Not while it's being swiped: the buttons would ride along with it.
@@ -720,9 +796,26 @@ struct ThreadRowView: View {
                                 .lineLimit(1)
                                 .tip(ProjectMark.lineTip(thread, under: heading))
                         }
+                        if let runner = app.runnerLabel(of: thread) {
+                            // Its own text, laid out first: a long project
+                            // name gets cut short before the runner. Capped,
+                            // as `sync.name` can be any length.
+                            CappedWidth(limit: zoomed(100)) {
+                                Text("• \(runner)")
+                                    .font(.system(size: TypeScale.sidebarMeta + 1))
+                                    .lineLimit(1)
+                                    .truncationMode(.tail)
+                            }
+                            .layoutPriority(1)
+                            .tip("On \(runner)")
+                        }
                     }
                     .foregroundStyle(.secondary)
-                    Spacer(minLength: zoomed(6))
+                    // With the hover buttons up, room for them here too, as
+                    // beside the title: they're centred on the row, over both
+                    // lines, so a long project line ran on under them (Mike,
+                    // 12 Nov). It's cut short before them instead.
+                    Spacer(minLength: showsActions ? CGFloat(mode.rowActions.count) * zoomed(24) : zoomed(6))
                     if !showsActions {
                         // A new status ("Working" to the time) blurs
                         // across rather than snapping.
@@ -748,7 +841,9 @@ struct ThreadRowView: View {
         .rowHighlight(selected: isSelected, hovering: showsActions, selectedColor: selectedColor, space: rowSpace)
         // The open thread's row: archived, it closes up as its panel drops
         // into the Archived heading, which the flight allows for.
-        .background { if isSelected { FlightMarker(kind: .openRow) } }
+        // Not from a list kept hidden (keptAlive): the flight allows for the
+        // row in view.
+        .background { if isSelected && keptShown { FlightMarker(kind: .openRow) } }
         .contentShape(RoundedRectangle(cornerRadius: SidebarMetrics.corner))
         // A slight press while the mouse is down, so a click feels like it
         // landed on something.
@@ -834,9 +929,29 @@ struct ThreadRowView: View {
 
     @ViewBuilder
     private func trailing(_ look: ThreadRowLook) -> some View {
-        // Every login in its pool is out of room; it carries on by itself.
-        // Says so over whatever the turn that ran dry left (often Failed).
-        if mode != .hibernating, let waiting = thread.waitingForRoom, !thread.isArchived {
+        // On its way to another runner (AppModel+Moves), over anything
+        // else: until it lands, nothing it says here will last. A failed
+        // move says so for a minute, with the runner's note in the tip.
+        if let moving = thread.moving {
+            if moving.ended {
+                Text(moving.state == "cancelled" ? "Move cancelled" : "Couldn't move")
+                    .font(.system(size: TypeScale.sidebarMeta, weight: .medium))
+                    .foregroundStyle(moving.state == "cancelled" ? Color.secondary : Color(nsColor: Theme.failed))
+                    .lineLimit(1)
+                    .tip(moving.line)
+            } else {
+                HStack(alignment: .firstTextBaseline, spacing: zoomed(5)) {
+                    SpinnerMark(color: .secondaryLabelColor)
+                        .frame(width: zoomed(12), height: zoomed(12))
+                        .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + zoomed(4) }
+                    Text("Moving to \(moving.toName)").lineLimit(1).truncationMode(.tail)
+                }
+                .font(.system(size: TypeScale.sidebarMeta, weight: .medium))
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: zoomed(140), alignment: .trailing)
+                .tip(moving.line)
+            }
+        } else if mode != .hibernating, let waiting = thread.waitingForRoom, !thread.isArchived {
             Text(Pools.waitingLine(waiting, now: app.now))
                 .font(.system(size: TypeScale.sidebarMeta))
                 .foregroundStyle(SidebarMetrics.faint)
@@ -1195,6 +1310,37 @@ struct ThreadMenu: View {
         if app.projectsSupported, !thread.isRemote {
             ThreadProjectsMenu(thread: thread)
         }
+        if app.canMoveThreads {
+            ThreadMoveMenu(thread: thread)
+        }
+    }
+}
+
+/// "Move to ▸": Mike's other runners, offline ones greyed with "offline",
+/// each moving it there, by way of the Move sheet if there's something to
+/// say first (docs/move-plan.md). While a move is going,
+/// Cancel Move instead.
+struct ThreadMoveMenu: View {
+    @Environment(AppModel.self) private var app
+    let thread: ThreadSummary
+
+    var body: some View {
+        if let moving = thread.moving, !moving.ended {
+            Button("Cancel Move", systemImage: "xmark.circle") { app.cancelMove(thread.id) }
+                .disabled(app.isBusy(BusyKey.moveThread(thread.id)))
+        } else {
+            let targets = app.moveTargets(for: thread)
+            if !targets.isEmpty {
+                IconMenu("Move to", systemImage: "arrow.right.square") {
+                    ForEach(targets) { runner in
+                        Button(runner.online ? runner.name : "\(runner.name), offline", systemImage: runner.icon ?? "desktopcomputer") {
+                            app.openMove(thread.id, to: runner)
+                        }
+                        .disabled(!runner.online)
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -1357,6 +1503,11 @@ struct SearchField: View {
     /// to type in.
     var focusOnAppear = false
     @FocusState private var focused: Bool
+    /// In a view kept built while hidden (`keptAlive`): it gives up the
+    /// cursor while hidden, so typing doesn't go to it, and with
+    /// `focusOnAppear` takes it each time it's shown, as one built afresh
+    /// would.
+    @Environment(\.keptShown) private var shown
 
     var body: some View {
         // The glass and the prompt on the same columns as a
@@ -1370,7 +1521,12 @@ struct SearchField: View {
                 .textFieldStyle(.plain)
                 .font(.system(size: TypeScale.sidebarButton))
                 .focused($focused)
-                .onAppear { if focusOnAppear { focused = true } }
+                // Hidden, it's out of the Tab order as well as unfocused.
+                .disabled(!shown)
+                .onAppear { if focusOnAppear, shown { focused = true } }
+                .onChange(of: shown) { _, now in
+                    if now, focusOnAppear { focused = true } else if !now { focused = false }
+                }
                 .tip(prompt)
             if !text.isEmpty {
                 Button {

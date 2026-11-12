@@ -13,6 +13,7 @@ import type { RemoteThreads } from '../../src/thread-index.ts';
 import { needsFromTool } from '../../src/needs.ts';
 import { CodexTools, type ToolDefinition } from '../../src/adapters/codex/tools.ts';
 import { toolTitle } from '../../src/tools.ts';
+import { ThreadRouter } from '../../src/handover.ts';
 
 function start(h: ReturnType<typeof makeHarness>, text = 'Fix the tests', extra: Record<string, unknown> = {}) {
   const { thread } = h.runner.create({ text, accountId: 'claude-3', ...extra });
@@ -1293,7 +1294,7 @@ test("end_turn lists only today's form, whichever forms it takes", async () => {
   const h = makeHarness();
   const { thread } = start(h);
   const one = await mcpClient(h, thread.id, true).endTurnShown();
-  assert.deepEqual(Object.keys(one.inputSchema.properties).sort(), ['archive', 'asks', 'byline', 'headline', 'needs', 'next', 'snooze', 'waitFor']);
+  assert.deepEqual(Object.keys(one.inputSchema.properties).sort(), ['archive', 'asks', 'byline', 'findings', 'headline', 'needs', 'next', 'snooze', 'waitFor']);
   assert.ok(!one.inputSchema.required?.length, 'every field is optional');
   const ask = (one.inputSchema.properties.asks as { items: { required: string[]; properties: Record<string, { description?: string; items?: { type?: string } }> } }).items;
   assert.deepEqual(ask.required, ['question']);
@@ -1795,4 +1796,230 @@ test('a whole id whose lookup fails for another reason says so, not "No thread"'
   const r = (await tools.find((x) => x.name === 'send_message')!.handler({ threadId: other.id, text: 'hi' } as never, {})) as { content: { text: string }[]; isError?: boolean };
   assert.equal(r.isError, true);
   assert.match(r.content[0].text, /try again in a moment/);
+});
+
+test('move_thread with a runner asks the main Mac to move the thread whole, and keeps its folder form', async () => {
+  const h = makeHarness();
+  const { thread: me } = start(h, 'Move me');
+  const asked: unknown[] = [];
+  const control: RemoteControl = {
+    list: async () => ({ runners: [], threads: [] }),
+    call: async () => undefined,
+    runners: async () => [
+      { id: 'm5runner0001', name: 'M5' },
+      { id: 'legitcloud01', name: 'Hetzner Cloud' },
+    ],
+    move: async (p) => {
+      asked.push(p);
+      return 'Moving it to Hetzner Cloud.';
+    },
+  };
+  const call = toolsWith(h, me.id, control);
+  const r = await call('move_thread', { runner: 'cloud', folder: '/home/mike/x' });
+  assert.equal(r.error, false, r.text);
+  assert.match(r.text, /Moving it to Hetzner Cloud/);
+  assert.deepEqual(asked, [{ threadId: me.id, runnerId: 'legitcloud01', runnerName: 'Hetzner Cloud', cwd: '/home/mike/x' }]);
+  // `then` is for folder moves; neither folder nor runner is an error.
+  assert.equal((await call('move_thread', { runner: 'cloud', then: 'go' })).error, true);
+  assert.equal((await call('move_thread', {})).error, true);
+  // Without the main Mac's mover, it says what's needed.
+  const none = toolsWith(h, me.id, undefined);
+  assert.match((await none('move_thread', { runner: 'cloud' })).text, /main Mac's runner/);
+});
+
+// Thread dcdc60a3 (11 Nov 2026): an ffmpeg job's exit came with end_turn's
+// "Now write your reply". The reply counted as reading the notice, the Stop
+// hook asked for end_turn again, and the "Done." after that second one became
+// the turn's reply in place of the full one.
+test('one reply: a notice handed over with "Now write your reply" leaves the reply as the reply', async () => {
+  const h = makeHarness();
+  const { thread, s } = start(h);
+  const { call } = tools(h, thread.id, undefined, () => true);
+  const send = async (itemId: string, input: Record<string, unknown>) => {
+    toolCall(s, itemId, END_TURN, input);
+    const r = await call('end_turn', input);
+    s.out({ kind: 'event', event: { type: 'tool.result', itemId, ok: !r.error, text: r.text, truncated: false, images: [] } });
+    return r;
+  };
+  s.text('m0', 'Ready. Now writing the reply.');
+  s.out({ kind: 'event', event: { type: 'system.note', text: 'Background command "ffmpeg" failed with exit code 255', wake: true } });
+  const ask = { needs: 'you', asks: [{ question: 'Ship it?', options: [{ label: 'Yes' }, { label: 'No' }] }] };
+  assert.equal((await send('e1', ask)).error, false);
+  const reply = 'Here is the full reply, with the GIF, the video and the table.';
+  s.text('m1', reply);
+  // Had the Stop hook asked anyway, a repeat says the message above stands,
+  // and text after it doesn't take the reply's place.
+  s.out({ kind: 'endTurnNudge' });
+  const again = await send('e2', ask);
+  assert.match(again.text, /your message above is the reply/);
+  s.text('m2', 'Done.');
+  s.result('completed');
+  await tick();
+  const texts = h.events(thread.id).filter((e) => e.type === 'assistant.text');
+  assert.ok(texts.some((e) => e.type === 'assistant.text' && e.itemId === 'm1' && e.final === true), 'the reply is the final text');
+  assert.ok(!texts.some((e) => e.type === 'assistant.text' && e.itemId === 'm2'), '"Done." is dropped');
+  assert.equal(h.runner.get(thread.id).needs, 'you');
+});
+
+// The same after the agent acts on the notice: the turn opens again, its next
+// end_turn says the message above is the reply, and a "Done." after that is
+// dropped rather than taking the reply's place.
+test('one reply: after a wake reopens the turn, text after a "message above is the reply" end_turn is dropped', async () => {
+  const h = makeHarness();
+  const { thread, s } = start(h);
+  const { call } = tools(h, thread.id, undefined, () => true);
+  const send = async (itemId: string, input: Record<string, unknown>) => {
+    toolCall(s, itemId, END_TURN, input);
+    const r = await call('end_turn', input);
+    s.out({ kind: 'event', event: { type: 'tool.result', itemId, ok: !r.error, text: r.text, truncated: false, images: [] } });
+    return r;
+  };
+  s.out({ kind: 'event', event: { type: 'system.note', text: 'Background command "ffmpeg" failed with exit code 255', wake: true } });
+  const ask = { needs: 'you', asks: [{ question: 'Ship it?', options: [{ label: 'Yes' }, { label: 'No' }] }] };
+  await send('e1', ask);
+  s.text('m1', 'The first reply.');
+  toolCall(s, 'b1', 'Bash', { command: 'cat ffmpeg.log' });
+  toolResult(s, 'b1');
+  s.text('m2', 'The ffmpeg job that failed was the first try, which I had stopped; both files are fine.');
+  s.out({ kind: 'endTurnNudge' });
+  const again = await send('e2', ask);
+  assert.equal(again.error, false, again.text);
+  assert.match(again.text, /your message above is the reply/);
+  s.text('m3', 'Done.');
+  s.result('completed');
+  await tick();
+  const texts = h.events(thread.id).filter((e) => e.type === 'assistant.text');
+  assert.ok(texts.some((e) => e.type === 'assistant.text' && e.itemId === 'm2'), 'the report is kept');
+  assert.ok(!texts.some((e) => e.type === 'assistant.text' && e.itemId === 'm3'), '"Done." is dropped');
+});
+
+// From Codex's review: an end_turn taken in the older form ("Noted.", as
+// Codex's bullets form answers) after a one-reply one, once a wake opened the
+// turn, means text after it isn't the reply.
+test('one reply: a later end_turn taken in the older form ends the reply that comes after', async () => {
+  const h = makeHarness();
+  const { thread, s } = start(h);
+  const { call } = tools(h, thread.id, undefined, () => true);
+  s.out({ kind: 'event', event: { type: 'system.note', text: 'Background command "Build" completed (exit code 0)', wake: true } });
+  const input = { needs: 'nothing' };
+  toolCall(s, 'e1', END_TURN, input);
+  const r = await call('end_turn', input);
+  s.out({ kind: 'event', event: { type: 'tool.result', itemId: 'e1', ok: true, text: r.text, truncated: false, images: [] } });
+  s.text('m1', 'The first reply.');
+  toolCall(s, 'b1', 'Bash', { command: 'cat build.log' });
+  toolResult(s, 'b1');
+  s.text('m2', 'The build passed, and here is everything it found.');
+  toolCall(s, 'e2', END_TURN, { summary: ['Built it.'], needs: 'nothing' });
+  s.out({ kind: 'event', event: { type: 'tool.result', itemId: 'e2', ok: true, text: 'Noted. Write a short final answer.', truncated: false, images: [] } });
+  s.text('m3', 'Done.');
+  s.result('completed');
+  await tick();
+  assert.ok(!h.events(thread.id).some((e) => e.type === 'assistant.text' && e.itemId === 'm3' && e.final === true), '"Done." is not the reply');
+});
+
+// A turn kept on a draining runner matches a short id against a list that
+// partly comes from the new runner. That list failing was taken for an
+// empty one, so send_message said "No thread with id df5c7153" for a
+// thread the whole id then reached (12 Nov).
+test("a short id is found on the other runner of a handover once it answers, and not called missing while it doesn't", async () => {
+  const h = makeHarness();
+  const { thread: me } = start(h, 'Bring in a PR');
+  const there = { ...h.runner.get(start(h, 'Plan the port').thread.id) };
+  const farId = 'df5c7153-f093-476a-9402-e78d3ba158de';
+  const far = { ...there, id: farId, title: 'Plan the GPUI port' };
+  let fails = 0;
+  // Lists that come back without it: a thread a draining runner left that
+  // isn't taken in yet is in neither runner's list.
+  let missing = 0;
+  // Lists that never come back: a link that stays open and doesn't answer.
+  let hangs = 0;
+  const sent: unknown[] = [];
+  const elsewhere = {
+    owns: (id: string) => id === farId,
+    find: async (id: string) => (id === farId ? far : undefined),
+    list: async () => {
+      if (hangs > 0) {
+        hangs--;
+        return new Promise<never>(() => {});
+      }
+      if (fails > 0) {
+        fails--;
+        throw new RpcError(ErrorCode.busy, "The new runner isn't answering yet; try again in a moment.");
+      }
+      if (missing > 0) {
+        missing--;
+        return [];
+      }
+      return [far];
+    },
+    search: async () => [],
+    call: async (method: string, params: Record<string, unknown>) => {
+      sent.push({ method, params });
+      if (method === 'threads.send') return { turnId: 't1' };
+      throw new Error(`unexpected ${method}`);
+    },
+  };
+  const router = new ThreadRouter(h.runner, () => elsewhere);
+  let slept = 0;
+  const list = buildThreadbearTools(router, me.id, () => Date.parse('2026-10-26T12:00:00Z'), undefined, undefined, undefined, { sleep: async () => void slept++ });
+  const send = async (threadId: string) => {
+    const r = (await list.find((x) => x.name === 'send_message')!.handler({ threadId, text: 'Merged.' } as never, {})) as { content: { text: string }[]; isError?: boolean };
+    return { text: r.content.map((c) => c.text).join('\n'), error: Boolean(r.isError) };
+  };
+
+  // It answers on the third try.
+  fails = 2;
+  const ok = await send('df5c7153');
+  assert.equal(ok.error, false, ok.text);
+  assert.equal(slept, 2);
+  assert.deepEqual(sent.map((s) => (s as { method: string }).method), ['threads.send']);
+
+  // It answers, without the thread at first.
+  slept = 0;
+  missing = 1;
+  const late = await send('df5c7153');
+  assert.equal(late.error, false, late.text);
+  assert.equal(slept, 1);
+
+  // One try that never answers is given up on, and the next one finds it.
+  slept = 0;
+  hangs = 1;
+  const hung = await send('df5c7153');
+  assert.equal(hung.error, false, hung.text);
+  assert.equal(slept, 1);
+  assert.equal(sent.length, 3);
+
+  // It never answers: said as that, after three tries, not as a missing
+  // thread, and nothing is sent.
+  slept = 0;
+  fails = 100;
+  const down = await send('df5c7153');
+  assert.equal(down.error, true);
+  assert.equal(slept, 2);
+  assert.doesNotMatch(down.text, /No thread with id/);
+  assert.match(down.text, /Couldn't look df5c7153 up just now .*use the whole id/);
+  assert.equal(sent.length, 3);
+
+  // A thread that really isn't anywhere is still "No thread".
+  fails = 0;
+  assert.match((await send('0000dead')).text, /No thread with id 0000dead/);
+
+  // list_threads still shows this runner's own meanwhile.
+  fails = 100;
+  const listed = (await list.find((x) => x.name === 'list_threads')!.handler({} as never, {})) as { content: { text: string }[] };
+  assert.match(listed.content[0].text, /Bring in a PR/);
+});
+
+// On a draining runner other Macs' threads come through the new runner
+// too; one that never answers mustn't hold a short id's lookup forever.
+test("a short id here is found when the list of other Macs' threads never comes back", async () => {
+  const h = makeHarness();
+  const { thread: me } = start(h, 'Asker');
+  const other = start(h, 'Answerer').thread;
+  const router = new ThreadRouter(h.runner, () => undefined);
+  const stuck = { list: () => new Promise<never>(() => {}), call: async () => { throw new Error('unused'); } };
+  const list = buildThreadbearTools(router, me.id, () => Date.parse('2026-10-26T12:00:00Z'), undefined, undefined, undefined, { remote: () => stuck, sleep: async () => undefined });
+  const r = (await list.find((x) => x.name === 'read_thread')!.handler({ threadId: other.id.slice(0, 8) } as never, {})) as { content: { text: string }[]; isError?: boolean };
+  assert.equal(Boolean(r.isError), false, r.content[0].text);
+  assert.match(r.content[0].text, /Answerer/);
 });

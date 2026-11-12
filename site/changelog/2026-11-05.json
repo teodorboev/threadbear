@@ -1,0 +1,70 @@
+{
+  "release": "2026-11-05",
+  "highlights": [
+    {
+      "kind": "added",
+      "title": "Give an agent a password without it going in the thread",
+      "text": "When an agent needs a password or key, it asks with a private card on the Mac or iPhone. What you type goes only to the computer running the agent, never into the thread, and it's deleted after 24 hours.",
+      "media": {
+        "type": "image",
+        "src": "password-card-2.webp",
+        "width": 1024,
+        "height": 658,
+        "alt": "A thread asking why Raycast's Keep Awake toggle keeps asking for a password. Under the question the agent has asked for the Mac administrator password with a private card: its reason, an empty Paste the secret field, a greyed Save securely button, Decline, and a note that the value is kept out of chat in a private file the agent's commands can read for 24 hours."
+      }
+    },
+    {
+      "kind": "changed",
+      "title": "Pick several options, or none",
+      "text": "In the options window, tick as many options as you like, or None, and answer them all in one reply box. Each option's screenshots now sit together, and holding Space shows today's version in place of the one on show.",
+      "media": {
+        "type": "clip",
+        "src": "pick-several.mp4",
+        "poster": "pick-several-2.webp",
+        "width": 1600,
+        "height": 1056,
+        "alt": "The options window for a walk done screen steps from option A to B and C, switches to showing all three side by side, then ticks A and C in the list on the right so the send button reads Send A + C, and a reply is typed: Map from A, the secret badge from C."
+      }
+    },
+    {
+      "kind": "changed",
+      "title": "Thread rows name their project again",
+      "text": "The grey line under each thread's title names its project or folder again. A thread that a schedule, a tool or another agent started has a small mark first: hover it to see who started it and why.",
+      "media": {
+        "type": "image",
+        "src": "row-marks.webp",
+        "width": 650,
+        "height": 808,
+        "alt": "Eight thread rows in the sidebar, each with a title and a grey line naming its project or folder and the computer it runs on, like misc and m5 or CannMedia and bruce. Three have a small mark before that line: an external drive on Check the photo library backup, a paw print on Rename the Settings tabs, and a clock on Export last quarter's invoices as CSV."
+      }
+    },
+    {
+      "kind": "fixed",
+      "title": "Paths with spaces are links",
+      "text": "A file path with spaces in an agent's reply, like exports/Launch Poster.png, is a link now, so you can open it like any other path.",
+      "media": {
+        "type": "clip",
+        "src": "spaced-paths.mp4",
+        "poster": "spaced-paths.webp",
+        "width": 1292,
+        "height": 900,
+        "alt": "An agent replies that it exported the launch video and poster. Both paths, exports/Threadbear Launch.mp4 and exports/Launch Poster.png, show in blue as links, and opening the poster shows the picture in the panel on the right."
+      }
+    }
+  ],
+  "added": [
+    "A thread that was mid-reply when your Mac restarted or Threadbear crashed carries on where it stopped",
+    "Middle-click a link in a thread to open it, as a click does",
+    "Threadbear's code is public under the MIT licence, with a guide to making your own copy"
+  ],
+  "changed": [
+    "A thread waiting for the internet to come back says Waiting for connection on its row, on the Mac and iPhone, where it used to say Failed",
+    "Editing a message you just sent asks first when the thread has work running in the background, since going back stops it",
+    "Copying from a thread keeps its links, bold, italic and code when you paste into Slack or a web page, where links used to come out as plain words",
+    "On the iPhone, your answer to an options review shows each pick, None and your reply on lines of their own"
+  ],
+  "fixed": [
+    "Clicking the thread, the message box or a panel while Threadbear isn't the app in front now does what you clicked, not just bring the window forward",
+    "Automatic updates no longer stay stuck on an older version after a hiccup while building the new one"
+  ]
+}

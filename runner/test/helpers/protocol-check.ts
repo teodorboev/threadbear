@@ -68,6 +68,7 @@ const PERSISTED: Record<string, (e: Obj) => string | null> = {
     (e.itemId === undefined || isStr(e.itemId)) &&
     isStr(e.name) &&
     isStr(e.title) &&
+    (e.reason === undefined || isStr(e.reason)) &&
     e.input &&
     Array.isArray(e.options) &&
     e.options.every((o: string) => ['allow', 'allowAlways', 'deny'].includes(o))
@@ -112,7 +113,7 @@ const PERSISTED: Record<string, (e: Obj) => string | null> = {
   'action.run': (e) =>
     isStr(e.actionId) && isStr(e.patch) && isStr(e.title) && isStr(e.command) && typeof e.ok === 'boolean' &&
     (e.exitCode === undefined || isNum(e.exitCode)) && isStr(e.text) && typeof e.truncated === 'boolean' && isNum(e.durationMs) &&
-    (e.trigger === undefined || e.trigger === 'turn.end' || e.trigger === 'worktree.setup')
+    (e.trigger === undefined || e.trigger === 'turn.end' || e.trigger === 'worktree.setup' || e.trigger === 'worktree.teardown')
       ? null
       : 'actionId, patch, title, command, ok, exitCode?, text, truncated, durationMs, trigger?',
   'thread.rewound': (e) =>
@@ -176,12 +177,14 @@ export function checkSummary(t: Obj): string[] {
   for (const k of ['createdAt', 'updatedAt', 'lastActivityAt']) if (!isIso(t[k])) problems.push(k);
   for (const k of ['lastSeq', 'lastSeenSeq']) if (!isNum(t[k])) problems.push(k);
   if (t.preview.length > 140 || t.preview.includes('\n')) problems.push('preview too long or multi-line');
+  if (t.keywords !== undefined && (!isStr(t.keywords) || !t.keywords || t.keywords.length > 200 || t.keywords !== t.keywords.toLowerCase() || /\s{2}|\n/.test(t.keywords))) problems.push('keywords');
   if (t.asked !== undefined && (!isStr(t.asked) || !t.asked || t.asked.length > 140 || t.asked.includes('\n'))) problems.push('asked');
   if (t.title.length > 200) problems.push('title');
   for (const k of ['model', 'modelInUse', 'snoozedUntil', 'archivedAt', 'nativeSessionId']) if (t[k] !== undefined && !isStr(t[k])) problems.push(k);
   if (t.archivedBy !== undefined && (!['mike', 'agent', 'threadbear'].includes(t.archivedBy as string) || t.archivedAt === undefined)) problems.push('archivedBy');
   if (t.archiveVerdict !== undefined && (!['worked', 'didntWork', 'notNeeded'].includes(t.archiveVerdict as string) || t.archivedAt === undefined)) problems.push('archiveVerdict');
   if (t.poolId !== undefined && (!isStr(t.poolId) || !t.poolId)) problems.push('poolId');
+  if (t.carryOnAtReset !== undefined && t.carryOnAtReset !== false) problems.push('carryOnAtReset');
   if (t.waitingForRoom !== undefined) {
     const w = t.waitingForRoom;
     const ok = w && typeof w === 'object' && isIso(w.until) && (w.accountId === undefined || isStr(w.accountId)) && Object.keys(w).every((k) => ['until', 'accountId'].includes(k));
@@ -307,7 +310,7 @@ export function checkSummary(t: Obj): string[] {
   if (t.looseEnds !== undefined) {
     const l = t.looseEnds;
     const ok = l && Number.isInteger(l.seq) && isIso(l.at) && Array.isArray(l.ends) &&
-      l.ends.every((e: any) => ['unlanded', 'uncommitted', 'thread', 'scheduled'].includes(e.kind) && isStr(e.text) &&
+      l.ends.every((e: any) => ['unlanded', 'uncommitted', 'unpushed', 'unmerged', 'thread', 'open', 'scheduled'].includes(e.kind) && isStr(e.text) &&
         (e.threadId === undefined || isStr(e.threadId)) && (e.at === undefined || isIso(e.at)) &&
         Object.keys(e).every((k) => ['kind', 'text', 'threadId', 'at'].includes(k))) &&
       Object.keys(l).every((k) => ['seq', 'ends', 'at'].includes(k));
@@ -316,9 +319,9 @@ export function checkSummary(t: Obj): string[] {
   const allowed = new Set([
     'id', 'title', 'cwd', 'accountId', 'provider', 'model', 'permissionMode', 'status', 'live', 'needsYou', 'createdAt', 'updatedAt',
     'lastActivityAt', 'snoozedUntil', 'snoozedUntilRestart', 'snoozedUntilRelease', 'archivedAt', 'archivedBy', 'archiveVerdict', 'starredAt', 'preview', 'lastSeq', 'lastSeenSeq', 'nativeSessionId', 'contextTokens', 'costUsd',
-    'poolId', 'waitingForRoom', 'waitingForNetwork', 'wakeWhen', 'waitingOn',
+    'poolId', 'waitingForRoom', 'carryOnAtReset', 'waitingForNetwork', 'wakeWhen', 'waitingOn',
     'effort', 'modelInUse', 'effortInUse', 'contextWindow', 'panels', 'actions', 'hooks', 'patches', 'background', 'subagents', 'projects', 'worktree',
-    'needs', 'asks', 'asksSeq', 'highlightsAt', 'panelRequest', 'share', 'startedBy', 'asked', 'looseEnds',
+    'needs', 'asks', 'asksSeq', 'highlightsAt', 'panelRequest', 'share', 'startedBy', 'asked', 'keywords', 'looseEnds',
   ]);
   for (const k of Object.keys(t)) if (!allowed.has(k)) problems.push(`unexpected field ${k}`);
   return problems;

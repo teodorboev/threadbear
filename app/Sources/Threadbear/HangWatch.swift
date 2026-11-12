@@ -214,7 +214,7 @@ final class HangWatch: @unchecked Sendable {
 
     private func write(_ record: Record, _ name: String) {
         guard let data = try? Self.encoder.encode(record) else { return }
-        try? data.write(to: folder.appendingPathComponent(name + ".json"), options: .atomic)
+        try? PrivateFile.write(data, to: folder.appendingPathComponent(name + ".json"))
     }
 
     private static func fileName(for date: Date) -> String {

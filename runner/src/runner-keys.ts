@@ -14,7 +14,7 @@ import path from 'node:path';
 import os from 'node:os';
 import type { Config } from './config.ts';
 import { CONVEX_BIN } from './convex-keys.ts';
-import { convexEnv, readConvexAdmin, SELF_HOSTED_ENV_FILE, type ConvexAdmin } from './convex-admin.ts';
+import { convexEnv, localOnly, readConvexAdmin, SELF_HOSTED_ENV_FILE, type ConvexAdmin } from './convex-admin.ts';
 import { convexPoster, forbiddenText, readSyncKey, type Post } from './sync.ts';
 
 type Run = { ok: boolean; out: string; err: string };
@@ -73,8 +73,35 @@ function adminAdvice(a: Admin, where: string, url: string): string {
     `${where} also has ${have.join(', ')}. Any of them can do anything to the deployment, so its runner key keeps nothing out, and deleting the files doesn't stop a copy someone already took. In this order:`,
     `  1. Revoke them on Convex's side: the deploy keys in ${settings} (Deploy keys)${commands}.${odd ? ' Look there for any you don\'t recognise too.' : ''}${a.cliLogin ? " The CLI login: in the Convex dashboard's account settings, revoke that Mac's access token (named after its hostname)." : ''}${a.teamToken ? " The team token: in the Convex dashboard's team settings (Access tokens)." : ''}${a.selfHostedEnv ? " A self-hosted admin key can't be revoked on its own: every one comes from the backend's instance secret, so changing that is the only way (docs/self-hosting.md, \"Keys\")." : ''}`,
     `  2. Then remove them there: the files above${a.cliLogin ? ', and npx convex logout' : ''}.`,
-    "  3. Then rotate the main key, which they could read: tb runner rotate-owner here. Only the main Mac needs any of these.",
+    "  3. Then rotate the main key, which they could read: tb runner rotate-owner on the main Mac. It's needed if that Mac ever had the main key, ran threads while it had these (an agent there could have read the main key through them), or someone else could have used them. A Mac only you use that has just joined with setup --existing and run no threads yet can skip it. Only the main Mac needs any of these.",
+    ...(a.cliLogin ? ["A Convex CLI login there usually isn't a sign of anything wrong: it's left from an earlier npx convex login on that Mac (setup --existing doesn't make one)."] : []),
   ].join('\n');
+}
+
+// What a failed ssh to the other Mac means, and the fix, from ssh's own
+// error. It runs with BatchMode=yes (no prompts), so an unknown host key or
+// a Mac that only takes a password fails instead of asking (issue #39).
+export function sshTrouble(host: string, err: string): string {
+  const h = clean(host, 120);
+  const bare = h.replace(/^[^@]*@/, '');
+  // The suggested commands keep the forwarding off, as SSH_OPTIONS does: a
+  // plain ssh takes ForwardAgent from ~/.ssh/config, and a tampered Mac
+  // could use a forwarded agent to log back in here.
+  const sshSafe = `ssh -o ForwardAgent=no -o ClearAllForwardings=yes -o ForwardX11=no ${h}`;
+  // A command that ran there and failed (cat: ...: Permission denied) is not ssh's own trouble.
+  const lines = err.split('\n').filter((l) => !/^(cat|mkdir|chmod|mv|sh|\/bin\/sh): /.test(l.trim())).join('\n');
+  if (/could not resolve hostname|nodename nor servname|name or service not known/i.test(lines))
+    return `${h} isn't a name this Mac can find. A Mac on the same network usually answers to its name with .local on the end (${/\.local$/.test(bare) ? bare : `${bare}.local`}), or use its IP address.`;
+  if (/remote host identification has changed/i.test(lines))
+    return `${h}'s host key has changed since this Mac last saw it. If you know why (it was reinstalled, or the name now points at another Mac), forget the old one with ssh-keygen -R ${bare} and trust the new one as for a new Mac; otherwise stop and find out first.`;
+  if (/host key verification failed|no .*host key is known/i.test(lines))
+    return `This Mac hasn't seen ${h}'s host key before, and tb runner add can't stop to ask about it. Run ${sshSafe} once by hand and answer yes only if the fingerprint it shows matches that Mac's own (ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub, run on that Mac), then run this again.`;
+  if (/permission denied \(/i.test(lines))
+    return `${h} didn't take this Mac's ssh key, and tb runner add can't type a password. Run ssh-copy-id -o ClearAllForwardings=yes ${h} once (it asks for that Mac's password; make a key first with ssh-keygen if this Mac has none), then run this again.`;
+  if (/connection refused|no route to host|timed out|network is unreachable|connection closed|connection reset|kex_exchange_identification/i.test(lines))
+    return `${h} didn't answer on the ssh port. Either it's asleep or off this network, or Remote Login is off there: turn it on in System Settings > General > Sharing > Remote Login on that Mac, then run this again.`;
+  if (lines.trim() !== err.trim()) return `ssh reached ${h}, but the command there failed (above). Check Threadbear's data folder there is readable by that user.`;
+  return `Check ${sshSafe} works from this Mac on its own, then run this again.`;
 }
 
 function deploymentOf(url: string): string | undefined {
@@ -130,9 +157,11 @@ export const REMOTE_ADMIN_CHECK = [
   'echo checked',
 ].join('; ');
 
-function remoteAdmin(ssh: Ssh, host: string): Admin | undefined {
+// undefined when it couldn't look; why goes to `why`, for sshTrouble.
+function remoteAdmin(ssh: Ssh, host: string, why?: { err: string }): Admin | undefined {
   const r = ssh(host, REMOTE_ADMIN_CHECK);
   const lines = r.out.split('\n').map((l) => l.trim()).filter(Boolean);
+  if (why) why.err = r.err;
   if (!r.ok || lines.at(-1) !== 'checked') return undefined;
   return { deployEnv: lines.includes('deploy-env'), cliLogin: lines.includes('cli-login'), teamToken: lines.includes('team-token'), selfHostedEnv: lines.includes('self-hosted-env'), panels: lines.filter((l) => l.startsWith('panel ')).map((l) => l.slice(6).trim() || '(no name)') };
 }
@@ -282,6 +311,8 @@ export async function runnerKeysCommand(cfg: Pick<Config, 'home' | 'sync'>, args
       print(`Took out everything runner ${id} wrote: its threads with their messages and pictures, sidebar rows, Pocket cards, schedules, projects and accounts.`);
       return 0;
     }
+    // Another Mac can't reach a backend on this Mac's 127.0.0.1, whatever key it has.
+    if (sub === 'add' && localOnly(url)) return fail(`This Mac's backend is on this Mac only (${url}, from setup --self-hosted --local), so another Mac can't reach it. To add one, put it on your tailnet first: ./threadbear setup --self-hosted --tailnet (docs/self-hosting.md).`);
     if (sub === 'add') return await add(rest[0], f, call, deps.ssh ?? realSsh, print, fail, url, cfg.sync.runnerId, cfg.sync.site);
     if (sub === 'logins') return await logins(rest, f, call, print, fail);
     // After a rotation, what the old key could have left (auditCommand).
@@ -292,7 +323,7 @@ export async function runnerKeysCommand(cfg: Pick<Config, 'home' | 'sync'>, args
 }
 
 async function add(name: string | undefined, f: Flags, call: (kind: 'query' | 'mutation', fn: string, a: Record<string, unknown>) => Promise<unknown>, ssh: Ssh, print: (s: string) => void, fail: (s: string) => number, url: string, ownId: string | undefined, site?: string): Promise<number> {
-  if (!name?.trim()) return fail('tb runner add <name>: what to call the runner ("bruce").');
+  if (!name?.trim()) return fail('tb runner add <name>: what to call the runner ("mac-mini").');
   if (Boolean(f.ssh) === Boolean(f.out)) return fail('Say where the key goes: --ssh <host> writes it into that Mac\'s secrets/convex-key, --out <file> into a file of your own. It is never printed.');
   if (!ownId) return fail("This Mac has no sync.runnerId in runner.json yet (its runner makes one when it starts), so it can't tell its own id from another Mac's. Start it, then run this again.");
   const asked = f.id?.trim();
@@ -302,13 +333,21 @@ async function add(name: string | undefined, f: Flags, call: (kind: 'query' | 'm
   let runnerId = asked;
   if (f.ssh) {
     const r = ssh(f.ssh, `cat ${REMOTE_HOME}/runner.json`);
-    if (!r.ok) return fail(`Couldn't read Threadbear's runner.json on ${f.ssh} over ssh: ${clean(r.err || 'no answer')}. Is Threadbear set up there?`);
+    if (!r.ok) {
+      // A file that isn't there is a Mac without Threadbear; anything else is ssh itself.
+      if (/^cat: .*no such file/im.test(r.err)) return fail(`${f.ssh} has no Threadbear runner.json. Run ./threadbear setup --existing there first.`);
+      return fail(`Couldn't reach ${f.ssh} over ssh: ${clean(r.err || 'no answer')}\n${sshTrouble(f.ssh, r.err)}`);
+    }
     let json: { sync?: { runnerId?: string; url?: string; site?: string } } & Record<string, unknown>;
     try {
       json = JSON.parse(r.out);
     } catch {
-      return fail(`${f.ssh}'s runner.json isn't JSON.`);
+      return fail(`${f.ssh}'s runner.json isn't JSON. Fix it there first; this won't write over it.`);
     }
+    // Valid JSON that isn't an object ([] or "x") is as broken as a typo:
+    // spread into the file written back, it became one with nothing in it
+    // but a new runner id (config.ts, RunnerJsonError).
+    if (!json || typeof json !== 'object' || Array.isArray(json)) return fail(`${f.ssh}'s runner.json holds JSON, but not an object in { }. Fix it there first; this won't write over it.`);
     if (json.sync?.url && json.sync.url.replace(/\/+$/, '') !== url.replace(/\/+$/, '')) return fail(`${f.ssh} mirrors to ${clean(json.sync.url, 120)}, not this Mac's ${url}, so a key from here is no use to it.`);
     // What that Mac says it is, which this Mac decides whether to believe:
     // a Mac that's been tampered with could name this one, or any runner
@@ -422,8 +461,9 @@ async function listKeys(call: (kind: 'query' | 'mutation', fn: string, a: Record
 // admin credentials (Admin). Exit 1 when it does, or when it couldn't look.
 function check(cfg: Pick<Config, 'home'>, key: string, f: Flags, ssh: Ssh, print: (s: string) => void, fail: (s: string) => number, userHome: string, url: string): number {
   if (f.ssh) {
-    const a = remoteAdmin(ssh, f.ssh);
-    if (!a) return fail(`Couldn't look on ${f.ssh} over ssh, so this says nothing about it: check ssh reaches it, then run this again.`);
+    const why = { err: '' };
+    const a = remoteAdmin(ssh, f.ssh, why);
+    if (!a) return fail(`Couldn't look on ${f.ssh} over ssh, so this says nothing about it${why.err ? ` (${clean(why.err)})` : ''}.\n${sshTrouble(f.ssh, why.err)}`);
     if (hasAdmin(a)) return fail(adminAdvice(a, f.ssh, url));
     print(`${f.ssh} has no deploy key, self-hosted admin key or panel keys in its Threadbear data folder and no Convex login.`);
     return 0;

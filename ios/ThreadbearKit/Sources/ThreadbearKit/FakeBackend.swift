@@ -403,10 +403,10 @@ public final class FakeBackend: Backend, @unchecked Sendable {
         }
     }
 
-    public func search(_ text: String) async throws -> [PhoneThread] {
+    public func search(_ text: String, everywhere: Bool) async throws -> [PhoneThread] {
         let query = text.trimmingCharacters(in: .whitespacesAndNewlines)
         return lock.withLock { Array(threadsById.values) }
-            .filter { $0.archivedAt != nil && ThreadSearch.matches($0, query) }
+            .filter { (everywhere || $0.archivedAt != nil) && ThreadSearch.matches($0, query) }
             .sorted { $0.lastActivityAt > $1.lastActivityAt }
     }
 
@@ -461,6 +461,10 @@ public final class FakeBackend: Backend, @unchecked Sendable {
         let from = page.first?.seq ?? beforeSeq
         let images = lock.withLock { (imagesById[threadId] ?? []).filter { $0.seq >= from && $0.seq < beforeSeq } }
         return MessagePage(messages: page, hasMore: before.count > limit, images: images)
+    }
+
+    public func images(_ threadId: String, from: Int) -> AsyncThrowingStream<[MessageImage], Error> {
+        watch { [unowned self] in lock.withLock { (imagesById[threadId] ?? []).filter { $0.seq >= from } } }
     }
 
     public func messages(_ threadId: String, limit: Int) -> AsyncThrowingStream<MessagePage, Error> {
@@ -608,6 +612,15 @@ public final class FakeBackend: Backend, @unchecked Sendable {
             s.messagesById[threadId] = list
         }
         return newCommand(threadId: started)
+    }
+
+    /// Stops the turn as a runner would: the thread goes idle, its working line gone.
+    public func interrupt(threadId: String) async throws -> String {
+        mutate { s in
+            s.threadsById[threadId]?.status = .idle
+            s.threadsById[threadId]?.working = nil
+        }
+        return newCommand()
     }
 
     /// A Claude thread's list, as a runner would send it, for the palette
@@ -837,7 +850,9 @@ public final class FakeBackend: Backend, @unchecked Sendable {
                         asksSeq: 126),
             PhoneThread(threadId: "a4", title: "Tidy up old feature flags", cwd: "~/code/api",
                         preview: "Removed six flags nothing reads any more.", lastActivityAt: ago(190),
-                        next: ["Remove the flag helpers too"]),
+                        next: ["Remove the flag helpers too"],
+                        looseEnds: [PhoneLooseEnd(kind: "uncommitted", text: "2 files it changed in api aren't committed"),
+                                    PhoneLooseEnd(kind: "thread", text: "\"Search box for the docs\", a thread it started, is still working", threadId: "a5")]),
             PhoneThread(threadId: "a5", title: "Search box for the docs", cwd: "~/code/website", status: .running,
                         preview: "Adding the index.", lastActivityAt: ago(1), projects: site,
                         working: "Running npm test"),

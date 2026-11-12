@@ -6,6 +6,8 @@ import os from 'node:os';
 import path from 'node:path';
 import type { Account, Pool, Provider, UsageWindow } from './protocol.ts';
 import { PROVIDERS } from './protocol.ts';
+import { providerName } from './providers.ts';
+import { ACP_AGENTS, ACP_PROVIDERS } from './adapters/acp/agents.ts';
 import { accountRoom, MIN_ROOM_PERCENT, resetTime } from './usage.ts';
 
 // How long a wait lasts when no login in the pool says when it's back, and
@@ -13,8 +15,6 @@ import { accountRoom, MIN_ROOM_PERCENT, resetTime } from './usage.ts';
 export const UNKNOWN_WAIT_MS = 30 * 60_000;
 // A wait ends a minute after the reset, so the provider has caught up.
 export const WAIT_SLACK_MS = 60_000;
-
-const PROVIDER_TITLES: Record<Provider, string> = { claude: 'Claude', codex: 'Codex', opencode: 'OpenCode' };
 
 // The built-in list, worked out from the logins found: one pool per
 // provider holding its logins that have no note, then one per noted login
@@ -28,7 +28,7 @@ export function defaultPools(accounts: Account[], notes: Record<string, string>,
   for (const provider of PROVIDERS) {
     const mine = accounts.filter((a) => a.provider === provider);
     const plain = mine.filter((a) => !noteOf(a));
-    if (plain.length) out.push(withFolders({ id: provider, title: PROVIDER_TITLES[provider], accountIds: plain.map((a) => a.id), builtIn: true }, plain, folders));
+    if (plain.length) out.push(withFolders({ id: provider, title: providerName(provider), accountIds: plain.map((a) => a.id), builtIn: true }, plain, folders));
     for (const a of mine.filter((x) => noteOf(x))) {
       const word = noteOf(a)!.split(/\s+/)[0].replace(/[^\p{L}\p{N}_-]/gu, '');
       let id = word.toLowerCase();
@@ -47,7 +47,10 @@ function withFolders(pool: Pool, members: Account[], folders: Record<string, str
 // The pools in force: runner.json's `pools` when it has any, else the
 // built-in ones. A runner.json entry of the wrong shape is skipped.
 export function readPools(cfg: { pools?: unknown; accountNotes?: Record<string, string> }, accounts: Account[], folders: Record<string, string[]> = {}): Pool[] {
-  const saved = Array.isArray(cfg.pools) ? cfg.pools.map(shapeOf).filter((p): p is Pool => !!p) : [];
+  // A saved pool of nothing but an ACP agent this runner doesn't offer (the
+  // experiment off) isn't there.
+  const missing = ACP_PROVIDERS.map((p) => ACP_AGENTS[p].accountId).filter((id) => !accounts.some((a) => a.id === id));
+  const saved = (Array.isArray(cfg.pools) ? cfg.pools.map(shapeOf).filter((p): p is Pool => !!p) : []).filter((p) => !p.accountIds.length || !p.accountIds.every((id) => missing.includes(id)));
   if (saved.length) return saved;
   return defaultPools(accounts, cfg.accountNotes ?? {}, folders);
 }
@@ -223,7 +226,7 @@ function limitWindow(a: Account): UsageWindow | undefined {
 // window's reset. undefined when no reset time is known.
 export function backAt(a: Account, now: number): number | undefined {
   const main = mainWindows(a);
-  let holding = main.filter((w) => w.remainingPercent < (a.usage?.blocked ? 1 : MIN_ROOM_PERCENT));
+  let holding = main.filter((w) => w.remainingPercent < MIN_ROOM_PERCENT);
   if (!holding.length && a.usage?.blocked) holding = [limitWindow(a)].filter((w): w is UsageWindow => !!w);
   const times = holding.map((w) => Date.parse(w.resetsAt ?? '')).filter((t) => Number.isFinite(t) && t > now);
   return times.length && times.length === holding.length ? Math.max(...times) : undefined;
@@ -281,26 +284,63 @@ export function findPool(pools: Pool[], q: string): Pool | undefined {
 // "Pools", "Shared between runners"). Login ids are each runner's own
 // (claude-main is a different login on each machine), so a shared pool
 // names its logins by provider and email; one with no email known is
-// named by the runner that has it and its id there.
+// named by the runner that has it and its id there. A login whose email
+// another login of its provider on the same runner shares (two config
+// folders signed in to one account, issue 18) carries both: its runner
+// takes it by id, and the others by email as usual.
 export type PoolMember = { provider: Provider; email?: string; runnerId?: string; accountId?: string };
 export type SharedPool = { id: string; title: string; members: PoolMember[]; folders?: string[]; icon?: string };
 
 const emailOf = (a: Account): string | undefined => a.email?.trim().toLowerCase() || undefined;
 
-export function memberOf(a: Account, runnerId: string): PoolMember {
+// The other logins of this one's provider here with the same email.
+export function sameEmail(a: Account, accounts: Account[]): Account[] {
   const email = emailOf(a);
-  return email ? { provider: a.provider, email } : { provider: a.provider, runnerId, accountId: a.id };
+  return email ? accounts.filter((x) => x.id !== a.id && x.provider === a.provider && emailOf(x) === email) : [];
 }
 
-const memberKey = (m: PoolMember): string => (m.email ? `${m.provider}:${m.email.toLowerCase()}` : `${m.provider}:${m.runnerId}/${m.accountId}`);
-
-// This runner's login for a member, if it has it.
-function localLogin(m: PoolMember, accounts: Account[], runnerId: string): Account | undefined {
-  if (m.email) {
-    const email = m.email.toLowerCase();
-    return accounts.find((a) => a.provider === m.provider && emailOf(a) === email);
+// One line per group of logins of a provider here sharing an email, for
+// tb accounts: "claude-main and claude-2 share an email, ...".
+export function sameEmailWarnings(accounts: Account[]): string[] {
+  const out: string[] = [];
+  const done = new Set<string>();
+  for (const a of accounts) {
+    if (done.has(a.id)) continue;
+    const twins = sameEmail(a, accounts);
+    if (!twins.length) continue;
+    const ids = [a.id, ...twins.map((x) => x.id)];
+    for (const id of ids) done.add(id);
+    const names = ids.length === 2 ? ids.join(' and ') : `${ids.slice(0, -1).join(', ')} and ${ids.at(-1)}`;
+    out.push(`${names} share an email, so they share one usage limit, and other runners can't tell them apart in a shared pool.`);
   }
-  return m.runnerId === runnerId ? accounts.find((a) => a.provider === m.provider && a.id === m.accountId) : undefined;
+  return out;
+}
+
+// `pin` false leaves the id off a shared email, for a backend before
+// POOL_PINS_API_VERSION, whose sync:pools hides any member with a runner
+// id from the other runners' keys.
+export function memberOf(a: Account, runnerId: string, accounts: Account[] = [], pin = true): PoolMember {
+  const email = emailOf(a);
+  if (!email) return { provider: a.provider, runnerId, accountId: a.id };
+  return pin && sameEmail(a, accounts).length ? { provider: a.provider, email, runnerId, accountId: a.id } : { provider: a.provider, email };
+}
+
+const memberKey = (m: PoolMember): string => (m.runnerId && m.accountId ? `${m.provider}:${m.runnerId}/${m.accountId}` : `${m.provider}:${m.email?.toLowerCase()}`);
+
+// A member carrying another runner's id along with its email: that runner
+// told two logins with one email apart, and here it's matched by email.
+const pinnedElsewhere = (m: PoolMember, runnerId: string): boolean => !!m.email && !!m.runnerId && m.runnerId !== runnerId;
+
+// This runner's login for a member, if it has it: by id when the member
+// is this runner's (and the login is still here), else by email.
+function localLogin(m: PoolMember, accounts: Account[], runnerId: string): Account | undefined {
+  if (m.runnerId === runnerId && m.accountId) {
+    const exact = accounts.find((a) => a.provider === m.provider && a.id === m.accountId);
+    if (exact) return exact;
+  }
+  if (!m.email) return undefined;
+  const email = m.email.toLowerCase();
+  return accounts.find((a) => a.provider === m.provider && emailOf(a) === email);
 }
 
 // The shared list as this runner's pools: each with the logins it has, in
@@ -319,19 +359,27 @@ export function fromShared(shared: SharedPool[], accounts: Account[], runnerId: 
 // given (its own logins, by id); `previous` the list before. Members this
 // runner has no login for keep their places, the logins it does have fill
 // the places its logins held, in the order given, and any left over join
-// the end. Pools it couldn't see come after its own, unchanged.
-export function toShared(saved: Pool[], previous: SharedPool[], accounts: Account[], runnerId: string): SharedPool[] {
+// the end. A member another runner pinned by id stays as it was while the
+// login it matches here is still in the pool, so a save here doesn't undo
+// that runner's choice. Pools it couldn't see come after its own,
+// unchanged. `pin`: memberOf's.
+export function toShared(saved: Pool[], previous: SharedPool[], accounts: Account[], runnerId: string, pin = true): SharedPool[] {
   const seen = (m: PoolMember) => !!localLogin(m, accounts, runnerId);
   const out: SharedPool[] = saved.map((p) => {
+    const before = previous.find((x) => x.id === p.id)?.members ?? [];
+    // Each of this runner's logins in the order given, as the member(s)
+    // that stand for it: another runner's pinned ones that match it here,
+    // else its own.
     const chosen: PoolMember[] = [];
     for (const id of p.accountIds) {
+      const pinned = before.filter((m) => pinnedElsewhere(m, runnerId) && localLogin(m, accounts, runnerId)?.id === id);
       const a = accounts.find((x) => x.id === id);
-      const m = a && memberOf(a, runnerId);
-      if (m && !chosen.some((c) => memberKey(c) === memberKey(m))) chosen.push(m);
+      const mine = pinned.length ? pinned : a ? [memberOf(a, runnerId, accounts, pin)] : [];
+      for (const m of mine) if (!chosen.some((c) => memberKey(c) === memberKey(m))) chosen.push(m);
     }
     const members: PoolMember[] = [];
     let next = 0;
-    for (const m of previous.find((x) => x.id === p.id)?.members ?? []) {
+    for (const m of before) {
       if (!seen(m)) members.push(m);
       else if (next < chosen.length) members.push(chosen[next++]!);
     }
@@ -355,9 +403,10 @@ export function readShared(raw: unknown): SharedPool[] {
     for (const m of r.members as Record<string, unknown>[]) {
       if (!m || !(PROVIDERS as readonly unknown[]).includes(m.provider)) continue;
       const member: PoolMember = { provider: m.provider as Provider };
+      const pinned = typeof m.runnerId === 'string' && typeof m.accountId === 'string';
       if (typeof m.email === 'string' && m.email) member.email = m.email.toLowerCase();
-      else if (typeof m.runnerId === 'string' && typeof m.accountId === 'string') Object.assign(member, { runnerId: m.runnerId, accountId: m.accountId });
-      else continue;
+      else if (!pinned) continue;
+      if (pinned) Object.assign(member, { runnerId: m.runnerId, accountId: m.accountId });
       members.push(member);
     }
     const pool: SharedPool = { id: r.id, title: r.title, members };

@@ -61,6 +61,11 @@ export const threadFields = {
   // What Mike last said to it, one line: the row's "You: ..."
   // (docs/protocol.md, "What Mike last asked"). Since API 31.
   asked: v.optional(v.string()),
+  // The recap box's text, from API 70. The box went on 11 Nov; kept so rows that have it still load.
+  recap: v.optional(v.string()),
+  // The librarian's search words, space-separated: phone:search matches them
+  // (runner/src/keywords.ts). Since API 74.
+  keywords: v.optional(v.string()),
   archivedAt: v.optional(v.string()),
   // Mike starred it: the phone's Starred section. Since API 27.
   starredAt: v.optional(v.string()),
@@ -85,17 +90,58 @@ export const threadFields = {
         options: v.optional(v.array(v.string())),
         // What each option does if Mike picks it (end_turn's { label, does }),
         // one per option: the Mac's relay card draws the answers as rows with
-        // these under them, as it does for its own runner's threads. Since API 61.
+        // these under them, as it does for its own runner's threads. Since API 64.
         optionNotes: v.optional(v.array(v.string())),
         suggested: v.optional(v.number()),
         links: v.optional(v.array(v.object({ title: v.string(), url: v.string() }))),
         ticked: v.optional(v.boolean()),
+        // A command with a Run button, pressed like a reply button (phone:press). Since API 71.
+        run: v.optional(v.object({ command: v.string(), buttonId: v.string(), cwd: v.optional(v.string()), running: v.optional(v.boolean()), failed: v.optional(v.string()) })),
       }),
     ),
   ),
   asksSeq: v.optional(v.number()),
   // A finished turn's suggested follow-ups (end_turn's `next`), since API 14.
   next: v.optional(v.array(v.string())),
+  // The done card's loose ends (docs/protocol.md, "Loose ends"; experiment
+  // looseEnds), since API 73: what the runner found still open on a thread
+  // whose last turn needs nothing, for the phone's done card. kind is
+  // unlanded, uncommitted, unpushed, unmerged, thread, scheduled or open, and a later
+  // one shows as its text; threadId for a thread one, at (ISO) for a
+  // booked check-in.
+  looseEnds: v.optional(v.array(v.object({ kind: v.string(), text: v.string(), threadId: v.optional(v.string()), at: v.optional(v.string()) }))),
+  // The turn (its id's first 8 characters, as message rows have it) that
+  // the row's done-card fields describe, `review` and `looseEnds`, since
+  // API 76: another Mac's relay puts them on that turn's end only, not on an
+  // older one whose rows have come while the new turn's haven't yet.
+  cardTurn: v.optional(v.string()),
+  // Another lab's review of the last turn's change and what was done about
+  // each finding (docs/protocol.md, LabReviewLedger, the turn.completed's
+  // `review`), since API 76: while that turn is the last word, so another
+  // Mac draws its ledger row as this runner's does. Text scrubbed and cut.
+  review: v.optional(
+    v.object({
+      reviewer: v.string(),
+      independent: v.boolean(),
+      rounds: v.number(),
+      threadId: v.string(),
+      passed: v.boolean(),
+      unstructured: v.optional(v.boolean()),
+      unchecked: v.optional(v.boolean()),
+      findings: v.array(
+        v.object({
+          id: v.number(),
+          round: v.number(),
+          severity: v.string(),
+          claim: v.string(),
+          where: v.optional(v.string()),
+          case: v.optional(v.string()),
+          outcome: v.optional(v.string()),
+          note: v.optional(v.string()),
+        }),
+      ),
+    }),
+  ),
   // The thread's patch link buttons (url actions, docs/protocol.md
   // "Patches"), since API 28: the phone shows them and opens them itself.
   // icon is an SF Symbol.
@@ -123,6 +169,9 @@ export const threadFields = {
         title: v.string(),
         options: v.array(v.string()),
         inputSummary: v.optional(v.string()),
+        // Claude's ExitPlanMode card: the seq of the plan row it waits on
+        // (API 72), so the phone shows that plan and never an older one.
+        planSeq: v.optional(v.number()),
       }),
       v.object({
         approvalId: v.string(),
@@ -159,6 +208,9 @@ export const threadFields = {
 // is at the top of the phone's inbox.
 export const views = ['inbox', 'hibernating', 'den'] as const;
 
+// A move's states, in order (docs/protocol.md, "Moving a thread to another runner").
+export const moveStates = ['asking', 'ready', 'packing', 'unpacking', 'claimed', 'done', 'failed', 'cancelled'] as const;
+
 export default defineSchema({
   // One row per runner (the Mac, Tinker Desk later), written every minute.
   // A phone treats one not seen for 3 minutes as offline.
@@ -183,6 +235,10 @@ export default defineSchema({
     // runner tiles. On this row since it rarely changes; the figures have a
     // row of their own (runnerStats), read only by the Runners view.
     pressure: v.optional(v.string()),
+    // Set while this runner isn't following GitHub's main properly (API 67,
+    // runner/src/follow-origin.ts): why, in a sentence or two, for the main
+    // Mac's Updates panel and the canary.
+    followProblem: v.optional(v.string()),
     // Its active schedules have been copied to scheduleWakes (API 45), once.
     wakesSeeded: v.optional(v.boolean()),
     // How a Mac app reaches this runner to open one of its threads (API 12):
@@ -254,6 +310,8 @@ export default defineSchema({
     startedBy: v.optional(v.object({ kind: v.string(), label: v.string(), icon: v.optional(v.string()), threadTitle: v.optional(v.string()), why: v.optional(v.string()) })),
     // What Mike last said to it, one line: the Mac row's "You: ...". Since API 32.
     asked: v.optional(v.string()),
+    recap: v.optional(v.string()), // the recap box's, gone 11 Nov; kept so old rows load
+    keywords: v.optional(v.string()), // the librarian's search words, since API 74
     // Since API 29: when the backend last wrote the row, so a watching
     // runner reads only rows changed since its last answer
     // (sync:threadIndexSince), and `deleted` marks a thread that's gone,
@@ -300,8 +358,12 @@ export default defineSchema({
     // What was uploaded with it: the hour's allowance counts these, which
     // stay a day whatever happens to the file.
     bytes: v.optional(v.number()),
+    // A move's chunk (moves.ts moveChunkUrl): outside the runner's picture
+    // allowances, bounded by the move instead, and gone when it ends.
+    moveId: v.optional(v.string()),
   })
     .index('by_hash', ['ticketHash'])
+    .index('by_move', ['moveId'])
     .index('by_runner_issued', ['runnerId', 'issuedAt'])
     .index('by_issued', ['issuedAt']),
 
@@ -332,8 +394,13 @@ export default defineSchema({
     at: v.number(),
     bytes: v.optional(v.number()),
     attachedAt: v.optional(v.number()),
+    // A move's chunk (moves.ts moveChunkUrl): charged to its runner like
+    // any upload, and deleted with the rest of the move's when it ends,
+    // whether or not movePacked ever named it.
+    moveId: v.optional(v.string()),
   })
     .index('by_storageId', ['storageId'])
+    .index('by_move', ['moveId'])
     // A runner's bytes uploaded in the last hour (sync:redeemUpload's cap).
     .index('by_runner_at', ['runnerId', 'at'])
     .index('by_unattached', ['attachedAt', 'at']),
@@ -423,7 +490,10 @@ export default defineSchema({
     .index('by_view_activity', ['view', 'lastActivityMs'])
     // phone:search, for archived threads older than the phone's den list.
     .searchIndex('search_title', { searchField: 'title', filterFields: ['view'] })
-    .searchIndex('search_preview', { searchField: 'preview', filterFields: ['view'] }),
+    .searchIndex('search_preview', { searchField: 'preview', filterFields: ['view'] })
+    // The librarian's search words (API 74), so "dentist" finds a thread
+    // about a wisdom tooth appointment.
+    .searchIndex('search_keywords', { searchField: 'keywords', filterFields: ['view'] }),
 
   // Every text message of every thread, and one line per tool call (role
   // "tool", since API 2; docs/setup-and-updates.md step 2). Tool output and
@@ -437,6 +507,10 @@ export default defineSchema({
     origin: v.optional(v.string()),
     toolKind: v.optional(v.string()), // the protocol's ToolKind, for a tool row
     summary: v.optional(v.boolean()), // end_turn's bullets, the turn's reply (since API 14)
+    plan: v.optional(v.boolean()), // a Plan first plan in full, for the phone's plan card (since API 72)
+    // What became of that plan (its plan.resolved), sent again on its row
+    // once it's known, so another Mac's plan card says it (since API 76).
+    planDecision: v.optional(v.union(v.literal('go'), v.literal('revise'))),
     turn: v.optional(v.string()), // the start of its turn's id (since API 26)
     wokeBy: v.optional(v.array(v.object({ kind: v.string(), description: v.string() }))), // what finished and woke this turn, on its first row (since API 33)
     buttons: v.optional(v.array(messageButton)), // the reply buttons its text links, as they are now (since API 59)
@@ -449,7 +523,11 @@ export default defineSchema({
     .index('by_thread_seq', ['threadId', 'seq'])
     .index('by_thread_pagedAt', ['threadId', 'pagedAt'])
     .index('by_pagedAt', ['pagedAt'])
-    .index('by_runnerId', ['runnerId']),
+    .index('by_runnerId', ['runnerId'])
+    // phone:search (API 74): a word said anywhere in a thread, not only its
+    // title or last reply. The rows are capped per runner (messageBytes), so
+    // this index is too: about the size of the text, tens of MB at most.
+    .searchIndex('search_text', { searchField: 'text' }),
 
   // What the phone asks a runner to do (step 3). The owning runner takes
   // pending ones for its runnerId (or "any"), applies them through the
@@ -476,6 +554,35 @@ export default defineSchema({
     .index('by_state_done', ['state', 'doneAt'])
     // pruneOld: ones no runner took in COMMAND_KEEP_MS, by when they were made.
     .index('by_state_created', ['state', 'createdAt']),
+
+  // A thread moving from one runner to another (docs/protocol.md, "Moving a
+  // thread to another runner", API 64). Only the owner key starts one; each
+  // step is the runner whose turn it is (moves.ts), and the switch itself
+  // (moveClaim) is the one mutation where the thread changes hands.
+  threadMoves: defineTable({
+    moveId: v.string(),
+    threadId: v.string(),
+    from: v.string(),
+    to: v.string(),
+    state: v.union(...moveStates.map((x) => v.literal(x))),
+    cwd: v.optional(v.string()), // what Mike picked; absent, T chooses
+    accountId: v.optional(v.string()),
+    info: v.optional(v.any()), // S's description of the thread (moveInfo), JSON at most 16 KB
+    plan: v.optional(v.any()), // T's answer (moveReady), JSON at most 16 KB
+    key: v.optional(v.string()), // T's sealing key, raw X25519 base64
+    chunks: v.optional(v.array(v.id('_storage'))),
+    sha256: v.optional(v.string()),
+    bytes: v.optional(v.number()),
+    note: v.optional(v.string()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+    frozenAt: v.optional(v.number()),
+  })
+    .index('by_moveId', ['moveId'])
+    .index('by_thread', ['threadId', 'createdAt'])
+    .index('by_from', ['from', 'updatedAt'])
+    .index('by_to', ['to', 'updatedAt'])
+    .index('by_state', ['state', 'updatedAt']),
 
   // A runner on a runner key asking for a new thread on another runner
   // (docs/protocol.md, "Asking another runner"). It can't queue work there
@@ -870,6 +977,9 @@ export default defineSchema({
     // The phone's own key for encrypting what goes through the push relay
     // (API 4): base64 of 32 bytes, made on the phone and sent only here.
     pushKey: v.optional(v.string()),
+    // "android" (API 66): apnsToken is the phone's Firebase token, and a push
+    // goes through the relay to Firebase. Absent: an Apple token.
+    platform: v.optional(v.literal('android')),
   })
     .index('by_apnsToken', ['apnsToken'])
     // A token's phones: at most MAX_DEVICES_PER_TOKEN (phone:registerDevice),

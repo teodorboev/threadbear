@@ -12,8 +12,8 @@ import { NO_WAKE_TIME } from '../runner.ts';
 import { parseWhen } from '../when.ts';
 import type { WaitFor } from '../needs.ts';
 import path from 'node:path';
-import { providerName } from '../runner.ts';
-import { LAB_REVIEW_REPLY_CHARS } from './lab-review.ts';
+import { providerName } from '../providers.ts';
+import { LAB_REVIEW_REPLY_CHARS, addVerdict, findingLine } from './lab-review.ts';
 import { cutSafely, safeEnd } from '../safe-cut.ts';
 
 // How long a thread waiting on others sleeps at most when end_turn gave no
@@ -203,9 +203,21 @@ export const hibernationPart = {
   // draining runner. A thread not here (still on that runner) waits.
   reconcileWaits(this: Runner): void {
     if (this.holdWaits) return;
+    // One thread at a time: a wait another runner wrote wrong (a moved
+    // record's waitingOn) costs that thread, not the others or the start.
     for (const st of this.threads.values()) {
+      try {
+        this.reconcileWaitsOf(st);
+      } catch (e) {
+        this.recoveryFailed(st, e);
+      }
+    }
+  },
+
+  reconcileWaitsOf(this: Runner, st: ThreadState): void {
+    {
       const waits = st.rec.waitingOn;
-      if (!waits || st.rt.deleted || st.rec.archivedAt || this.bucket(st.rec) !== 'snoozed') continue;
+      if (!waits || st.rt.deleted || st.rec.archivedAt || this.bucket(st.rec) !== 'snoozed') return;
       for (const w of waits) {
         if (w.done) continue;
         const t = this.threads.get(w.threadId);
@@ -233,7 +245,11 @@ export const hibernationPart = {
     });
     const one = waits.length === 1;
     const why = one ? `"${waits[0].title}" finished` : 'the threads it was waiting on finished';
-    const text = `The thread${one ? '' : 's'} you hibernated to wait on ${one ? 'has' : 'have'} finished.\n\n${parts.join('\n\n')}\n\nCarry on from here. read_thread has the rest of ${one ? 'it' : 'them'}.`;
+    // A wait the runner started (experiment quietInbox, quiet-inbox.ts): the
+    // agent never said it would wait, and may have nothing more to do.
+    const text = waits.every((x) => x.quiet)
+      ? `Threadbear hibernated this thread after your last turn, as all it had left open was the thread${one ? '' : 's'} it started. ${one ? 'It has' : 'They have'} finished now.\n\n${parts.join('\n\n')}\n\nIf that leaves something to do, or to tell the user, do it now; if not, say so in a line. read_thread has the rest of ${one ? 'it' : 'them'}.`
+      : `The thread${one ? '' : 's'} you hibernated to wait on ${one ? 'has' : 'have'} finished.\n\n${parts.join('\n\n')}\n\nCarry on from here. read_thread has the rest of ${one ? 'it' : 'them'}.`;
     this.wake(st, { why });
     this.armSnoozeTimer();
     this.sendTo(st, text, [], { origin: 'runner', queue: true });
@@ -252,8 +268,21 @@ export const hibernationPart = {
       const edited = reviewer ? [...reviewEdits(this, reviewer)] : [];
       const findings = w.done.reply?.trim() || '(It gave no reply. read_thread has what it did.)';
       const edits = edited.length ? `\n\nIt was asked not to edit files but changed ${edited.join(', ')}. Look at those changes before going on, and keep or undo them.` : '';
-      text = `${who} reviewed the change you just made (thread ${id8}). Its findings:\n\n${findings}${edits}\n\n` +
-        'Check each finding against the code: fix what holds up and run the tests again. In your reply, say briefly what it found, what you fixed, and anything you left and why. If it found nothing, say so in a line and finish as you were.';
+      // Its verdict, numbered into the ledger (lab-review.ts): the agent
+      // answers each by id in end_turn, and can't end the turn without.
+      const ledger = st.rec.labReview;
+      const added = ledger ? addVerdict(ledger, reviewer?.rec.reviewVerdict) : [];
+      if (ledger) this.markDirty(st);
+      const round = ledger && ledger.rounds > 1 ? ` (review round ${ledger.rounds})` : '';
+      if (ledger && !ledger.unstructured && !added.length) {
+        text = `${who} reviewed the change you just made${round} (thread ${id8}) and found nothing that holds up.${edits}\n\nIts reply:\n\n${findings}\n\nSay so in a line in your reply and finish as you were.`;
+      } else if (added.length) {
+        text = `${who} reviewed the change you just made${round} (thread ${id8}). Its findings, numbered:\n\n${added.map(findingLine).join('\n')}\n\nIts reply, with the detail:\n\n${findings}${edits}\n\n` +
+          'Check each finding against the code: fix what holds up and run the tests again. When you call end_turn, answer every one in its `findings`, by number: `[{ "id": ' + added[0].id + ', "outcome": "fixed" }]`, one per finding, each "fixed", "disputed" with a note saying why it doesn\'t hold up, or "left" with a note saying what the user has to decide (that goes with needs "you" and an ask). Fixes get another review. In your reply, say briefly what it found and what you did about each.';
+      } else {
+        text = `${who} reviewed the change you just made (thread ${id8}). Its findings:\n\n${findings}${edits}\n\n` +
+          'Check each finding against the code: fix what holds up and run the tests again. In your reply, say briefly what it found, what you fixed, and anything you left and why. If it found nothing, say so in a line and finish as you were.';
+      }
     } else {
       text = `The review of your change (thread ${id8}) ${w.done?.how === 'deleted' ? 'was deleted' : 'was archived'} before it finished, so it wasn't reviewed. Say so in a line in your reply and finish as you were.`;
     }

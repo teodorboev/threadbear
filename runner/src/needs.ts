@@ -7,7 +7,10 @@ import type { Ask, AskLink, NeedsWho, PersistedEvent } from './protocol.ts';
 import { hasLineBreak, replaceLinks } from './linear-text.ts';
 import { cutSafely, safeEnd } from './safe-cut.ts';
 
-export type Needs = { needs: NeedsWho; asks?: Ask[]; next?: string[] };
+// open: with needs "nothing", what the agent says is still open that the
+// runner can't see for itself (experiment looseEnds, docs/protocol.md
+// "Loose ends"); [] is its word that nothing is.
+export type Needs = { needs: NeedsWho; asks?: Ask[]; next?: string[]; open?: string[] };
 
 export const END_TURN_TOOL = 'end_turn';
 // As the CLIs name it: under threadbear-mcp.ts's SERVER_NAME, which lives
@@ -26,6 +29,9 @@ const MAX_URL = 2000;
 // Follow-ups on the done card: a few buttons, each a short message.
 const MAX_NEXT = 3;
 const MAX_NEXT_CHARS = 120;
+// What's still open, on the done card: a few short lines, as next.
+const MAX_OPEN = 3;
+const MAX_OPEN_CHARS = 160;
 // Web pages, paths on this Mac, and review:<id>, which opens one of the
 // thread's show_options reviews (Mike, 30 Oct: "Watch A" opened the video
 // but nothing opened the stills to compare). Anything else (javascript:,
@@ -49,6 +55,19 @@ export function endTurnForm(input: unknown): 'oneReply' | 'bullets' | undefined 
   return undefined;
 }
 
+export const MAX_RUN_COMMAND = 8000;
+
+// Why a command can't go on a card, if it can't. What's on the card is what
+// Mike is agreeing to, so it has to be what runs: a control character can
+// redraw what's shown, and invisible or bidi ones can show a different
+// command. ShellBlock.swift holds the Mac's ▶ to the same rule.
+export function runCommandProblem(command: string): string | undefined {
+  if (!command.trim()) return 'run is empty.';
+  if (command.length > MAX_RUN_COMMAND) return `run is over ${MAX_RUN_COMMAND} characters: put it in a script and run that.`;
+  if (/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Co}\p{Cs}\p{Cn}]/u.test(command.replace(/[\n\t]/g, ''))) return 'run has control or invisible characters in it, so the card could show something other than what runs. Take them out.';
+  return undefined;
+}
+
 // end_turn's input, checked. Undefined when it isn't usable, so the turn
 // falls back to the text.
 export function needsFromTool(input: unknown): Needs | undefined {
@@ -57,7 +76,7 @@ export function needsFromTool(input: unknown): Needs | undefined {
   // Left out, it comes from the asks: agents filling in a summary forgot
   // it 2 times in 9 (29 Oct 2026). Anything else is a call to ignore.
   if (o.needs !== undefined && o.needs !== 'you' && o.needs !== 'nothing') return undefined;
-  if (o.needs === 'nothing') return done(o.next);
+  if (o.needs === 'nothing') return done(o.next, o.open);
   const asks: Ask[] = [];
   for (const a of Array.isArray(o.asks) ? o.asks : []) {
     if (!a || typeof a !== 'object') continue;
@@ -89,19 +108,25 @@ export function needsFromTool(input: unknown): Needs | undefined {
     }
     const links = linksFrom(r.links);
     if (links.length) ask.links = links;
+    if (typeof r.run === 'string' && !runCommandProblem(r.run)) ask.run = { command: r.run.replace(/\s+$/, '') };
     asks.push(ask);
     if (asks.length === MAX_ASKS) break;
   }
-  if (o.needs === undefined) return asks.length ? { needs: 'you', asks } : done(o.next);
+  if (o.needs === undefined) return asks.length ? { needs: 'you', asks } : done(o.next, o.open);
   return asks.length ? { needs: 'you', asks } : { needs: 'you' };
 }
 
 // A turn that needs nothing, with any follow-ups it suggested: the done
 // card's buttons (docs/protocol.md, "Next steps"). Only here, as a card
 // of asks already has its own buttons.
-function done(v: unknown): Needs {
-  const next = [...new Set((Array.isArray(v) ? v : []).map((n) => clipText(n, MAX_NEXT_CHARS)).filter((n): n is string => !!n))].slice(0, MAX_NEXT);
-  return next.length ? { needs: 'nothing', next } : { needs: 'nothing' };
+function done(v: unknown, left?: unknown): Needs {
+  const lines = (w: unknown, chars: number, max: number) => [...new Set((Array.isArray(w) ? w : []).map((n) => clipText(n, chars)).filter((n): n is string => !!n))].slice(0, max);
+  const next = lines(v, MAX_NEXT_CHARS, MAX_NEXT);
+  const out: Needs = next.length ? { needs: 'nothing', next } : { needs: 'nothing' };
+  // Kept even when empty: [] is the agent saying nothing's left, which a
+  // call without it (an older session's form) can't say.
+  if (Array.isArray(left)) out.open = lines(left, MAX_OPEN_CHARS, MAX_OPEN);
+  return out;
 }
 
 // Big enough for any turn's story; past this it's the working again.
@@ -439,7 +464,7 @@ const NEXT_ROW =
 
 // Hibernating itself, in every form's description (snoozeFromTool).
 const END_TURN_SNOOZE =
-  'snooze hibernates this thread once the turn is over, with needs "nothing" only, until a time ("2h", "1d", "tomorrow", an ISO time with its offset, "restart", or "release" for a new release) or words saying when ("when the phone arrives"). Use it when the user asks for this thread to be snoozed or hibernated, or when the rest waits on a message (one wakes it), until it should have come; waitFor names threads it waits on, which wake it when they finish. ';
+  'snooze hibernates this thread once the turn is over, with needs "nothing" only, until a time ("2h", "1d", "tomorrow", an ISO time with its offset, "restart", or "release" for a new release) or words saying when ("when the phone arrives"). Use it when the user asks for this thread to be snoozed or hibernated, or when the rest waits on a message (one wakes it), until it should have come; it only brings the thread back, so a step of your own later is a schedule_message. waitFor names threads it waits on, which wake it when they finish. ';
 
 // Handing a step over, in every form's description. This used to say to offer
 // "Can you do it?" when the agent could plausibly do the step itself, which told
@@ -573,13 +598,20 @@ const CODEX_MESSAGE_END_TURN_DESCRIPTION =
 // long turn or in a thread another agent started, as the reply reported
 // only the latest step (28cee9ef: one experiment's result, never the plan
 // it was for). One line, only then: he likes replies at their usual length.
+// "What they asked" and "a few words on what it is": trying Ghostex's
+// coordinator on 9 Nov 2026, Mike lost track of replies that answered his
+// earlier question without saying which, and refused "Merge these 8 in
+// this order: #38, #24, #25..." for want of what each one was and how
+// serious ("I need more context on what these things are").
 const ONE_REPLY_REPLY =
   'Then write your reply as ordinary text straight after it, as your final message. ' +
   'That reply is the only text the user sees from this turn: everything you write before end_turn folds away into your working, out of sight. So don\'t write your answer before calling it, and call no tools after it. ' +
   'The reply: lead with the point and keep it as short as it can be while they can act on it without reading your working. ' +
   'If they may have lost track (a long turn, work picked up from another thread, a thread they didn\'t start), open with one line on what the work is for and where it stands, before the latest step. ' +
+  'If it answers something they asked earlier (a note on a card, a follow-up question), open by saying what they asked. ' +
   'A work report is a few bullets of what changed and the result, each linked to where it can be checked: [tests pass](work:npm test) quotes a few words of a step in your working (the command you ran or its description) and opens it there, lit up; [its own thread](thread:<its id from list_threads>) opens another thread; web pages and files link as usual. ' +
   'An explanation, a draft or an answer to their question is prose, at the length it needs. ' +
+  'When they\'re deciding about several things (PRs, commits, findings), give each a few words on what it is, as they\'d see it, and how serious: never bare numbers or ids. A security question first says who could do what. ' +
   'When you\'re asking something, include the full draft to approve (text to send elsewhere goes in a ```slack, ```email or ```draft block, shown line for line with a Copy button) or the options to choose from in the reply. The question itself, and what each answer would do, are in the card under the reply, so don\'t repeat them. ' +
   'Never write a "What I need from you" section, a "Nothing needed from you" line or a list of follow-ups in the reply: asks and next are those. ';
 
@@ -899,18 +931,39 @@ export class WakeRead {
   // to the model before it, so it waits for results of its own (from Codex's
   // review). At worst that opens the turn once more than needed.
   private next = false;
+  // A result in the batch that hands it over (before or after the note) was
+  // an end_turn saying "Now write your reply": the text the agent writes next
+  // is that reply, not something it did about the notice, so only a tool call
+  // after it opens the turn. Cleared at each of the agent's steps otherwise. On 11 Nov 2026 an
+  // ffmpeg job's exit came with that answer; the reply counted as reading it,
+  // the Stop hook asked for end_turn again, and the "Done." written after the
+  // second one took the reply's place (thread dcdc60a3).
+  private batchReply = false;
   get handed(): boolean {
     return this.state === 'handed';
   }
-  see(e: { type: string; itemId?: string; wake?: true }): boolean {
+  // The agent's own end_turn calls, so only their results count for
+  // batchReply, not a command's output that quotes one (from Codex's review).
+  private endTurns = new Set<string>();
+  see(e: { type: string; itemId?: string; name?: string; wake?: true; ok?: boolean; text?: string }): boolean {
+    if (e.type === 'tool.call' && e.itemId && e.name?.endsWith(`__${END_TURN_TOOL}`) && !e.itemId.includes('/')) this.endTurns.add(e.itemId);
     if (e.type === 'system.note' && e.wake) {
       if (this.state === 'handed') this.next = true;
       else this.state = 'unread';
       return false;
     }
+    // Any result in the batch, before the note as well as after it (from
+    // Codex's review).
+    if (e.type === 'tool.result' && e.itemId && this.endTurns.has(e.itemId) && typeof e.text === 'string' && endTurnWantsReply({ ok: e.ok === true, text: e.text })) this.batchReply = true;
     if (e.type === 'tool.result' && this.state === 'unread') this.state = 'handed';
     // A Codex child's items (<child>/<id>) aren't the agent's own steps.
-    else if (this.state === 'handed' && (e.type === 'assistant.text' || e.type === 'reasoning' || e.type === 'tool.call') && !e.itemId?.includes('/')) {
+    else if ((e.type === 'assistant.text' || e.type === 'reasoning' || e.type === 'tool.call') && !e.itemId?.includes('/')) {
+      if (this.state !== 'handed') {
+        this.batchReply = false;
+        return false;
+      }
+      if (this.batchReply && e.type !== 'tool.call') return false;
+      this.batchReply = false;
       this.state = this.next ? 'unread' : 'none';
       this.next = false;
       return true;
@@ -920,6 +973,8 @@ export class WakeRead {
   reset(): void {
     this.state = 'none';
     this.next = false;
+    this.batchReply = false;
+    this.endTurns.clear();
   }
 }
 

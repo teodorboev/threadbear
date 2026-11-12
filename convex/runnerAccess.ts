@@ -77,6 +77,20 @@ export function mayTouch(c: Caller, existingRunnerId: string | undefined): boole
 }
 
 /**
+ * A thread id's shape: 1 to 64 letters, digits, `-` and `_` (a runner's are
+ * UUIDs). The apps put an id into a shell line (Copy debug info) and a
+ * chip's link, and the main Mac's runner into paths, so a runner key may
+ * only make rows under ids of this shape (sync.ts claimable; Daybreak 87
+ * and 102, 11 Nov 2026). The Mac, GPUI and runner sides check the same
+ * (ThreadIds.isValid, thread_link::is_thread_id, runner/src/thread-id.ts),
+ * as rows made before this are still there.
+ */
+export const THREAD_ID = /^[A-Za-z0-9_-]{1,64}$/;
+export function isThreadId(id: unknown): id is string {
+  return typeof id === 'string' && THREAD_ID.test(id);
+}
+
+/**
  * Making a row under a thread id nobody has a row for. `claimedBy` is every
  * runner that has had the id (a deleted thread's tombstone, a sidebar row);
  * `leftovers` whether anything is still stored under it (messages,
@@ -240,6 +254,22 @@ export const ACCESS: Record<string, Access> = {
   closeRequest: 'own',
   appendBodies: 'own',
   addHeldPicture: 'own',
+  // moves.ts (API 64): only the main Mac starts or cancels a move; each
+  // step is the move's own runner on that side, which the function checks.
+  startMove: 'owner',
+  cancelMove: 'owner',
+  moves: 'own',
+  moveInfo: 'own',
+  moveReady: 'own',
+  moveFrozen: 'own',
+  moveChunkUrl: 'own',
+  movePacked: 'own',
+  moveChunks: 'own',
+  moveClaim: 'own',
+  moveDone: 'own',
+  moveFailed: 'own',
+  // The main Mac's own uploads for a move that ended first (moves.ts).
+  moveDropChunks: 'owner',
 };
 
 // A runner name as lists show it, for a runner key's heartbeat: folded to
@@ -301,6 +331,30 @@ export function cutBytes(s: string, max: number): string {
 const ISO_TIME = /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])T([01]\d|2[0-3]):[0-5]\d:([0-5]\d|60)(\.\d{1,9})?(Z|[+-]([01]\d|2[0-3]):?[0-5]\d)?$/;
 export function isIsoTime(value: unknown): value is string {
   return typeof value === 'string' && value.length <= 64 && ISO_TIME.test(value);
+}
+// A thread row's times held to isIsoTime, in place: the ones it must have
+// stand in from lastActivityMs, the rest go. Android's took
+// "+999999999-12-31T23:59:59Z" and threw drawing the row (Daybreak, 11 Nov
+// 2026). On what a runner key writes, and on what phones read, for rows
+// stored before and for apps from before their own check.
+// What a phone reads is held more loosely than what a runner key writes:
+// any time inside JavaScript's own range, in toISOString's form, so the
+// owner's runner's snooze past the year 9999 ("+010000-01-01T00:00:00.000Z",
+// which it takes) still shows. Android before its own check only threw past
+// about 292 million years.
+const WIDE_ISO_TIME = /^[+-]\d{6}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])T([01]\d|2[0-3]):[0-5]\d:[0-5]\d(\.\d{3})?Z$/;
+export function isReadableTime(value: unknown): value is string {
+  return isIsoTime(value) || (typeof value === 'string' && WIDE_ISO_TIME.test(value) && Number.isFinite(Date.parse(value)));
+}
+export function holdThreadTimes(t: Record<string, any>, ok: (value: unknown) => boolean = isIsoTime): void {
+  if (!ok(t.lastActivityAt)) {
+    const ms = t.lastActivityMs;
+    t.lastActivityAt = new Date(Number.isFinite(ms) && ms >= 0 && ms <= 8.64e15 ? ms : Date.now()).toISOString();
+  }
+  if (!ok(t.createdAt)) t.createdAt = t.lastActivityAt;
+  for (const f of ['snoozedUntil', 'archivedAt', 'starredAt']) if (t[f] !== undefined && !ok(t[f])) delete t[f];
+  if (t.woke && !ok(t.woke.at)) delete t.woke;
+  else if (t.woke?.since !== undefined && !ok(t.woke.since)) t.woke = { at: t.woke.at };
 }
 // A whole number from 0 to `most`.
 export function wholeIn(value: unknown, most: number): value is number {

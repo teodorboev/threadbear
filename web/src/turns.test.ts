@@ -32,6 +32,13 @@ test('the summary is the reply when nothing longer comes after the last step', (
   assert.deepEqual(kinds(items), ['user:go', 'worked', 'assistant:- tests pass']);
 });
 
+// The phone's PlansTests.aFinishedTurnKeepsItsPlanInView: a plan stays in
+// view, not folded into the turn's working with the steps around it.
+test('a finished turn keeps its plan in view', () => {
+  const items = fold([user('Plan the bots', 0), tool('Read the schema', 5), said('# Bots\n\n1. Add a table', 10, { plan: true }), tool('Finish the plan', 11), said('Waiting on your go.', 12)], false);
+  assert.deepEqual(kinds(items), ['user:Plan the bots', 'worked', 'assistant:# Bots\n\n1. Add a table', 'assistant:Waiting on your go.']);
+});
+
 test('a runner message joins the turn before it', () => {
   const items = fold([user('go', 0), said('One', 1), user('Resumed after a restart', 2, 'runner'), tool('Read b', 3), said('Two', 4)], false);
   assert.equal(items[0]!.kind === 'message' && items[0]!.m.text, 'go');

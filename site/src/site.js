@@ -241,3 +241,16 @@ for (const card of document.querySelectorAll(".video-card[data-video]")) {
     card.replaceWith(box);
   });
 }
+
+// The changelog (/changelog). A clip only plays while it's on screen, and not at all for someone
+// who's asked for less motion (its poster stays).
+const clips = document.querySelectorAll("video.cl-shot");
+if (clips.length && "IntersectionObserver" in window && !matchMedia("(prefers-reduced-motion: reduce)").matches) {
+  const watcher = new IntersectionObserver((entries) => {
+    for (const { target, isIntersecting } of entries) {
+      if (isIntersecting) target.play().catch(() => {});
+      else target.pause();
+    }
+  }, { threshold: 0.4 });
+  for (const clip of clips) watcher.observe(clip);
+}

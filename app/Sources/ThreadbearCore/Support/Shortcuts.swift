@@ -138,16 +138,22 @@ public enum ShortcutGroup: String, CaseIterable, Sendable {
 public enum ShortcutCommand: String, CaseIterable, Sendable {
     case newThread, archive, hibernate, stop, copyTranscript
     case back, forward, nextInboxThread, showInbox, showScheduled, showProjects, showLibrarian, showHibernating, showArchived
-    case zoomIn, zoomOut, actualSize, toggleThreads, togglePanels, resetPanelLayout
+    // A project's page tabs (Decisions, Project), as Safari's tabs go.
+    case previousTab, nextTab
+    case zoomIn, zoomOut, actualSize, toggleThreads, togglePanels, toggleTerminal, resetPanelLayout
+    // ⌘/ folds the Threads panel away and back, keeping its place and width.
+    case collapseThreads
     case settings
+    // The app menu's Quit Threadbear, which asks first (QuitPrompt).
+    case quit
 
     public var group: ShortcutGroup {
         switch self {
         case .newThread, .archive, .hibernate, .stop, .copyTranscript: .threads
-        case .back, .forward, .nextInboxThread, .showInbox, .showScheduled, .showProjects, .showLibrarian, .showHibernating, .showArchived: .go
-        case .zoomIn, .zoomOut, .actualSize, .toggleThreads, .togglePanels, .resetPanelLayout: .view
+        case .back, .forward, .nextInboxThread, .showInbox, .showScheduled, .showProjects, .showLibrarian, .showHibernating, .showArchived, .previousTab, .nextTab: .go
+        case .zoomIn, .zoomOut, .actualSize, .toggleThreads, .togglePanels, .toggleTerminal, .resetPanelLayout, .collapseThreads: .view
         // The app menu's Settings…, which opens the Settings window.
-        case .settings: .go
+        case .settings, .quit: .go
         }
     }
 
@@ -167,13 +173,18 @@ public enum ShortcutCommand: String, CaseIterable, Sendable {
         case .showLibrarian: "Show Librarian"
         case .showHibernating: "Show Hibernating"
         case .showArchived: "Show Archived"
+        case .previousTab: "Show Previous Tab"
+        case .nextTab: "Show Next Tab"
         case .settings: "Settings…"
         case .zoomIn: "Zoom In"
         case .zoomOut: "Zoom Out"
         case .actualSize: "Actual Size"
         case .toggleThreads: "Show Threads"
         case .togglePanels: "Show Panels"
+        case .toggleTerminal: "Show Terminal"
         case .resetPanelLayout: "Reset Panel Layout"
+        case .collapseThreads: "Collapse Threads"
+        case .quit: "Quit Threadbear"
         }
     }
 
@@ -186,6 +197,8 @@ public enum ShortcutCommand: String, CaseIterable, Sendable {
         case .hibernate: ["Pick a time…"]
         case .toggleThreads: ["Show Threads", "Hide Threads"]
         case .togglePanels: ["Show Panels", "Hide Panels"]
+        case .collapseThreads: ["Collapse Threads", "Expand Threads"]
+        case .toggleTerminal: ["Show Terminal", "Hide Terminal"]
         default: [title]
         }
     }
@@ -199,6 +212,8 @@ public enum ShortcutCommand: String, CaseIterable, Sendable {
         case .copyTranscript: ShortcutKey("c", shift: true)
         case .back: ShortcutKey("[")
         case .forward: ShortcutKey("]")
+        case .previousTab: ShortcutKey("[", shift: true)
+        case .nextTab: ShortcutKey("]", shift: true)
         case .nextInboxThread: ShortcutKey("down", option: true)
         case .showInbox: ShortcutKey("1")
         case .showScheduled: ShortcutKey("2")
@@ -210,6 +225,10 @@ public enum ShortcutCommand: String, CaseIterable, Sendable {
         case .actualSize: ShortcutKey("0")
         case .toggleThreads: ShortcutKey("s", control: true)
         case .togglePanels: ShortcutKey("p", option: true)
+        // VS Code's and T3 Code's key for their terminal.
+        case .toggleTerminal: ShortcutKey("j")
+        case .collapseThreads: ShortcutKey("/")
+        case .quit: ShortcutKey("q")
         case .hibernate, .showHibernating, .showArchived, .resetPanelLayout: nil
         }
     }

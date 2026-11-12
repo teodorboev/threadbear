@@ -452,6 +452,10 @@ private struct TourTargetModifier: ViewModifier {
     /// is drawn afresh: the new view says where it is before the old one
     /// disappears, so only the one that last said may clear it.
     @State private var me = UUID()
+    /// In a view kept built while hidden (`keptAlive`), it says nothing
+    /// until shown: the tour mustn't point at a list nobody can see.
+    @Environment(\.keptShown) private var shown
+    @State private var last: CGRect?
 
     @ViewBuilder
     func body(content: Content) -> some View {
@@ -465,8 +469,11 @@ private struct TourTargetModifier: ViewModifier {
     private func tagged(_ content: Content) -> some View {
         content
             .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(Tour.space)) } action: { frame in
-                Tour.shared.frames[target] = CGRect(x: frame.minX, y: frame.minY - bar, width: frame.width, height: frame.height + bar)
-                Tour.shared.framesFrom[target] = me
+                last = frame
+                if shown { say(frame) }
+            }
+            .onChange(of: shown) { _, now in
+                if now, let last { say(last) } else if !now, Tour.shared.framesFrom[target] == me { Tour.shared.frames[target] = nil }
             }
             // A closed panel's frame would leave the tour lighting up
             // whatever took its place.
@@ -474,6 +481,11 @@ private struct TourTargetModifier: ViewModifier {
                 guard Tour.shared.framesFrom[target] == me else { return }
                 Tour.shared.frames[target] = nil
             }
+    }
+
+    private func say(_ frame: CGRect) {
+        Tour.shared.frames[target] = CGRect(x: frame.minX, y: frame.minY - bar, width: frame.width, height: frame.height + bar)
+        Tour.shared.framesFrom[target] = me
     }
 }
 

@@ -4,6 +4,8 @@ import SwiftUI
 /// What the app gives the dock for each panel.
 public struct DockContent {
     public var title: (PanelID) -> String
+    /// Shown on hovering the title (a file's full path, say). Nil: none.
+    public var titleTip: (PanelID) -> String?
     public var symbol: (PanelID) -> String?
     /// A picture drawn in colour in place of the symbol (a tool's own icon).
     public var image: (PanelID) -> NSImage?
@@ -26,6 +28,7 @@ public struct DockContent {
 
     public init(
         title: @escaping (PanelID) -> String,
+        titleTip: @escaping (PanelID) -> String? = { _ in nil },
         symbol: @escaping (PanelID) -> String? = { _ in nil },
         image: @escaping (PanelID) -> NSImage? = { _ in nil },
         badge: @escaping (PanelID) -> AnyView? = { _ in nil },
@@ -37,6 +40,7 @@ public struct DockContent {
     ) {
         self.available = available
         self.title = title
+        self.titleTip = titleTip
         self.symbol = symbol
         self.image = image
         self.badge = badge
@@ -84,6 +88,8 @@ enum DockSpace {
 
 /// System colours, so the dock follows light and dark like the app around it.
 enum DockTheme {
+    /// The narrowest a panel's content is laid out (GroupView).
+    static let minContentWidth: CGFloat = 160
     static let panel = Color(nsColor: .windowBackgroundColor)
     /// Shows through the 1 pt gaps between panels, as the hairlines.
     static let hairline = Color(nsColor: .separatorColor)
@@ -152,15 +158,55 @@ public struct DockView: View {
 }
 
 extension EnvironmentValues {
-    @Entry var dockContent = DockContent(title: { $0 }, view: { _ in AnyView(EmptyView()) })
-    @Entry var dockOptions = DockOptions()
-    @Entry var dockNamespace: Namespace.ID?
+    // Written out rather than @Entry: SwiftUI's macros ship with Xcode
+    // only, and this builds with the command line tools too.
+    var dockContent: DockContent {
+        get { self[DockContentKey.self] }
+        set { self[DockContentKey.self] = newValue }
+    }
+    var dockOptions: DockOptions {
+        get { self[DockOptionsKey.self] }
+        set { self[DockOptionsKey.self] = newValue }
+    }
+    var dockNamespace: Namespace.ID? {
+        get { self[DockNamespaceKey.self] }
+        set { self[DockNamespaceKey.self] = newValue }
+    }
     /// True for a panel's content drawn in the ghost that follows a drag:
     /// a second copy of what's in the panel. Content that hands out one
     /// shared AppKit view (a transcript, a web view) should draw a picture
     /// of it here instead, or the ghost takes the view and the panel is
     /// left blank once the ghost goes.
-    @Entry public var isDockGhost = false
+    public var isDockGhost: Bool {
+        get { self[IsDockGhostKey.self] }
+        set { self[IsDockGhostKey.self] = newValue }
+    }
+}
+
+private struct DockContentKey: EnvironmentKey {
+    static var defaultValue: DockContent { DockContent(title: { $0 }, view: { _ in AnyView(EmptyView()) }) }
+}
+
+private struct DockOptionsKey: EnvironmentKey {
+    static var defaultValue: DockOptions { DockOptions() }
+}
+
+private struct DockNamespaceKey: EnvironmentKey {
+    static var defaultValue: Namespace.ID? { nil }
+}
+
+private struct IsDockGhostKey: EnvironmentKey {
+    static var defaultValue: Bool { false }
+}
+
+/// A tab title's hover tip, when its panel has one.
+private struct TitleTip: ViewModifier {
+    let text: String?
+    let options: DockOptions
+
+    func body(content: Content) -> some View {
+        if let text { content.dockTip(text, options) } else { content }
+    }
 }
 
 extension View {
@@ -368,12 +414,21 @@ struct GroupView: View {
         VStack(spacing: 0) {
             if header {
                 GroupHeader(group: group, leading: corner ? options.trafficLights : 0, movesWindow: corner)
+                    // Exactly the group's width: tabs that don't fit run off
+                    // its trailing edge, rather than widening the group past
+                    // its slot, which then hung off both sides, centred.
+                    .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
+                    .clipped()
                     .transition(.move(edge: .top).combined(with: .opacity))
             } else if corner {
                 CornerBar(panel: group.selected)
             }
             content.view(group.selected)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                // Never laid out narrower than this: in a thinner slot the
+                // panel keeps its layout, pinned to the leading edge, and
+                // its far side is cut off, rather than wrapping a letter a line.
+                .frame(minWidth: DockTheme.minContentWidth, maxWidth: .infinity, maxHeight: .infinity)
+                .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity, alignment: .leading)
                 .clipped()
                 .contentShape(Rectangle())
                 // A plain .gesture, the lowest priority: any drag the panel's
@@ -446,6 +501,39 @@ private struct MatchedGroup: ViewModifier {
     }
 }
 
+/// A group's tabs: side by side at their full width while they fit, and
+/// scrolling sideways once they don't, with the one showing kept in view.
+/// They ran off the bar's trailing edge, clipped, so a panel with many tabs
+/// had some no one could reach (Ville, 11 Nov 2026).
+struct TabStrip: View {
+    let group: DockGroup
+    /// The tabs' own width, so the strip is never wider than they are and
+    /// the empty bar beside them keeps the rest.
+    @State private var width: CGFloat?
+
+    var body: some View {
+        ScrollViewReader { proxy in
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 2) {
+                    ForEach(group.panels, id: \.self) { panel in
+                        TabItem(panel: panel, selected: panel == group.selected, single: false)
+                            .id(panel)
+                    }
+                }
+                .frame(maxHeight: .infinity)
+                .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
+            }
+            .frame(maxWidth: width ?? .infinity)
+            .onChange(of: group.selected, initial: true) { _, selected in
+                proxy.scrollTo(selected, anchor: .center)
+            }
+            .onChange(of: group.panels) { _, _ in
+                proxy.scrollTo(group.selected)
+            }
+        }
+    }
+}
+
 /// A group's title, or its tabs when it has several, and the showing
 /// panel's buttons. A title, a tab or the rest of the bar drags its panel
 /// once held (HoldDrag), and with `barsMoveWindow` a plain drag moves the
@@ -471,10 +559,12 @@ struct GroupHeader: View {
                     .contextMenu { PanelMenu(panel: group.selected, tabbed: false) }
                     // Its full width before the empty bar beside it gets any.
                     .layoutPriority(1)
+            } else if single {
+                TabItem(panel: group.selected, selected: true, single: true)
             } else {
-                ForEach(group.panels, id: \.self) { panel in
-                    TabItem(panel: panel, selected: panel == group.selected, single: single)
-                }
+                TabStrip(group: group)
+                    // The tabs' room before the empty bar beside them gets any.
+                    .layoutPriority(1)
             }
             BarSpace(panel: group.selected, tabbed: !single)
                 .onGeometryChange(for: CGFloat.self) { $0.frame(in: .named(DockSpace.name)).minX } action: { controller.barSpaceStarts[group.id] = $0 }
@@ -709,6 +799,7 @@ private struct TabItem: View {
                 .lineLimit(1)
                 // A file's name keeps its extension when it has to shorten.
                 .truncationMode(.middle)
+                .modifier(TitleTip(text: content.titleTip(panel), options: options))
             if content.closable(panel) {
                 Button {
                     controller.close(panel)

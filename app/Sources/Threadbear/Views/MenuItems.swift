@@ -139,7 +139,31 @@ final class MenuAnchor {
         // grew, slid down over the composer with Effort off the screen.
         popover.contentSize = controller.view.fittingSize
         popover.show(relativeTo: view.bounds, of: view, preferredEdge: .maxY)
+        // Content that grows once it's open (the context ring's breakdown
+        // arrives a moment later) reports its new size through
+        // preferredContentSize (MenuAnchor.host); the popover takes it and
+        // is put back on the chip, so it grows up away from the composer.
+        // With the size fixed at opening, the content outgrew the popover
+        // and it ran down past the bottom of the window (11 Nov).
+        sizeWatch = controller.observe(\.preferredContentSize, options: [.new]) { [weak popover, weak view] controller, _ in
+            MainActor.assumeIsolated {
+                guard let popover, let view, popover.isShown else { return }
+                let size = controller.preferredContentSize
+                guard size.width > 0, size.height > 0, size != popover.contentSize else { return }
+                popover.contentSize = size
+                popover.positioningRect = view.bounds
+            }
+        }
         self.popover = popover
+    }
+
+    private var sizeWatch: NSKeyValueObservation?
+
+    /// A SwiftUI view for `show`, hosted so it says when its size changes.
+    static func host<Content: View>(_ view: Content) -> NSHostingController<Content> {
+        let host = NSHostingController(rootView: view)
+        host.sizingOptions = [.preferredContentSize]
+        return host
     }
 }
 

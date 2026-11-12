@@ -8,15 +8,16 @@ import ThreadbearCore
 /// and nothing about it is ever logged.
 extension AppModel {
     /// Asks the runner for the list. Called when the tab shows and after
-    /// a pair or revoke.
-    func loadDevices() {
+    /// a pair or revoke. After one that failed it keeps saying why: a fresh
+    /// list used to clear that as soon as it was said.
+    func loadDevices(keepingError: Bool = false) {
         guard let client else { return }
         devicesLoading = true
         Task {
             defer { devicesLoading = false }
             do {
                 receive(try await client.devicesList())
-                devicesError = nil
+                if !keepingError { devicesError = nil }
             } catch RPCError.server(let code, _) where code == RPCError.methodNotFound {
                 devicesUnsupported = true
             } catch {
@@ -44,7 +45,7 @@ extension AppModel {
         do {
             let pairing = try await client.devicesPair(kind: .phone, name: "iPhone")
             devicesError = nil
-            loadDevices()
+            loadDevices(keepingError: true)
             guard let link = pairing.pairingLink else {
                 devicesError = "The runner gave no pairing link back."
                 return nil
@@ -70,7 +71,7 @@ extension AppModel {
         do {
             let pairing = try await client.devicesPair(kind: .browser, name: browser?.name ?? "Browser")
             devicesError = nil
-            loadDevices()
+            loadDevices(keepingError: true)
             guard let link = pairing.signInLink else {
                 devicesError = "The runner gave no sign-in link back."
                 return false
@@ -102,7 +103,7 @@ extension AppModel {
             } catch {
                 devicesError = error.localizedDescription
                 AppLog.write("rpc", "devices.revoke failed: \(error.localizedDescription)")
-                loadDevices()
+                loadDevices(keepingError: true)
             }
         }
     }

@@ -1,0 +1,20 @@
+#!/bin/sh
+# threadbear-swift-freeze: git's pre-commit hook, which worktree-setup.sh
+# copies into the shared .git/hooks, so it runs for the main checkout and
+# every worktree. It runs that checkout's own scripts/swift-freeze.sh, or,
+# in a worktree branched before there was one, the copy in the checkout
+# that has main checked out (found from git's list, so a bare repo's
+# worktrees find it too), so an older thread's commits are checked as well
+# (Codex's reviews, 12 Nov).
+top="$(git rev-parse --show-toplevel)" || exit 0
+f="$top/scripts/swift-freeze.sh"
+if [ ! -x "$f" ]; then
+  main="$(git worktree list --porcelain | awk '
+    /^worktree / { path = substr($0, 10) }
+    /^branch refs\/heads\/main$/ && !found { print path; found = 1 }
+  ')"
+  f="$main/scripts/swift-freeze.sh"
+fi
+[ -x "$f" ] && exec "$f" --commit
+echo "pre-commit: no scripts/swift-freeze.sh here or in main's checkout, so this commit isn't checked for Swift app changes" >&2
+exit 0

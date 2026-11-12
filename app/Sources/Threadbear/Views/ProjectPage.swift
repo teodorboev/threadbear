@@ -8,6 +8,7 @@ import ThreadbearCore
 /// toolbar's ... menu.
 struct ProjectPage: View {
     @Environment(AppModel.self) private var app
+    @Environment(\.isDockGhost) private var isGhost
     let project: Project
 
     var body: some View {
@@ -18,9 +19,19 @@ struct ProjectPage: View {
                     IconButton(project: project)
                     VStack(alignment: .leading, spacing: zoomed(6)) {
                         TitleField(project: project)
-                        Text(ProjectPage.madeBy(project, threads: threads.count, app: app))
-                            .font(.system(size: TypeScale.label))
-                            .foregroundStyle(Color(nsColor: Theme.faintText))
+                        HStack(spacing: zoomed(6)) {
+                            Text(ProjectPage.madeBy(project, threads: threads.count, app: app))
+                                .font(.system(size: TypeScale.label))
+                                .foregroundStyle(Color(nsColor: Theme.faintText))
+                            // A part says whose, and goes up to it.
+                            if let parent = project.parentId.flatMap({ app.project($0) }) {
+                                Text("·").foregroundStyle(Color(nsColor: Theme.faintText))
+                                Button("Part of \(parent.title)") { app.openProjectPage(parent.id) }
+                                    .buttonStyle(.link)
+                                    .font(.system(size: TypeScale.label))
+                                    .tip("Open \(parent.title)")
+                            }
+                        }
                     }
                     Spacer(minLength: zoomed(12))
                     Button { app.newThread(in: project) } label: {
@@ -29,13 +40,31 @@ struct ProjectPage: View {
                     .controlSize(.large)
                     .tip("Start a thread in this project, in its folder, with its goals from the first message")
                 }
-                TextSection(project: project, field: .goals)
-                TextSection(project: project, field: .state)
-                TasksSection(project: project)
-                TextSection(project: project, field: .notes)
-                FoldersSection(project: project)
-                ThreadsSection(project: project, threads: threads)
-                PatchesSection(project: project, threads: threads)
+                // The projectDecisions experiment: the page is in two tabs,
+                // its decisions (its parts' too) and everything else (Mike,
+                // 12 Nov). Off, it's the page as it always was.
+                if app.projectDecisionsOn {
+                    let tab = app.projectTab(project.id)
+                    ProjectTabBar(project: project, tab: tab, decisions: app.projectDecisionCount(project.id))
+                    // The Project tab stays built while Decisions shows, so
+                    // an edit half typed in its goals, state or notes is
+                    // still there on the way back (Codex review). Hidden, it
+                    // takes no room, clicks or keys.
+                    ZStack(alignment: .topLeading) {
+                        VStack(alignment: .leading, spacing: zoomed(30)) { info(threads) }
+                            .frame(height: tab == .project ? nil : 0, alignment: .top)
+                            .clipped()
+                            .opacity(tab == .project ? 1 : 0)
+                            .allowsHitTesting(tab == .project)
+                            .disabled(tab != .project)
+                            .accessibilityHidden(tab != .project)
+                        if tab == .decisions {
+                            DecisionsSection(project: project, tabbed: true)
+                        }
+                    }
+                } else {
+                    info(threads)
+                }
             }
             .frame(maxWidth: zoomed(720), alignment: .leading)
             .padding(.horizontal, zoomed(32))
@@ -44,6 +73,24 @@ struct ProjectPage: View {
             .frame(maxWidth: .infinity)
         }
         .id(project.id)
+        // A fresh visit opens on Decisions when something's waiting, unless
+        // a tab was picked for it before (ProjectTabs).
+        // Not from the dock's drag ghost, a second copy of the page drawn
+        // while a panel moves: that's the same visit (Codex review).
+        .onChange(of: project.id, initial: true) { _, id in if !isGhost { app.projectPageOpened(id) } }
+    }
+
+    /// Everything about the project but its decisions: the Project tab.
+    @ViewBuilder
+    private func info(_ threads: [ThreadSummary]) -> some View {
+        PartsSection(project: project)
+        TextSection(project: project, field: .goals)
+        TextSection(project: project, field: .state)
+        TasksSection(project: project)
+        TextSection(project: project, field: .notes)
+        FoldersSection(project: project)
+        ThreadsSection(project: project, threads: threads)
+        PatchesSection(project: project, threads: threads)
     }
 
     /// "Made by the librarian on 20 Oct · 5 threads".
@@ -133,8 +180,134 @@ private struct TitleField: View {
     }
 }
 
+/// Decisions and Project, at the top of a project's page under its header
+/// (the projectDecisions experiment). The decisions' count is in the
+/// needs-you orange, as everywhere they're counted; the rest is quiet. A
+/// click shows the tab at once; ⇧⌘[ and ⇧⌘] step between them (Go menu).
+private struct ProjectTabBar: View {
+    @Environment(AppModel.self) private var app
+    let project: Project
+    let tab: ProjectTab
+    let decisions: Int
+
+    var body: some View {
+        HStack(spacing: zoomed(2)) {
+            ForEach(ProjectTab.allCases, id: \.self) { each in
+                TabButton(title: each.title, count: each == .decisions && decisions > 0 ? decisions : nil, selected: each == tab) {
+                    app.pickProjectTab(project.id, each)
+                }
+                .tip(each == .decisions ? "What its threads are waiting on you for (⇧⌘[)" : "Its goals, state, notes and threads (⇧⌘])")
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.bottom, zoomed(4))
+        .overlay(alignment: .bottom) { Rectangle().fill(Color(nsColor: Theme.hairline)).frame(height: 0.5) }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Project page tabs")
+    }
+}
+
+private struct TabButton: View {
+    let title: String
+    let count: Int?
+    let selected: Bool
+    let action: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: zoomed(6)) {
+                Text(title)
+                    .font(.system(size: TypeScale.label, weight: selected ? .semibold : .regular))
+                    .foregroundStyle(selected ? .primary : .secondary)
+                if let count {
+                    Text("\(count)")
+                        .font(.system(size: TypeScale.detail, weight: .semibold))
+                        .foregroundStyle(Color(nsColor: Theme.needsYou))
+                        .monospacedDigit()
+                }
+            }
+            .padding(.horizontal, zoomed(10))
+            .padding(.vertical, zoomed(5))
+            .background(selected ? Color.primary.opacity(0.08) : hovering ? SidebarMetrics.hover : .clear,
+                        in: RoundedRectangle(cornerRadius: zoomed(6)))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .accessibilityAddTraits(selected ? [.isSelected, .isButton] : .isButton)
+        .accessibilityLabel(count.map { "\(title), \($0) waiting" } ?? title)
+    }
+}
+
+/// A parent project's parts (docs/protocol.md, Projects, "Parts"): each
+/// with its state's first line, and its decisions (with the projectDecisions
+/// experiment) or how many threads it has. A row opens the part's page.
+private struct PartsSection: View {
+    @Environment(AppModel.self) private var app
+    let project: Project
+
+    var body: some View {
+        let built = app.projectSections
+        let parts = built.parts[project.id] ?? []
+        if !parts.isEmpty {
+            VStack(alignment: .leading, spacing: 0) {
+                PageHeading(title: "Parts", detail: "\(parts.count)")
+                ForEach(parts) { part in
+                    PartRow(part: part, decisions: app.projectDecisionsOn ? ProjectDecisions.count(part.threads) : 0)
+                }
+            }
+        }
+    }
+}
+
+private struct PartRow: View {
+    @Environment(AppModel.self) private var app
+    let part: ProjectSection
+    let decisions: Int
+    @State private var hovering = false
+
+    var body: some View {
+        Button { app.openProjectPage(part.project.id) } label: {
+            HStack(alignment: .center, spacing: zoomed(10)) {
+                ProjectIconView(project: part.project, size: 20)
+                VStack(alignment: .leading, spacing: zoomed(2)) {
+                    Text(part.project.title)
+                        .font(.system(size: TypeScale.label, weight: .semibold))
+                        .lineLimit(1)
+                    if let line = part.project.state.split(whereSeparator: \.isNewline).first {
+                        Text(String(line))
+                            .font(.system(size: TypeScale.detail))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                }
+                Spacer(minLength: zoomed(8))
+                Group {
+                    if decisions > 0 {
+                        Text(ProjectDecisions.label(decisions)).foregroundStyle(Color(nsColor: Theme.needsYou))
+                    } else {
+                        Text(part.threads.count == 1 ? "1 thread" : "\(part.threads.count) threads")
+                            .foregroundStyle(Color(nsColor: Theme.faintText))
+                    }
+                }
+                .font(.system(size: TypeScale.detail, weight: .medium))
+                .monospacedDigit()
+            }
+            .padding(.horizontal, zoomed(8))
+            .padding(.vertical, zoomed(7))
+            .background(hovering ? SidebarMetrics.hover : .clear, in: RoundedRectangle(cornerRadius: zoomed(6)))
+            .padding(.horizontal, -zoomed(8))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .tip("Open \(part.project.title)")
+    }
+}
+
 /// A section's heading, with anything that acts on the section at its right.
-private struct PageHeading<Trailing: View>: View {
+struct PageHeading<Trailing: View>: View {
     let title: String
     var detail: String? = nil
     @ViewBuilder var trailing: () -> Trailing

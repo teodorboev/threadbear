@@ -1,4 +1,5 @@
-// Review by another lab (experiment labReview, runner/lab-review.ts): a
+// Review by another lab (Settings > General, runner.json `labReview`,
+// runner/lab-review.ts): a
 // turn that changed code and finished starts a review thread on the other
 // provider, waits for it, and wakes with its findings.
 import { test } from 'node:test';
@@ -10,15 +11,16 @@ import { Runner, type Notification } from '../../src/runner.ts';
 import { ThreadStore } from '../../src/store.ts';
 import { FakeClock } from '../../src/clock.ts';
 import { nullLogger } from '../../src/log.ts';
-import { LAB_REVIEW_ROUNDS } from '../../src/runner/lab-review.ts';
-import { EXPERIMENTS, experimentOn } from '../../src/experiments.ts';
+import { FINDINGS_REFUSED, LAB_REVIEW_ROUNDS, findingsProblem, parseAnswers, parseVerdict } from '../../src/runner/lab-review.ts';
+import { buildThreadbearTools } from '../../src/threadbear-mcp.ts';
+import { loadConfig } from '../../src/config.ts';
+import { SettingsService } from '../../src/settings.ts';
 
 const END_TURN = 'mcp__threadbear__end_turn';
 
 function setup(o: { on?: boolean; accounts?: typeof ACCOUNTS; cfg?: Record<string, unknown> } = {}) {
   const home = tmpDir();
-  if (o.on !== false) fs.writeFileSync(path.join(home, 'runner.json'), JSON.stringify({ experiments: { labReview: true } }));
-  const h = makeHarness(home, o.cfg ?? {}, { accounts: new FakeAccounts(o.accounts ?? withCodex()) });
+  const h = makeHarness(home, { labReview: o.on !== false, ...o.cfg }, { accounts: new FakeAccounts(o.accounts ?? withCodex()) });
   return h;
 }
 
@@ -42,13 +44,20 @@ function start(h: ReturnType<typeof setup>, text = 'Fix the login bug') {
   return thread.id;
 }
 
-test('labReview: off by default, so a code change finishes as before', () => {
-  assert.equal(EXPERIMENTS.find((x) => x.id === 'labReview')?.on, false);
-  const h = setup({ on: false });
-  assert.equal(experimentOn(h.home, 'labReview'), false);
+test('labReview: on unless runner.json turns it off, and Settings switches it at once', () => {
+  const home = tmpDir();
+  assert.equal(loadConfig({ THREADBEAR_HOME: home }).labReview, true, 'on with nothing in runner.json');
+  fs.writeFileSync(path.join(home, 'runner.json'), JSON.stringify({ labReview: false }));
+  assert.equal(loadConfig({ THREADBEAR_HOME: home }).labReview, false);
+
+  const h = setup();
+  const settings = new SettingsService({ config: h.runner.cfg, publish: () => {} });
+  assert.equal(settings.get().labReview, true);
+  assert.equal(settings.update({ labReview: false }).labReview, false);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(h.home, 'runner.json'), 'utf8')).labReview, false, 'saved');
   const id = start(h);
   turn(h, id, { diffs: [codeDiff()] });
-  assert.equal(h.runner.get(id).snoozedUntil, undefined);
+  assert.equal(h.runner.get(id).snoozedUntil, undefined, 'not waiting on a review');
   assert.equal(h.codex.sessions.length, 0);
 });
 
@@ -253,7 +262,7 @@ test('labReview: a turn that ends on a draining runner is reviewed once the new 
   const codex = new FakeAdapter('codex', { ...CODEX_FLAGS, archives: true });
   const notes: Notification[] = [];
   const b = new Runner({
-    config: testConfig(h.home), store: new ThreadStore(h.home),
+    config: testConfig(h.home, { labReview: true }), store: new ThreadStore(h.home),
     adapters: { claude: new FakeAdapter(), codex }, accounts: new FakeAccounts(withCodex()),
     clock: new FakeClock(), log: nullLogger, defer: (fn) => fn(), copyTranscript: () => false,
     subagentTranscript: () => null, reachable: async () => true, backgroundJobs: false,
@@ -293,7 +302,7 @@ test('labReview: a thread busy when it comes across gives the owed review at its
   const claude = new FakeAdapter();
   const codex = new FakeAdapter('codex', { ...CODEX_FLAGS, archives: true });
   const b = new Runner({
-    config: testConfig(h.home), store: new ThreadStore(h.home),
+    config: testConfig(h.home, { labReview: true }), store: new ThreadStore(h.home),
     adapters: { claude, codex }, accounts: new FakeAccounts(withCodex()),
     clock: new FakeClock(), log: nullLogger, defer: (fn) => fn(), copyTranscript: () => false,
     subagentTranscript: () => null, reachable: async () => true, backgroundJobs: false,
@@ -330,7 +339,7 @@ test('labReview: a thread hibernated before it came across keeps the review for 
   fs.writeFileSync(file, JSON.stringify(saved));
   const codex = new FakeAdapter('codex', { ...CODEX_FLAGS, archives: true });
   const b = new Runner({
-    config: testConfig(h.home), store: new ThreadStore(h.home),
+    config: testConfig(h.home, { labReview: true }), store: new ThreadStore(h.home),
     adapters: { claude: new FakeAdapter(), codex }, accounts: new FakeAccounts(withCodex()),
     clock: new FakeClock(Date.now()), log: nullLogger, defer: (fn) => fn(), copyTranscript: () => false,
     subagentTranscript: () => null, reachable: async () => true, backgroundJobs: false,
@@ -354,7 +363,7 @@ test('labReview: a review owed from a handover starts when the next runner loads
   // The new runner went away before adopting it; the one after loads it.
   const codex = new FakeAdapter('codex', { ...CODEX_FLAGS, archives: true });
   const b = new Runner({
-    config: testConfig(h.home), store: new ThreadStore(h.home),
+    config: testConfig(h.home, { labReview: true }), store: new ThreadStore(h.home),
     adapters: { claude: new FakeAdapter(), codex }, accounts: new FakeAccounts(withCodex()),
     clock: new FakeClock(), log: nullLogger, defer: (fn) => fn(), copyTranscript: () => false,
     subagentTranscript: () => null, reachable: async () => true, backgroundJobs: false,
@@ -386,7 +395,7 @@ test('labReview: a thread adopted while the new runner is still starting gets it
   await tick();
   const codex = new FakeAdapter('codex', { ...CODEX_FLAGS, archives: true });
   const b = new Runner({
-    config: testConfig(h.home), store: new ThreadStore(h.home),
+    config: testConfig(h.home, { labReview: true }), store: new ThreadStore(h.home),
     adapters: { claude: new FakeAdapter(), codex }, accounts: new FakeAccounts(withCodex()),
     clock: new FakeClock(), log: nullLogger, defer: (fn) => fn(), copyTranscript: () => false,
     subagentTranscript: () => null, reachable: async () => true, backgroundJobs: false,
@@ -420,7 +429,7 @@ test('labReview: an owed review is dropped by a next turn that needs Mike', asyn
   const claude = new FakeAdapter();
   const codex = new FakeAdapter('codex', { ...CODEX_FLAGS, archives: true });
   const b = new Runner({
-    config: testConfig(h.home), store: new ThreadStore(h.home),
+    config: testConfig(h.home, { labReview: true }), store: new ThreadStore(h.home),
     adapters: { claude, codex }, accounts: new FakeAccounts(withCodex()),
     clock: new FakeClock(), log: nullLogger, defer: (fn) => fn(), copyTranscript: () => false,
     subagentTranscript: () => null, reachable: async () => true, backgroundJobs: false,
@@ -453,7 +462,7 @@ test('labReview: a slash command the runner answers itself keeps an owed review'
   fs.writeFileSync(file, JSON.stringify(saved));
   const codex = new FakeAdapter('codex', { ...CODEX_FLAGS, archives: true });
   const b = new Runner({
-    config: testConfig(h.home), store: new ThreadStore(h.home),
+    config: testConfig(h.home, { labReview: true }), store: new ThreadStore(h.home),
     adapters: { claude: new FakeAdapter(), codex }, accounts: new FakeAccounts(withCodex()),
     clock: new FakeClock(), log: nullLogger, defer: (fn) => fn(), copyTranscript: () => false,
     subagentTranscript: () => null, reachable: async () => true, backgroundJobs: false,
@@ -475,7 +484,7 @@ test('labReview: an edit that cuts the owed turn drops its review', async () => 
   const claude = new FakeAdapter();
   claude.rewind = async () => ({ resumeAt: 'entry-1' });
   const b = new Runner({
-    config: testConfig(h.home), store: new ThreadStore(h.home),
+    config: testConfig(h.home, { labReview: true }), store: new ThreadStore(h.home),
     adapters: { claude, codex }, accounts: new FakeAccounts(withCodex()),
     clock: new FakeClock(), log: nullLogger, defer: (fn) => fn(), copyTranscript: () => false,
     subagentTranscript: () => null, reachable: async () => true, backgroundJobs: false,
@@ -513,4 +522,260 @@ test('labReview: a scheduled run that woke an archived thread goes back once its
   t = h.runner.get(id);
   assert.ok(t.archivedAt, 'back in the archive once the run is really over');
   assert.equal(t.archivedBy, 'mike');
+});
+
+// Daybreak, 10 Nov 2026 ("Default-on reviews drop sandbox confinement"): a
+// Full thread shut in a sandbox got a Full Codex reviewer on the host, in
+// the same checkout, told it may run the tests there.
+function boxed() {
+  const root = fs.realpathSync(tmpDir('tb-box-'));
+  const box = path.join(root, 'sandboxed');
+  const demo = path.join(box, 'demo');
+  fs.mkdirSync(demo, { recursive: true });
+  const h = setup({ cfg: { sandbox: { folders: [box], image: 'threadbear-sandbox', docker: 'docker' } } });
+  const { thread } = h.runner.create({ text: 'Fix the login bug', accountId: 'claude-main', cwd: demo, permissionMode: 'full' });
+  h.adapter.last.init();
+  assert.equal(h.runner.threads.get(thread.id)!.rec.confined, true);
+  return { h, id: thread.id, demo };
+}
+
+test("labReview: the scan's attack: a sandboxed Full thread's review runs in the sandbox, on Claude, never on Codex outside it", () => {
+  const { h, id, demo } = boxed();
+  turn(h, id, { diffs: [codeDiff()] });
+  const reviewId = h.runner.get(id).waitingOn![0].threadId;
+  const review = h.runner.threads.get(reviewId)!.rec;
+  assert.equal(review.provider, 'claude', 'Codex never runs in the sandbox');
+  assert.equal(review.confined, true, 'shut in, as the thread it reviews');
+  assert.equal(review.permissionMode, 'full');
+  assert.equal(review.cwd, demo);
+  assert.equal(h.codex.sessions.length, 0, 'no Codex session at all');
+  assert.equal(h.adapter.sessions.find((s) => s.opts.threadId === reviewId)?.opts.confined, true, 'its CLI is told to run in the sandbox');
+  assert.ok(h.events(id).some((e) => e.type === 'system.note' && /in the sandbox\. It isn't another lab: this thread runs in a sandbox/.test(e.text)));
+});
+
+test("labReview: a sandboxed thread whose folder isn't in a sandbox any more isn't reviewed, and says why", () => {
+  const { h, id } = boxed();
+  // Taken out of runner.json since: the review can't be shut in, so none.
+  (h.runner.cfg as { sandbox?: unknown }).sandbox = undefined;
+  turn(h, id, { diffs: [codeDiff()] });
+  assert.equal(h.runner.get(id).waitingOn, undefined);
+  assert.equal(h.runner.list().filter((t) => t.title.startsWith('Review:')).length, 0, 'no review thread');
+  assert.equal(h.codex.sessions.length, 0);
+  assert.ok(h.events(id).some((e) => e.type === 'system.note' && /^Not reviewed: the review thread couldn't start .*sandbox/.test(e.text)));
+});
+
+test('labReview: the review login for a sandboxed thread is only ever one that runs in the sandbox', () => {
+  const { h, id } = boxed();
+  const rec = h.runner.threads.get(id)!.rec;
+  assert.equal(h.runner.reviewLogin(rec, { confined: true })?.account.provider, 'claude');
+  assert.equal(h.runner.reviewLogin(rec, { confined: true })?.boxed, true);
+  assert.equal(h.runner.reviewLogin(rec)?.account.provider, 'codex', 'outside a sandbox, the other lab as before');
+  // A Codex thread in a sandbox folder (Mike's to start; Codex isn't shut
+  // in) still gets Claude, which runs in the sandbox there.
+  const codexRec = { ...rec, provider: 'codex' as const, accountId: 'codex-main' };
+  assert.equal(h.runner.reviewLogin(codexRec, { confined: true })?.account.provider, 'claude');
+});
+
+// ------------------------------------------------------- the findings ledger
+
+// The review thread the reviewed one waits on finishes its turn with
+// end_turn's input (its verdict in findings) and a reply.
+function finishReview(h: ReturnType<typeof setup>, id: string, input: Record<string, unknown>, reply = 'See findings.') {
+  const w = h.runner.threads.get(id)!.rec.waitingOn?.find((x) => x.review && !x.done);
+  assert.ok(w, 'waiting on a review');
+  const rs = h.codex.sessions.find((s) => s.opts.threadId === w.threadId)!;
+  rs.init();
+  turn(h, w.threadId, { session: rs, reply, input });
+  return w.threadId;
+}
+const FINDINGS = [
+  { severity: 'high', where: 'src/app.ts:3', claim: 'Drops the session on refresh.', case: 'Reload after login.' },
+  { severity: 'low', where: 'src/app.ts:9', claim: 'Logs the token.', case: 'Any login.' },
+];
+const lastCard = (h: ReturnType<typeof setup>, id: string) => h.events(id).filter((e) => e.type === 'turn.completed').at(-1);
+
+test('labReview: the reviewer gives its verdict in end_turn, and the agent wakes with each finding numbered', () => {
+  const h = setup();
+  const id = start(h);
+  turn(h, id, { diffs: [codeDiff()] });
+  const brief = h.events(h.runner.get(id).waitingOn![0].threadId).find((e) => e.type === 'user.message').text as string;
+  assert.match(brief, /end_turn too, in its `findings`/);
+  finishReview(h, id, { needs: 'nothing', findings: FINDINGS });
+  const msg = h.events(id).filter((e) => e.type === 'user.message').at(-1).text as string;
+  assert.match(msg, /#1 \[high\] src\/app\.ts:3: Drops the session on refresh\. Case: Reload after login\./);
+  assert.match(msg, /#2 \[low\]/);
+  assert.match(msg, /"id": 1, "outcome": "fixed"/);
+  assert.deepEqual(h.runner.reviewOwes(id)?.open?.map((f) => f.id), [1, 2]);
+});
+
+test('labReview: the answering turn puts the ledger on its card, and a fix of any size is reviewed again until it passes', () => {
+  const h = setup();
+  const id = start(h);
+  turn(h, id, { diffs: [codeDiff()] });
+  finishReview(h, id, { needs: 'nothing', findings: FINDINGS });
+  // Two lines: under the usual minimum, but a fix gets its review.
+  turn(h, id, { diffs: [codeDiff('src/app.ts', 2)], input: { needs: 'nothing', findings: [{ id: 1, outcome: 'fixed' }, { id: 2, outcome: 'disputed', note: 'It logs a hash, not the token.' }] } });
+  const card = lastCard(h, id).review;
+  assert.equal(card.rounds, 1);
+  assert.match(card.reviewer, /^Codex \(/);
+  assert.equal(card.independent, true);
+  assert.deepEqual(card.findings.map((f: any) => [f.id, f.outcome, f.note]), [[1, 'fixed', undefined], [2, 'disputed', 'It logs a hash, not the token.']]);
+  assert.equal(h.runner.reviewOwes(id), undefined, 'nothing open once answered');
+  // Round 2 sees the earlier findings and answers, and passes.
+  const r2 = h.runner.get(id).waitingOn![0].threadId;
+  const brief = h.events(r2).find((e) => e.type === 'user.message').text as string;
+  assert.match(brief, /review round 2/);
+  assert.match(brief, /#2 \[low\].*\n   Agent: disputed: It logs a hash/);
+  finishReview(h, id, { needs: 'nothing', findings: [] }, 'The fix holds.');
+  const msg = h.events(id).filter((e) => e.type === 'user.message').at(-1).text as string;
+  assert.match(msg, /review round 2.*found nothing that holds up/);
+  turn(h, id, { reply: 'Codex passed the fix.' });
+  const done = lastCard(h, id).review;
+  assert.equal(done.rounds, 2);
+  assert.equal(done.passed, true);
+  assert.equal(done.findings.length, 2, 'earlier findings stay on the ledger');
+  assert.equal(h.runner.get(id).snoozedUntil, undefined, 'done, no third round');
+});
+
+test('labReview: findings only disputed or left get no further round, and Mike writing starts a fresh ledger', () => {
+  const h = setup();
+  const id = start(h);
+  turn(h, id, { diffs: [codeDiff()] });
+  finishReview(h, id, { needs: 'nothing', findings: FINDINGS.slice(0, 1) });
+  turn(h, id, { input: { needs: 'you', asks: [{ question: 'Keep sessions across refresh?' }], findings: [{ id: 1, outcome: 'left', note: 'Whether refresh should keep the session.' }] } });
+  assert.equal(lastCard(h, id).review.findings[0].outcome, 'left');
+  assert.ok(!h.runner.threads.get(id)!.rec.waitingOn?.some((w) => !w.done), 'no review of a turn that needs Mike');
+  turn(h, id, { text: 'Yes keep them', diffs: [codeDiff()] });
+  const t = h.runner.threads.get(id)!.rec;
+  assert.equal(t.labReview?.rounds, 1);
+  assert.equal(t.labReview?.findings.length, 0, 'a new ask starts a new ledger');
+});
+
+test('labReview: a reviewer that gives no verdict still wakes the agent with its reply, and nothing is enforced', () => {
+  const h = setup();
+  const id = start(h);
+  turn(h, id, { diffs: [codeDiff()] });
+  finishReview(h, id, { needs: 'nothing' }, 'src/app.ts:3 drops the session.');
+  const msg = h.events(id).filter((e) => e.type === 'user.message').at(-1).text as string;
+  assert.match(msg, /drops the session/);
+  assert.doesNotMatch(msg, /"outcome"/);
+  assert.equal(h.runner.reviewOwes(id), undefined);
+  turn(h, id, {});
+  assert.equal(lastCard(h, id).review.unstructured, true);
+});
+
+test('labReview: fixes in the last round are marked as unchecked on the card', () => {
+  const h = setup();
+  const id = start(h);
+  turn(h, id, { diffs: [codeDiff()] });
+  for (let round = 1; round <= LAB_REVIEW_ROUNDS; round++) {
+    finishReview(h, id, { needs: 'nothing', findings: [{ claim: `Problem ${round}.` }] });
+    turn(h, id, { diffs: [codeDiff()], input: { needs: 'nothing', findings: [{ id: round, outcome: 'fixed' }] } });
+  }
+  const card = lastCard(h, id).review;
+  assert.equal(card.rounds, LAB_REVIEW_ROUNDS);
+  assert.equal(card.unchecked, true);
+  assert.equal(card.findings[0].severity, 'medium', 'a finding without one is medium');
+});
+
+test('labReview: findingsProblem and the parsers', () => {
+  assert.equal(parseVerdict({ needs: 'nothing' }), undefined);
+  assert.deepEqual(parseVerdict({ findings: [] }), { findings: [] });
+  assert.equal(parseVerdict({ findings: [{ nope: 1 }] }), undefined, 'nothing in it is a finding');
+  assert.equal(parseVerdict({ findings: [{ claim: 'x\n\ny', severity: 'urgent' }] })!.findings[0].claim, 'x y');
+  assert.deepEqual([...parseAnswers({ findings: [{ id: '#3', outcome: 'Fixed' }, { id: 4, outcome: 'maybe' }] })], [[3, { outcome: 'fixed' }]]);
+  const open = [{ id: 1, round: 1, severity: 'high' as const, claim: 'a' }, { id: 2, round: 1, severity: 'low' as const, claim: 'b' }];
+  assert.match(findingsProblem({ open }, { needs: 'nothing' }, 'nothing')!, /#1, #2 have no answer/);
+  assert.match(findingsProblem({ open }, { findings: [{ id: 1, outcome: 'fixed' }, { id: 2, outcome: 'disputed' }] }, 'nothing')!, /#2 are disputed with no note/);
+  assert.match(findingsProblem({ open }, { findings: [{ id: 1, outcome: 'fixed' }, { id: 2, outcome: 'left', note: 'n' }] }, 'nothing')!, /needs "you"/);
+  assert.match(findingsProblem({ open }, { findings: [{ id: 1, outcome: 'fixed' }, { id: 2, outcome: 'left', note: 'n' }] }, 'you')!, /an ask for each/, 'needs you with no ask draws no card');
+  assert.equal(findingsProblem({ open }, { asks: [{ question: 'Keep it?' }], findings: [{ id: 1, outcome: 'fixed' }, { id: 2, outcome: 'left', note: 'n' }] }, 'you'), undefined);
+  assert.match(findingsProblem({ verdict: true }, { needs: 'nothing' }, 'nothing')!, /needs your verdict/);
+  assert.equal(findingsProblem({ verdict: true }, { findings: [] }, 'nothing'), undefined);
+  for (const p of [findingsProblem({ open }, {}, 'nothing'), findingsProblem({ verdict: true }, {}, 'nothing')]) assert.ok(p!.startsWith(FINDINGS_REFUSED));
+});
+
+test('labReview: end_turn is refused while findings have no answer, twice at most, and the reviewer for its verdict', async () => {
+  const h = setup();
+  const id = start(h);
+  turn(h, id, { diffs: [codeDiff()] });
+  const reviewId = h.runner.get(id).waitingOn![0].threadId;
+  const rs = h.codex.sessions.find((s) => s.opts.threadId === reviewId)!;
+  rs.init();
+  const caller = (threadId: string, s: any) => {
+    const endTurn = buildThreadbearTools(h.runner, threadId, Date.now, undefined, undefined, undefined, { sleep: async () => {} }).find((x) => x.name === 'end_turn')!;
+    return async (args: Record<string, unknown>, itemId: string) => {
+      s.out({ kind: 'event', event: { type: 'tool.call', itemId, name: END_TURN, kind: 'mcp', title: 'end_turn', input: args } });
+      const r = (await endTurn.handler(args as never, {})) as { content: { text: string }[]; isError?: boolean };
+      const text = r.content.map((c) => c.text).join('\n');
+      s.out({ kind: 'event', event: { type: 'tool.result', itemId, ok: !r.isError, text, truncated: false, images: [] } });
+      return { text, error: Boolean(r.isError) };
+    };
+  };
+  const review = caller(reviewId, rs);
+  rs.text('r1', 'Two problems.');
+  let r = await review({ needs: 'nothing' }, 'v1');
+  assert.equal(r.error, true);
+  assert.match(r.text, /needs your verdict/);
+  r = await review({ needs: 'nothing', findings: FINDINGS }, 'v2');
+  assert.equal(r.error, false, r.text);
+  rs.result();
+  // The reviewed thread wakes; its end_turn has to answer #1 and #2.
+  const s = h.adapter.sessions.filter((x) => x.opts.threadId === id).at(-1)!;
+  const agent = caller(id, s);
+  s.text('a1', 'Fixed one.');
+  r = await agent({ headline: 'Fixed', needs: 'nothing', findings: [{ id: 1, outcome: 'fixed' }] }, 'a-e1');
+  assert.equal(r.error, true);
+  assert.match(r.text, /#2 have no answer/);
+  r = await agent({ headline: 'Fixed', needs: 'nothing', findings: [{ id: 1, outcome: 'fixed' }] }, 'a-e2');
+  assert.equal(r.error, true);
+  // Twice is the most: a session holding the older end_turn can't comply.
+  r = await agent({ headline: 'Fixed', needs: 'nothing' }, 'a-e3');
+  assert.equal(r.error, false, r.text);
+});
+
+// Codex's review of the ledger (11 Nov 2026): each of these broke it.
+test("labReview: another thread's message doesn't clear findings still waiting for answers; Mike's does", () => {
+  const h = setup();
+  const id = start(h);
+  turn(h, id, { diffs: [codeDiff()] });
+  finishReview(h, id, { needs: 'nothing', findings: FINDINGS });
+  h.runner.send(id, 'FYI the nightly finished.', [], { origin: 'agent' as never });
+  assert.deepEqual(h.runner.reviewOwes(id)?.open?.map((f) => f.id), [1, 2], 'still owed');
+  h.runner.send(id, 'Leave those, do something else.');
+  assert.equal(h.runner.reviewOwes(id), undefined);
+});
+
+test("labReview: a reviewer's later turn without a verdict doesn't stand on its earlier pass", () => {
+  const h = setup();
+  const id = start(h);
+  turn(h, id, { diffs: [codeDiff()] });
+  const reviewId = h.runner.get(id).waitingOn![0].threadId;
+  const rec = h.runner.threads.get(reviewId)!.rec;
+  rec.reviewVerdict = { findings: [] };
+  const rs = h.codex.sessions.find((s) => s.opts.threadId === reviewId)!;
+  rs.init();
+  turn(h, reviewId, { session: rs, reply: 'The tests I left running failed: src/app.ts:3 throws.', input: { needs: 'nothing' } });
+  const msg = h.events(id).filter((e) => e.type === 'user.message').at(-1).text as string;
+  assert.doesNotMatch(msg, /found nothing that holds up/);
+  assert.match(msg, /throws/);
+});
+
+test('labReview: a fix that only touches a doc still gets its round', () => {
+  const h = setup();
+  const id = start(h);
+  turn(h, id, { diffs: [codeDiff()] });
+  finishReview(h, id, { needs: 'nothing', findings: [{ claim: 'The README example is wrong.', where: 'README.md:3' }] });
+  turn(h, id, { diffs: [codeDiff('README.md', 2)], input: { needs: 'nothing', findings: [{ id: 1, outcome: 'fixed' }] } });
+  assert.ok(h.runner.threads.get(id)!.rec.waitingOn?.some((w) => w.review && !w.done), 'round 2 started');
+});
+
+test('labReview: a review thread is only asked for a verdict while the reviewed thread waits on it', () => {
+  const h = setup();
+  const id = start(h);
+  turn(h, id, { diffs: [codeDiff()] });
+  const reviewId = h.runner.get(id).waitingOn![0].threadId;
+  assert.deepEqual(h.runner.reviewOwes(reviewId), { verdict: true });
+  finishReview(h, id, { needs: 'nothing', findings: [] });
+  assert.equal(h.runner.reviewOwes(reviewId), undefined, 'done with: reopened later, it is asked nothing');
 });

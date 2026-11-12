@@ -41,6 +41,9 @@ enum WindowDock {
     /// activity bar's Runners icon), open until Mike closes it.
     static let runners = "threadbear.runners"
     static let runnersSymbol = "server.rack"
+    /// The Terminal panel (TerminalPanel.swift), ⌘J.
+    static let terminal = "threadbear.terminal"
+    static let terminalSymbol = "terminal"
     static let layoutKey = "dockLayout"
     static let threadPanelPrefix = "threadbear.thread:"
 
@@ -82,7 +85,7 @@ enum WindowDock {
     /// A pane section's panel, or nil for the sidebar, the main panel and a
     /// thread's own panel.
     static func section(_ panel: PanelID) -> PaneSection? {
-        panel == threads || panel == main || panel == usage || panel == updates || panel == setup || panel == connectors || panel == runners || pinnedThread(panel) != nil ? nil : PaneSection(id: panel)
+        panel == threads || panel == main || panel == usage || panel == updates || panel == setup || panel == connectors || panel == runners || panel == terminal || pinnedThread(panel) != nil ? nil : PaneSection(id: panel)
     }
 
     @MainActor
@@ -101,6 +104,7 @@ enum WindowDock {
         case setup: return "Finish setting up"
         case connectors: return "Connectors"
         case runners: return "Runners"
+        case terminal: return "Terminal"
         default:
             break
         }
@@ -111,7 +115,7 @@ enum WindowDock {
         // A file or page open over the section: its name, with Back to the
         // section in the bar.
         if let thread = app.paneThread, let preview = app.panePreview[thread.id], preview.from.id == panel {
-            return preview.title
+            return preview.barTitle
         }
         switch panel {
         case PaneSection.highlightsId: return "Highlights"
@@ -154,6 +158,7 @@ enum WindowDock {
         case setup: return setupSymbol
         case connectors: return connectorsSymbol
         case runners: return runnersSymbol
+        case terminal: return terminalSymbol
         case PaneSection.highlightsId: return "pin"
         case AgentBrowser.panelId: return "globe"
         case BuiltinPanels.files: return "folder"
@@ -221,6 +226,76 @@ extension AppModel {
         set { setShownUnderThreads(WindowDock.runners, newValue) }
     }
 
+    /// The Terminal panel is up.
+    var terminalShown: Bool { dock.isShowing(WindowDock.terminal) }
+
+    /// ⌘J: hides the Terminal if it's showing, else brings it up under the
+    /// thread (a third of its height, as VS Code opens its own) and gives
+    /// it the keyboard.
+    func toggleTerminal() {
+        if terminalShown { return dock.close(WindowDock.terminal) }
+        bringUpTerminal()
+        Terminals.shared.open(TerminalTarget.for(selectedThread) { runnerName(of: $0) })
+    }
+
+    /// The panel up with nothing started in it, for the automation: what it
+    /// says before a shell is asked for.
+    func showTerminalPanel() {
+        bringUpTerminal()
+    }
+
+    /// Whether a ```bash block in `threadId`'s transcript may put its
+    /// command in the Terminal: only when that thread is the one the main
+    /// panel shows (so the Terminal panel is its shell, in front of Mike),
+    /// and its shell is in its own folder on this Mac. Never for a thread
+    /// on another runner, an archived one or one whose folder has gone
+    /// (TerminalTarget's note), and never for text that isn't in a thread.
+    ///
+    /// Asked of the thread the block is in, never the selection alone: a
+    /// thread in a panel of its own isn't the selection, and a block in
+    /// another runner's thread there got a play icon from a local thread
+    /// being selected, then pasted into that thread's shell (Daybreak, 10
+    /// Nov).
+    func canPutInTerminal(from threadId: String?) -> Bool {
+        guard let threadId, threadId == selection, let thread = threads[threadId] else { return false }
+        return TerminalTarget.for(thread) { runnerName(of: $0) }.note == nil
+    }
+
+    /// A ```bash block's play icon: the command at its thread's prompt,
+    /// checked again here against the thread it came from.
+    func putInTerminal(_ block: ShellBlock, from threadId: String?, done: @escaping @MainActor (Terminals.PutOutcome) -> Void) {
+        guard canPutInTerminal(from: threadId), let threadId, let thread = threads[threadId] else { return }
+        let target = TerminalTarget.for(thread) { runnerName(of: $0) }
+        guard target.key == .thread(threadId) else { return }
+        if !terminalShown { bringUpTerminal() }
+        Terminals.shared.put(block, in: target, done: done)
+    }
+
+    private func bringUpTerminal() {
+        if dock.layout.contains(WindowDock.terminal) {
+            dock.show(WindowDock.terminal)
+        } else if let main = dock.layout.group(containing: WindowDock.main) {
+            var layout = dock.layout
+            layout.add(WindowDock.terminal, .edge(group: main.id, .bottom))
+            if let split = Self.split(around: WindowDock.terminal, in: layout.root), split.children.count == 2 {
+                layout.setFractions(split: split.id, [0.68, 0.32])
+            }
+            dock.setLayout(layout)
+        } else {
+            dock.open(WindowDock.terminal, .window(.bottom))
+        }
+    }
+
+    /// The split a panel's group sits directly in.
+    private static func split(around panel: PanelID, in node: DockNode) -> DockSplit? {
+        guard case .split(let s) = node else { return nil }
+        for child in s.children {
+            if case .group(let g) = child, g.panels.contains(panel) { return s }
+            if let inner = split(around: panel, in: child) { return inner }
+        }
+        return nil
+    }
+
     /// Opens one of the activity bar's panels: as a tab beside another
     /// if one's open (Usage, Updates, Finish setting up, Connectors and Runners share the space under
     /// the threads), else under the threads list, else down the left if
@@ -262,6 +337,10 @@ struct RootView: View {
         .navigationTitle(windowTitle)
         .sheet(item: $app.scheduleEditor) { state in
             ScheduleEditor(state: state)
+        }
+        // Move to ▸ a runner (AppModel+Moves).
+        .sheet(item: $app.moveRequest) { request in
+            MoveSheet(request: request)
         }
         // The automation's `settings` opens the Settings window; only a
         // SwiftUI view can (AppKit's showSettingsWindow: does nothing now).
@@ -318,6 +397,11 @@ struct RootView: View {
     private var content: DockContent {
         DockContent(
             title: { WindowDock.title(of: $0, app: app) },
+            titleTip: { panel in
+                // A file or folder open in the pane: its full path.
+                guard let thread = app.paneThread, let preview = app.panePreview[thread.id], preview.from.id == panel else { return nil }
+                return preview.barTip
+            },
             symbol: { WindowDock.symbol(of: $0, app: app) },
             image: { WindowDock.image(of: $0, app: app) },
             badge: { WindowDock.badge(of: $0, app: app) },
@@ -329,7 +413,7 @@ struct RootView: View {
                 return nil
             },
             accessory: { panel in
-                if panel == WindowDock.main { return AnyView(HStack(spacing: 0) { ShareButton(); ThreadMenuButton() }) }
+                if panel == WindowDock.main { return AnyView(HStack(spacing: 0) { HistoryButtons(); ShareButton(); ThreadMenuButton() }) }
                 if let id = WindowDock.pinnedThread(panel) { return AnyView(HStack(spacing: 0) { ShareButton(pinned: id); ThreadMenuButton(pinned: id) }) }
                 if let section = WindowDock.section(panel) { return AnyView(DockPaneButtons(section: section)) }
                 return nil
@@ -339,6 +423,9 @@ struct RootView: View {
             // A project's panel or Patches only for a thread that has them;
             // the dock keeps their place for the next one that does.
             available: { panel in
+                // Folded away with ⌘/: the main panel takes its room, and it
+                // comes back at the same width (AppModel.threadsCollapsed).
+                if panel == WindowDock.threads { return !app.threadsCollapsed }
                 if let id = WindowDock.pinnedThread(panel) { return app.threads[id] != nil }
                 // A project's page has no Highlights (they're a thread's),
                 // and only the panels its folders give.
@@ -361,6 +448,7 @@ struct RootView: View {
                 case WindowDock.setup: AnyView(SetupPanel().tourTarget(.setupPanel, withBar: true))
                 case WindowDock.connectors: AnyView(ConnectorsPanel().tourTarget(.panel("connectors"), withBar: true))
                 case WindowDock.runners: AnyView(RunnersPanel())
+                case WindowDock.terminal: AnyView(TerminalPanel())
                 case WindowDock.main: AnyView(DetailView().tourTarget(.mainPanel, withBar: true))
                 case let id where WindowDock.pinnedThread(id) != nil:
                     AnyView(PinnedThreadView(threadId: WindowDock.pinnedThread(id)!).id(id))

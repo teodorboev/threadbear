@@ -5,14 +5,37 @@
 // skipped.
 import fs from 'node:fs';
 import type { EventBody } from '../../protocol.ts';
-import { ClaudeNormalizer, type NormalizerContext } from './normalize.ts';
+import { ClaudeNormalizer, realModel, type NormalizerContext } from './normalize.ts';
 
 export type TranscriptEvent = { ts?: string; body: EventBody };
 
 type AnyMsg = Record<string, any>;
 
-export function readSubagentTranscript(file: string, ctx: NormalizerContext): TranscriptEvent[] {
-  return subagentEvents(fs.readFileSync(file, 'utf8'), ctx);
+export type SubagentRead = { events: TranscriptEvent[]; model?: string; effort?: string };
+
+export function readSubagentTranscript(file: string, ctx: NormalizerContext): SubagentRead {
+  const text = fs.readFileSync(file, 'utf8');
+  return { events: subagentEvents(text, ctx), ...subagentModel(text) };
+}
+
+// The model and effort level its latest reply ran at. Each assistant line
+// has `message.model` and the CLI's own `effort`; the last one wins, as a
+// fallback model can take over partway.
+export function subagentModel(text: string): { model?: string; effort?: string } {
+  const lines = text.split('\n');
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (!lines[i].includes('"assistant"')) continue;
+    let d: AnyMsg;
+    try {
+      d = JSON.parse(lines[i]);
+    } catch {
+      continue;
+    }
+    const model = d.type === 'assistant' ? realModel(d.message?.model) : undefined;
+    if (!model) continue;
+    return typeof d.effort === 'string' && d.effort ? { model, effort: d.effort } : { model };
+  }
+  return {};
 }
 
 export function subagentEvents(text: string, ctx: NormalizerContext): TranscriptEvent[] {

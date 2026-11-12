@@ -63,6 +63,8 @@ export type CreateProjectParams = {
   notes?: string;
   links?: LinkInput[];
   threadIds?: string[];
+  // The project it's a part of: an id, id prefix or title (Projects, "Parts").
+  parent?: string;
   by: ProjectMaker;
   byThread?: string;
 };
@@ -77,6 +79,9 @@ export type UpdateProjectParams = {
   // A Notion page or database with the project's tasks; empty takes it off.
   notion?: string;
   archived?: boolean;
+  // Makes it a part of that project (id, id prefix or title), or with ''
+  // a project of its own again (docs/protocol.md, Projects, "Parts").
+  parent?: string;
   // Who's changing the title, kept as titleBy. Absent counts as Mike, so a
   // name from somewhere unknown is never renamed by the librarian.
   by?: ProjectMaker;
@@ -142,6 +147,7 @@ export class Projects {
     for (const p of saved?.projects ?? []) {
       if (p && typeof p.id === 'string' && typeof p.title === 'string') this.items.set(p.id, { ...p, folders: p.folders ?? [], goals: p.goals ?? '', state: p.state ?? '', notes: p.notes ?? '', links: p.links ?? [] });
     }
+    this.checkParents();
     // A deleted thread changes its projects' counts.
     this.unlisten = host.onNotification((n) => {
       if (n.method === 'thread.deleted') this.publish();
@@ -281,12 +287,24 @@ export class Projects {
     );
   }
 
+  // A part's block names its parent and gives the parent's goals (not its
+  // state or notes, which are about the other parts too); a parent's names
+  // its parts, so a thread knows they're there (Projects, "Parts").
   private briefBlock(p: ProjectRecord, max: number): string {
-    const head = `## ${p.title} (${p.id})` + (p.folders.length ? `\nFolders: ${p.folders.map((f) => this.tilde(f)).join(', ')}` : '');
-    const room = Math.max(120, max - head.length - 20);
-    const goals = clip(p.goals, Math.floor(room / 2));
-    const state = clip(p.state, room - goals.length);
-    return [head, goals && `Goals: ${goals}`, state && `State: ${state}`, this.tasksLine(p)].filter(Boolean).join('\n');
+    const parent = p.parentId ? this.items.get(p.parentId) : undefined;
+    const parts = this.partsOf(p.id).filter((x) => !x.archived);
+    const head =
+      `## ${p.title} (${p.id})` +
+      (parent ? `, a part of ${parent.title} (${parent.id})` : '') +
+      (p.folders.length ? `\nFolders: ${p.folders.map((f) => this.tilde(f)).join(', ')}` : '');
+    const partsLine = parts.length ? clip(`Parts: ${parts.map((x) => `${x.title} (${x.id})`).join(', ')}`, 300) : '';
+    const room = Math.max(120, max - head.length - partsLine.length - 20);
+    const parentGoals = parent?.goals ? clip(parent.goals, Math.floor(room / 4)) : '';
+    const goals = clip(p.goals, Math.floor((room - parentGoals.length) / 2));
+    const state = clip(p.state, room - parentGoals.length - goals.length);
+    return [head, parentGoals && `${parent!.title}'s goals: ${parentGoals}`, goals && `Goals: ${goals}`, state && `State: ${state}`, partsLine, this.tasksLine(p)]
+      .filter(Boolean)
+      .join('\n');
   }
 
   // One line on the project's Notion board for the brief, so an agent
@@ -313,9 +331,14 @@ export class Projects {
 
   // A line for the agent when its thread joins a project mid-session.
   joinedLine(p: ProjectRecord): string {
-    const bits = [`[Threadbear project] This thread is now part of the project "${p.title}" (${p.id}).`];
+    const parent = p.parentId ? this.items.get(p.parentId) : undefined;
+    const bits = [`[Threadbear project] This thread is now part of the project "${p.title}" (${p.id})${parent ? `, a part of "${parent.title}" (${parent.id})` : ''}.`];
+    if (parent?.goals) bits.push(`${parent.title}'s goals: ${clip(parent.goals, 200)}`);
     if (p.goals) bits.push(`Goals: ${clip(p.goals, 300)}`);
     if (p.state) bits.push(`State: ${clip(p.state, 300)}`);
+    // A parent's parts, as a fresh session's brief names them (Codex review).
+    const parts = this.partsOf(p.id).filter((x) => !x.archived);
+    if (parts.length) bits.push(clip(`Parts: ${parts.map((x) => `${x.title} (${x.id})`).join(', ')}.`, 300));
     bits.push('read_project has its notes; update_project keeps it current.');
     return bits.join(' ');
   }
@@ -340,6 +363,8 @@ export class Projects {
     };
     if (params.byThread) rec.createdByThread = params.byThread;
     if (rec.state) rec.stateUpdatedAt = now;
+    const parentId = params.parent ? this.parentFor(undefined, params.parent) : undefined;
+    if (parentId) rec.parentId = parentId;
     // Every thread named must exist before anything changes.
     const threadIds = (params.threadIds ?? []).map((t) => this.mustHost().resolveThread(t));
     this.items.set(rec.id, rec);
@@ -368,6 +393,11 @@ export class Projects {
     if (params.archived !== undefined) {
       if (params.archived) next.archived = true;
       else delete next.archived;
+    }
+    if (params.parent !== undefined) {
+      const parentId = this.parentFor(rec, params.parent);
+      if (parentId) next.parentId = parentId;
+      else delete next.parentId;
     }
     const now = this.iso();
     if (params.state !== undefined && next.state !== rec.state) next.stateUpdatedAt = now;
@@ -424,8 +454,13 @@ export class Projects {
       links: [...into.links, ...from.links.filter((l) => !into.links.some((i) => sameUrl(i.url, l.url)))].slice(0, LINKS_MAX),
       updatedAt: now,
     };
+    // A part merged into its parent, or the other way: the one kept is a
+    // project of its own. The merged one's parts go to the one kept, unless
+    // that's a part itself, as parts have no parts.
+    if (kept.parentId === from.id) delete kept.parentId;
     this.items.set(into.id, kept);
     this.items.delete(from.id);
+    this.reparent(from.id, kept.parentId ? undefined : kept.id);
     this.save();
     // The kept project's icon stays; with none, the librarian finds one.
     removeIcons(this.iconDir, from.id);
@@ -462,6 +497,8 @@ export class Projects {
       }
     }
     this.items.delete(rec.id);
+    // Its parts are projects of their own now.
+    this.reparent(rec.id, undefined);
     this.save();
     removeIcons(this.iconDir, rec.id);
     this.log.info('project deleted', { id: rec.id, title: rec.title });
@@ -609,6 +646,54 @@ export class Projects {
     return out;
   }
 
+  // The parent `q` names for `child` (undefined while it's being made), or
+  // undefined for '': one level only, so a part can't have parts and a
+  // project with parts can't become one.
+  private parentFor(child: ProjectRecord | undefined, q: string): string | undefined {
+    if (!q.trim()) return undefined;
+    const parent = this.must(q.trim());
+    if (child && parent.id === child.id) throw bad(`"${child.title}" can't be a part of itself.`);
+    if (child && this.partsOf(child.id).length) throw bad(`"${child.title}" has parts of its own, so it can't be a part.`);
+    if (parent.parentId) {
+      const above = this.items.get(parent.parentId);
+      throw bad(`"${parent.title}" is a part of "${above?.title ?? parent.parentId}" already, and a part can't have parts.`);
+    }
+    return parent.id;
+  }
+
+  // One level of parts, whatever projects.json says (edited by hand, or a
+  // cycle): a parent that's missing, itself, or a part already is dropped,
+  // judged on what was loaded, so A and B pointing at each other both end
+  // up projects of their own and nothing is hidden (Codex review).
+  private checkParents(): void {
+    const loaded = new Map([...this.items].map(([id, p]) => [id, p.parentId]));
+    for (const p of this.items.values()) {
+      if (p.parentId === undefined) continue;
+      const parent = typeof p.parentId === 'string' ? this.items.get(p.parentId) : undefined;
+      if (!parent || parent.id === p.id || loaded.get(parent.id) !== undefined) {
+        const { parentId: _dropped, ...rest } = p;
+        this.items.set(p.id, rest);
+        this.log.warn('a project part pointed somewhere it cannot, so it is its own project now', { id: p.id, parentId: p.parentId });
+      }
+    }
+  }
+
+  // The project's parts, by title.
+  partsOf(projectId: string): ProjectRecord[] {
+    return [...this.items.values()].filter((p) => p.parentId === projectId).sort((a, b) => a.title.localeCompare(b.title));
+  }
+
+  // Points every part of `from` at `to`, or makes them projects of their own.
+  private reparent(from: string, to: string | undefined): void {
+    for (const p of this.items.values()) {
+      if (p.parentId !== from) continue;
+      const next = { ...p };
+      if (to && to !== p.id) next.parentId = to;
+      else delete next.parentId;
+      this.items.set(p.id, next);
+    }
+  }
+
   private must(projectId: string): ProjectRecord {
     const p = typeof projectId === 'string' ? this.items.get(projectId) ?? this.find(projectId) : undefined;
     if (!p) throw new RpcError(ErrorCode.projectNotFound, `No project called ${projectId}`);
@@ -747,6 +832,7 @@ export function projectMethods(projects: Projects): Record<string, (p: Record<st
         notes: str(p, 'notes'),
         links: links(p),
         threadIds: strList(p, 'threadIds'),
+        parent: parentArg(p),
         by: 'mike',
       }),
     }),
@@ -760,6 +846,7 @@ export function projectMethods(projects: Projects): Record<string, (p: Record<st
         links: links(p),
         notion: str(p, 'notion'),
         archived: bool(p, 'archived'),
+        parent: parentArg(p),
         by: 'mike',
       }),
     }),
@@ -772,9 +859,16 @@ export function projectMethods(projects: Projects): Record<string, (p: Record<st
     'projects.merge': (p) => ({ project: projects.merge(reqStr(p, 'projectId'), reqStr(p, 'intoId')) }),
     'projects.delete': (p) => projects.delete(reqStr(p, 'projectId')),
     'threads.setProjects': (p) => ({
-      thread: projects.changeMembership(reqStr(p, 'threadId'), { add: strList(p, 'add'), remove: strList(p, 'remove'), by: 'mike' }).thread,
+      thread: projects.changeMembership(reqStr(p, 'threadId'), { add: strList(p, 'add'), remove: strList(p, 'remove'), by: p.by === 'agent' ? 'agent' : 'mike' }).thread,
     }),
   };
+}
+
+// `parentId`: a project's id, or '' or null for none; absent leaves it.
+function parentArg(p: Record<string, unknown>): string | undefined {
+  if (!('parentId' in p) || p.parentId === undefined) return undefined;
+  if (p.parentId === null) return '';
+  return reqStr(p, 'parentId');
 }
 
 function str(p: Record<string, unknown>, k: string): string | undefined {

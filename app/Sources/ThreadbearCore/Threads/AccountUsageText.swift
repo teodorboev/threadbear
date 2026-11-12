@@ -333,10 +333,7 @@ public enum AccountUsageText {
 /// quiet line under the toolbar (`clis.list`, `clis.updated`).
 public enum CliText {
     public static func name(_ provider: String) -> String {
-        switch provider {
-        case "claude": return "Claude Code"
-        default: return ModelPicker.providerTitle(provider)
-        }
+        Providers.info(provider).cliName
     }
 
     /// "Claude Code 2.1.311, up to date", "Claude Code 2.1.311, 2.1.312
@@ -365,6 +362,7 @@ public enum CliText {
     /// The update button's title, or nil when there's nothing to install.
     public static func updateTitle(_ cli: CliStatus) -> String? {
         if isUpdating(cli) { return nil }
+        if cli.canUpdateNow { return "Update" }
         switch cli.status {
         case "behind": return "Update"
         case "held": return "Update anyway"

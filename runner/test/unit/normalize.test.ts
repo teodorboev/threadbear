@@ -544,6 +544,8 @@ test('sub-agents: started, progress and finish become subagent updates (recorded
   assert.ok(first.some((u) => u.activity === 'Running List work directory then echo hello' && u.toolUses === 1));
   assert.ok(first.some((u) => u.status === 'completed'));
   assert.match(first.at(-1)!.summary ?? '', /ls/);
+  // Its own replies say what model it ran on: reported once, not per reply.
+  assert.deepEqual(first.filter((u) => u.model), [{ id: 'ab1373fe8b7475ff5', model: 'claude-haiku-5-5' }]);
   // The shell the second sub-agent ran is a task too, but not a sub-agent.
   assert.deepEqual([...new Set(ups.map((u) => u.id))], ['ab1373fe8b7475ff5', 'a0129496b4393509d']);
   // Its own messages still stay out of the thread.
@@ -565,6 +567,18 @@ test('sub-agents: failed and killed, nested, and one a resumed CLI reports', () 
     { id: 'old', activity: 'Reading the router', toolUses: 4 },
   ]);
   assert.deepEqual(ups(sys('task_notification', { task_id: 'old', status: 'stopped', summary: '' })), [{ id: 'old', status: 'stopped' }]);
+});
+
+test("sub-agents: the model comes from its own replies, and a change of model is reported", () => {
+  const n = new ClaudeNormalizer(ctx());
+  const ups = (m: Record<string, unknown>) => n.handle(m).filter((o) => o.kind === 'subagent').map((o) => (o as any).update);
+  const reply = (model: string, parent = 'tu9') => ({ type: 'assistant', parent_tool_use_id: parent, message: { id: 'x', model, content: [] } });
+  ups(sys('task_started', { task_id: 'a9', task_type: 'local_agent', tool_use_id: 'tu9', description: 'Look' }));
+  assert.deepEqual(ups(reply('claude-sonnet-5-5')), [{ id: 'a9', model: 'claude-sonnet-5-5' }]);
+  assert.deepEqual(ups(reply('claude-sonnet-5-5')), []);
+  assert.deepEqual(ups(reply('<synthetic>')), [], 'a message the CLI made up ran on no model');
+  assert.deepEqual(ups(reply('claude-opus-5-5')), [{ id: 'a9', model: 'claude-opus-5-5' }], 'a fallback took over');
+  assert.deepEqual(ups(reply('claude-opus-5-5', 'tu-unknown')), [], 'not one of its sub-agents');
 });
 
 test('init reports the session and the version of the CLI running it', () => {
@@ -638,4 +652,16 @@ test("the context window is the session model's, not a sub-agent's", () => {
   // Only another model listed: can't tell, so no window.
   assert.equal(window({ 'claude-haiku-5-5': { contextWindow: 1_000_000 }, 'claude-sonnet-5-5': { contextWindow: 1_000_000 } }), undefined);
   assert.deepEqual(window({ 'claude-opus-5-5': { contextWindow: 1_000_000 } }, 'opus'), [5030, 1_000_000]);
+});
+
+// David, 8 Nov 2026: what auto mode stops without asking says why in the thread.
+test("a call auto mode stops says why, as a note", () => {
+  const n = new ClaudeNormalizer(ctx());
+  const deny = { type: 'system', subtype: 'permission_denied', tool_name: 'Bash', tool_use_id: 'toolu_1', message: 'denied', uuid: 'u', session_id: 's' };
+  const outs = n.handle({ ...deny, decision_reason_type: 'classifier', decision_reason: 'Rsyncs with --delete to a production host.' });
+  assertProtocol(outs);
+  assert.deepEqual(events(outs), [{ type: 'system.note', text: "Auto mode's safety check stopped Bash: Rsyncs with --delete to a production host." }]);
+  assert.deepEqual(events(n.handle({ ...deny, decision_reason_type: 'rule', decision_reason: 'A deny rule matched.' })), [{ type: 'system.note', text: 'Bash was refused: A deny rule matched.' }]);
+  // With no reason the tool's own result already says it was refused.
+  assert.deepEqual(events(n.handle(deny)), []);
 });

@@ -20,8 +20,9 @@ extension AppModel {
             AppLog.write("panels", "\(thread.id.prefix(8)) asked to show \(request.panel), which it hasn't got")
             return
         }
+        if request.reload == true { reloadRequested(request.panel, in: thread) }
         showRequested(panel, at: PanelRequests.place(request), in: thread)
-        AppLog.write("panels", "showed \(request.panel) for \(thread.id.prefix(8))")
+        AppLog.write("panels", "showed \(request.panel) for \(thread.id.prefix(8))\(request.reload == true ? ", reloaded" : "")")
         tellShown(request, in: thread)
     }
 
@@ -55,6 +56,20 @@ extension AppModel {
                 AppLog.write("panels", "\(thread.id.prefix(8)) asked to show pin \(request.highlight ?? ""), which isn't in its highlights")
             }
             tellShown(request, in: current)
+        }
+    }
+
+    /// show_panel's `reload`: a url panel's page from its own address again,
+    /// with any page opened over it closed, so what the agent changed is
+    /// what Mike sees. One not loaded yet loads fresh when it's drawn.
+    func reloadRequested(_ panelId: String, in thread: ThreadSummary) {
+        guard let panel = thread.panels.first(where: { $0.id == panelId }), panel.kind == .url else { return }
+        let pool = WebPanelPool.shared
+        if let convex = panel.convex {
+            pool.reloadConvex(pool.selectedConvex(convex))
+        } else if let url = panel.pageURL {
+            if panePreview[thread.id]?.from == .panel(panelId) { panePreview[thread.id] = nil }
+            pool.reloadIfLoaded(url)
         }
     }
 

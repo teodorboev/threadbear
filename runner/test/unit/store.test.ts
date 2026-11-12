@@ -43,6 +43,52 @@ test('a half-written last line from a crash is dropped on load', () => {
   assert.deepEqual(new EventLog(file).read(1, 3).map((e) => e.seq), [1, 2, 3]);
 });
 
+// Opening a log reads only its end (the index waits for the first read),
+// since reading every log in full held each restart back 1.5 to 2 s.
+test('a log opened from its tail appends and reads as one read in full would', () => {
+  const file = path.join(tmpDir(), 'events.ndjson');
+  const first = new EventLog(file);
+  for (let i = 1; i <= 5; i++) first.append(ev(i));
+  const again = new EventLog(file);
+  assert.equal(again.lastSeq, 5);
+  // Appends before the index is built, then a read that builds it.
+  again.append(ev(6));
+  assert.throws(() => again.append(ev(8)), /out of order/);
+  assert.deepEqual(again.read(4, 99).map((e) => e.seq), [4, 5, 6]);
+  // Appends after it is built land in it too.
+  again.append(ev(7));
+  assert.deepEqual(again.read(6, 7).map((e) => e.seq), [6, 7]);
+  assert.equal(new EventLog(file).lastSeq, 7);
+});
+
+test('a log whose last line is longer than the tail, or not an event, is read in full', () => {
+  const file = path.join(tmpDir(), 'events.ndjson');
+  const log = new EventLog(file);
+  log.append(ev(1));
+  log.append(ev(2, 'x'.repeat(200_000)));
+  const again = new EventLog(file);
+  assert.equal(again.lastSeq, 2);
+  assert.equal((again.read(2, 2)[0] as { text: string }).text.length, 200_000);
+  // A corrupt last line still counts as a line, as before.
+  fs.appendFileSync(file, 'not json\n');
+  assert.equal(new EventLog(file).lastSeq, 3);
+  // A half line after a long one is still cut off.
+  fs.appendFileSync(file, '{"seq":4,"ts":"2026-10-2');
+  const cut = new EventLog(file);
+  assert.equal(cut.lastSeq, 3);
+  assert.ok(fs.readFileSync(file, 'utf8').endsWith('not json\n'));
+  // A damaged log whose last seq isn't its line count reads what's there.
+  fs.writeFileSync(file, [ev(1), ev(2), ev(10)].map((e) => JSON.stringify(e)).join('\n') + '\n');
+  const odd = new EventLog(file);
+  assert.equal(odd.lastSeq, 10);
+  assert.deepEqual(odd.read(1, 10).map((e) => e.seq), [1, 2, 10]);
+  assert.equal(odd.lastSeq, 3);
+  // An empty file and a missing one are empty logs.
+  fs.writeFileSync(file, '');
+  assert.equal(new EventLog(file).lastSeq, 0);
+  assert.equal(new EventLog(path.join(tmpDir(), 'none.ndjson')).lastSeq, 0);
+});
+
 test('thread store saves atomically and loads every thread', () => {
   const home = tmpDir();
   ensureHome(home);
@@ -76,6 +122,27 @@ test('thread store saves atomically and loads every thread', () => {
   assert.equal(loaded.length, 1);
   assert.equal(loaded[0].title, 'renamed');
   assert.deepEqual(broken, []);
+});
+
+// A handover lets go of every idle thread at once; rewriting and fsyncing
+// each unchanged thread.json held a restart back 5.5 s (12 Nov).
+test('saveIfChanged leaves an unchanged thread.json alone and writes a changed or missing one', () => {
+  const home = tmpDir();
+  ensureHome(home);
+  const store = new ThreadStore(home);
+  const rec = { id: 'abc', title: 't', cwd: '/tmp', accountId: 'claude-main', provider: 'claude', permissionMode: 'full', status: 'idle', createdAt: 'x', updatedAt: 'x', lastActivityAt: 'x', preview: '', lastSeq: 0, lastSeenSeq: 0, lastTurnCompletedSeq: 0, queue: [], pendingApprovals: [] } as ThreadRecord;
+  store.create(rec);
+  const file = path.join(home, 'threads', 'abc', 'thread.json');
+  const ino = fs.statSync(file).ino;
+  assert.equal(store.saveIfChanged(rec), false);
+  // Not even renamed over: the same file.
+  assert.equal(fs.statSync(file).ino, ino);
+  rec.title = 'renamed';
+  assert.equal(store.saveIfChanged(rec), true);
+  assert.equal(new ThreadStore(home).load('abc')?.title, 'renamed');
+  fs.rmSync(file);
+  assert.equal(store.saveIfChanged(rec), true);
+  assert.equal(new ThreadStore(home).load('abc')?.title, 'renamed');
 });
 
 test('data dir layout and a 0600 token', () => {

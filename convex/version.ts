@@ -226,7 +226,7 @@
 //    only to a backend of 50 or later; an older runner always sends them, as
 //    before. phone:project still returns them whole.
 // 51: an owned schedule can carry `check`, a shell command its runner runs
-//    before each run (experiment scheduleChecks). An older runner sends none.
+//    before each run. An older runner sends none.
 // 52: full sync (docs/full-convex.md step 4). eventBodies, sync:appendBodies,
 //    sync:remoteBody and phone:eventBody: a tool's output, input and diffs under
 //    the seq of its row, only from a runner with sync.full on. heldPictures,
@@ -289,4 +289,66 @@
 //    weren't queued, and sync:pruneFiles any left after a day. A runner
 //    sends pictures to another runner only from 63: an older backend would
 //    drop them and send the words alone.
-export const API_VERSION = 63;
+// 64: moving a thread to another runner (docs/protocol.md, "Moving a thread
+//    to another runner"; convex/moves.ts). The threadMoves table, startMove
+//    and cancelMove for the main Mac, moves and each step for the move's
+//    own runners, and move chunks through /runner/upload outside a runner
+//    key's picture allowances. An older runner never starts one or watches
+//    its moves, so a move to or from it fails when nobody answers.
+// 65: relay:queueCommand's `call` takes moves.describe (to the runner that
+//    has the thread) and moves.preview (to a move's target, with the
+//    thread's description), for the Mac's Move sheet (threads.movePreview).
+//    Both only plan. An older backend refuses them, and the sheet says so.
+// 66: phone:registerDevice takes `platform: "android"`, for a phone whose
+//    token is a Firebase one (apnsToken keeps its name), and devices:targets
+//    carries it. A push for such a phone goes through the push relay to
+//    Firebase, whatever Apple key the backend has (docs/push-relay.md). An
+//    older backend refuses the argument, so an Android phone registers only
+//    with a backend of 66 or later.
+// 67: sync:heartbeat takes `followProblem`, a runner's own word that it can't
+//    follow GitHub's main (runner/src/follow-origin.ts), and otherRunnersList
+//    and otherRunnersThreads (main key only) give it back. An older
+//    backend's validator refuses the field, so a runner sends it only from 67.
+// 68: relay:queueCommand takes `press` ({ buttonId }) and `slashCommands`
+//    for another runner's thread, as the phone sends them, and
+//    relay:remoteTail and remoteMessages rows carry their `buttons`, so the
+//    main Mac presses reply buttons and lists slash commands on another
+//    runner's thread (docs/parity.md). A runner asks only from 68.
+// 69: phone:interrupt, Stop on the phone and the website: queues an
+//    `interrupt` command for the thread's runner, which runners have applied
+//    since 44. An older phone has no Stop.
+// 70: threads and threadIndex rows carry `recap`, the librarian's recap for
+//    the recap box. A runner sends it only from 70.
+// 71: an open card's asks can carry `run`, a command and the id of the Run
+//    button that runs it (phone:press). A runner sends it only from 71; an
+//    older phone just doesn't show it.
+// 72: a message row can be `plan` (a Plan first plan in full, up to 24,000
+//    characters), and phone:messages returns it, so the phone draws a plan
+//    card and reads the whole plan before Go ahead. An older backend's
+//    validator refuses the field, so a runner sends it only from 72 and as
+//    an ordinary reply before; an older phone shows it as one too.
+// 73: threads rows carry `looseEnds`, the done card's loose ends (what the
+//    runner found still open: a branch, files, a thread it started, a
+//    check-in, or the agent's own word), so the phone's done card lists
+//    them as the Mac's does. A runner sends it only from 73.
+// 74: threads and threadIndex rows carry `keywords`, the librarian's search
+//    words (runner/src/keywords.ts), which a runner sends only from 74.
+//    phone:search matches them too, and with `everywhere` every view's
+//    threads and every message's text, so a newer phone finds a thread by a
+//    word said anywhere in it. An older phone's search is as before.
+// 75: a shared pool member can carry an email and a runner id and login id
+//    together, when two logins of one provider on its runner share that
+//    email (issue 18): that runner takes it by id, the rest by email.
+//    sync:pools gives such a member to every runner key, without the ids
+//    for another runner's. A runner sends the ids only from 75, as an
+//    older backend hides the member from the other runners' keys.
+// 76: threads rows carry `review`, another lab's review ledger from the
+//    last turn's turn.completed (docs/protocol.md, "Review by another
+//    lab"), and `cardTurn`, the turn it and `looseEnds` are from, so
+//    another Mac draws them as this runner's own Mac does. A plan's message
+//    row can carry `planDecision` (go or revise), sent again once it's
+//    resolved, and relay:remoteMessages says which rows are a Plan first
+//    plan and what became of it, so another Mac draws its plan card rather
+//    than folding the plan into the turn's work. A runner sends `review`,
+//    `cardTurn` and `planDecision` only from 76.
+export const API_VERSION = 76;

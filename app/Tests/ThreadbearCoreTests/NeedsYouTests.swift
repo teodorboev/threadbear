@@ -4,8 +4,9 @@ import XCTest
 /// docs/protocol.md, "Needs you": a finished turn's asks as a card, the
 /// thread's summary fields, and how its sidebar row looks.
 final class NeedsYouTests: XCTestCase {
-    private func done(_ seq: Int, turn: String, needs: String? = nil, asks: [[String: Any]] = [], next: [Any] = [], outcome: String = "completed") -> Event {
+    private func done(_ seq: Int, turn: String, needs: String? = nil, asks: [[String: Any]] = [], next: [Any] = [], outcome: String = "completed", review: [String: Any]? = nil) -> Event {
         var fields: [String: Any] = ["turnId": turn, "outcome": outcome, "durationMs": 1000]
+        if let review { fields["review"] = review }
         if let needs { fields["needs"] = needs }
         if !asks.isEmpty { fields["asks"] = asks }
         if !next.isEmpty { fields["next"] = next }
@@ -163,6 +164,27 @@ final class NeedsYouTests: XCTestCase {
         let summary = try JSONDecoder().decode(ThreadSummary.self, from: Data(json.utf8))
         XCTAssertEqual(summary.looseEnds?.ends.map(\.kind), ["thread", "later"])
         XCTAssertEqual(summary.looseEnds?.ends.first?.threadId, "b")
+    }
+
+    /// Review by another lab's ledger rides on the turn that answered it,
+    /// to its done card or asks card, dropping a finding it can't read.
+    func testTheReviewLedgerGoesOnTheTurnsCard() {
+        let review: [String: Any] = [
+            "reviewer": "Codex (codex-1)", "independent": true, "rounds": 2, "threadId": "r2", "passed": true,
+            "findings": [
+                ["id": 1, "round": 1, "severity": "high", "claim": "Drops the session on refresh.", "where": "src/app.ts:3", "outcome": "fixed"],
+                ["id": 2, "round": 1, "severity": "low", "claim": "Logs the token.", "outcome": "disputed", "note": "It logs a hash."],
+                ["bad": true],
+            ],
+        ]
+        let model = TranscriptModel(events: [done(1, turn: "t1", needs: "nothing", review: review)])
+        let ledger = card(model, "ak:1")?.review
+        XCTAssertEqual(ledger?.findings.map(\.outcome), ["fixed", "disputed"])
+        XCTAssertEqual(ledger?.heading, "Reviewed by Codex (codex-1), 2 rounds: passed")
+        XCTAssertNil(card(TranscriptModel(events: [done(1, turn: "t1", needs: "nothing")]), "ak:1")?.review)
+        let left: [String: Any] = ["reviewer": "Claude (claude-2)", "independent": false, "rounds": 1, "passed": false, "findings": [["id": 1, "claim": "x", "outcome": "left"]]]
+        let asked = TranscriptModel(events: [done(1, turn: "t1", needs: "you", asks: [["action": "Keep sessions?"]], review: left)])
+        XCTAssertEqual(card(asked, "ak:1")?.review?.heading, "Reviewed by a fresh Claude (claude-2) session: 1 open")
     }
 
     /// A follow-up's "?" toggles like its tick and goes with the ticks:

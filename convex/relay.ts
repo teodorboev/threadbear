@@ -12,8 +12,9 @@
 import { ConvexError, v } from 'convex/values';
 import { internalMutation, internalQuery, mutation, query, type MutationCtx, type QueryCtx } from './_generated/server';
 import type { Id } from './_generated/dataModel';
-import { checkRunnerId, forbidden, pageLimit, runnerAuth, sha256 } from './lib';
-import { docBytes } from './runnerAccess';
+import { checkRunnerId, forbidden, pageLimit, runnerAuth, sha256, withoutCredentials } from './lib';
+import { docBytes, isThreadId } from './runnerAccess';
+import { messageButton } from './schema';
 import { deleteIfUnused, MAX_COMMAND_FILES, MAX_RUNNER_UPLOAD_BYTES, storageInUse } from './sync';
 
 // The live tail: enough for a message or two of tool rows between texts.
@@ -30,12 +31,18 @@ const relayRow = v.object({
   origin: v.optional(v.string()),
   toolKind: v.optional(v.string()),
   summary: v.optional(v.boolean()),
+  plan: v.optional(v.boolean()),
+  planDecision: v.optional(v.union(v.literal('go'), v.literal('revise'))),
   turn: v.optional(v.string()),
   wokeBy: v.optional(v.array(v.object({ kind: v.string(), description: v.string() }))),
+  // The reply buttons its text links (API 59), as the phone gets them; the
+  // relay answers buttons.list from them (API 68).
+  buttons: v.optional(v.array(messageButton)),
   at: v.string(),
 });
 
-type Row = { seq: number; role: 'user' | 'assistant' | 'tool'; text: string; origin?: string; toolKind?: string; summary?: boolean; turn?: string; wokeBy?: { kind: string; description: string }[]; at: string };
+type Button = { id: string; title: string; kind: 'start' | 'send'; target?: string; pressedThreadId?: string; failed?: string };
+type Row = { seq: number; role: 'user' | 'assistant' | 'tool'; text: string; origin?: string; toolKind?: string; summary?: boolean; plan?: boolean; planDecision?: 'go' | 'revise'; turn?: string; wokeBy?: { kind: string; description: string }[]; buttons?: Button[]; at: string };
 function toRow(m: Row): Row {
   return {
     seq: m.seq,
@@ -44,8 +51,13 @@ function toRow(m: Row): Row {
     ...(m.origin ? { origin: m.origin } : {}),
     ...(m.toolKind ? { toolKind: m.toolKind } : {}),
     ...(m.summary ? { summary: true } : {}),
+    // A Plan first plan (API 72's row), which another Mac draws as its plan card.
+    ...(m.plan ? { plan: true } : {}),
+    // What became of it, once that runner knows (API 76).
+    ...(m.plan && m.planDecision ? { planDecision: m.planDecision } : {}),
     ...(m.turn ? { turn: m.turn } : {}),
     ...(m.wokeBy ? { wokeBy: m.wokeBy } : {}),
+    ...(m.buttons?.length ? { buttons: m.buttons } : {}),
     at: m.at,
   };
 }
@@ -104,11 +116,33 @@ export const remoteThread = query({
 // so a message it sends isn't marked as the phone's (phone.ts never sets it).
 // The modes a new thread can start on (runner/src/protocol.ts, PERMISSION_MODES).
 const PERMISSION_MODES = ['full', 'ask', 'auto', 'plan'] as const;
-const KINDS = ['send', 'respond', 'update', 'create', 'interrupt', 'call', 'share'] as const;
+// press and slashCommands (API 68): a reply button and the slash command
+// list, as the phone sends them (phone.ts press, slashCommands).
+const KINDS = ['send', 'respond', 'update', 'create', 'interrupt', 'call', 'share', 'press', 'slashCommands'] as const;
 type Kind = (typeof KINDS)[number];
 // Methods a `call` may run on the other runner, and nothing else: answers
 // with no file contents or tool output in them (step 4 brings those, scrubbed).
-export const CALLS = new Set(['files.list']);
+// moves.describe and moves.preview (API 65) are the Mac's Move sheet
+// (threads.movePreview): plans only, nothing starts.
+export const CALLS = new Set(['files.list', 'moves.describe', 'moves.preview']);
+// A moves.preview's thread description: only these fields, each a short
+// string (or worktree and schedules), so nothing else sits in the row.
+const MOVE_INFO_STRINGS = ['title', 'cwd', 'home', 'provider', 'accountId', 'email', 'model', 'effort', 'permissionMode', 'origin', 'repoTop', 'subdir', 'sessionId'];
+function moveInfoArg(raw: unknown): Record<string, unknown> {
+  const o = raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
+  const out: Record<string, unknown> = {};
+  for (const k of MOVE_INFO_STRINGS) if (typeof o[k] === 'string' && (o[k] as string).length <= 2000) out[k] = o[k];
+  // Which repo, never a password or token in its address: the runner the
+  // preview asks reads this row (an older main Mac's runner sends it whole).
+  if (typeof out.origin === 'string') out.origin = withoutCredentials(out.origin);
+  // Nor what no target plans from: an older main Mac's runner sends the
+  // thread's title (made from its first message) and session whole.
+  if ('title' in out) out.title = '';
+  delete out.sessionId;
+  if (typeof o.worktree === 'boolean') out.worktree = o.worktree;
+  if (typeof o.schedules === 'number' && Number.isFinite(o.schedules)) out.schedules = o.schedules;
+  return out;
+}
 
 function str(x: unknown): string | undefined {
   return typeof x === 'string' ? x : undefined;
@@ -168,11 +202,25 @@ export function commandArgs(kind: Kind, raw: unknown): Record<string, unknown> {
       if (!CALLS.has(String(a.method))) throw bad(`only ${[...CALLS].join(', ')} can be asked of another runner`);
       // Only what the one allowed call reads: anything else in here would sit in
       // the row, under field names scrubbing skips.
-      out = { method: a.method, params: typeof (a.params as { path?: unknown } | undefined)?.path === 'string' ? { path: (a.params as { path: string }).path } : {} };
+      if (a.method === 'moves.preview') {
+        const p = (a.params && typeof a.params === 'object' ? a.params : {}) as Record<string, unknown>;
+        out = { method: a.method, params: { info: moveInfoArg(p.info), ...(typeof p.cwd === 'string' ? { cwd: p.cwd } : {}), ...(typeof p.accountId === 'string' ? { accountId: p.accountId } : {}) } };
+      } else if (a.method === 'moves.describe') {
+        out = { method: a.method, params: {} };
+      } else {
+        out = { method: a.method, params: typeof (a.params as { path?: unknown } | undefined)?.path === 'string' ? { path: (a.params as { path: string }).path } : {} };
+      }
       break;
     case 'share':
       if (a.access !== 'off' && a.access !== 'link') throw bad('access is "off" or "link"');
       out = pick(a, ['access', 'newLink']);
+      break;
+    case 'press':
+      if (typeof a.buttonId !== 'string' || !/^[a-z0-9]{8}$/.test(a.buttonId)) throw bad('no such button');
+      out = { buttonId: a.buttonId };
+      break;
+    case 'slashCommands':
+      out = {};
       break;
   }
   if (docBytes(out) > ARGS_MAX_BYTES) throw bad('too long');
@@ -374,8 +422,7 @@ const REQUESTS_KEPT_MAX = 50;
 const REQUEST_KEEP_MS = 7 * 24 * 60 * 60 * 1000;
 const REQUEST_ID = /^[A-Za-z0-9-]{8,64}$/;
 // The asking thread's id goes into the first line the main Mac's runner
-// writes on the new thread, so nothing but an id's characters.
-const THREAD_ID = /^[A-Za-z0-9_-]{1,64}$/;
+// writes on the new thread, so nothing but an id's characters (isThreadId).
 const STATES = ['pending', 'claimed', 'allowed', 'denied', 'closed'] as const;
 const stateV = v.union(...STATES.map((x) => v.literal(x)));
 
@@ -425,7 +472,7 @@ export const fileRequest = mutation({
       if (request[f] !== undefined && docBytes(request[f]) > REQUEST_FIELD_MAX) throw bad(`${f} is too long`);
     }
     if (!target.trim() || docBytes(target) > 128) throw bad('name the runner to start it on');
-    if (!THREAD_ID.test(threadId)) throw bad("that isn't a thread id");
+    if (!isThreadId(threadId)) throw bad("that isn't a thread id");
     // Asked from one of its own threads, so the card and its answer are its own.
     const t = await ctx.db.query('threads').withIndex('by_threadId', (q) => q.eq('threadId', threadId)).unique();
     if (!t || t.runnerId !== caller.runnerId) throw forbidden("ask for that: the thread isn't this runner's");

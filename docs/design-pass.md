@@ -139,7 +139,7 @@ group leaves the turn's one spinner to the working line.
   Toolbar: only the ... menu.
 - New thread state: a heading ("What should we work on?") and the
   composer centred in the pane (about 40% down), with "Starts in misc on
-  cannstudios" below it in `.tertiary`. The composer moves to the bottom
+  studio" below it in `.tertiary`. The composer moves to the bottom
   once the first message is sent.
 - Screenshots: add a shot of a sidebar row in its hover state (a debug
   override for the hovered row is fine).

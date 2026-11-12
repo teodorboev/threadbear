@@ -20,7 +20,10 @@ set -euo pipefail
 # THREADBARE_* was the old name for these variables: each stands in for its new name.
 for v in $(compgen -e | grep '^THREADBARE_' || true); do n="THREADBEAR_${v#THREADBARE_}"; [ -n "${!n+x}" ] || export "$n=${!v}"; done
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-NODE="${THREADBEAR_NODE:-$HOME/.nvm/versions/node/v24.22.1/bin/node}"
+# Node: THREADBEAR_NODE, else the node on PATH, else nvm's newest
+# Node 24 or newer, else Homebrew's (runner/scripts/find-node.sh).
+. "$ROOT/runner/scripts/find-node.sh"
+NODE="$(threadbear_find_node)" || exit 1
 NPM="$(dirname "$NODE")/npm"
 [ -x "$NPM" ] || NPM="npm"
 
@@ -78,3 +81,25 @@ for dir in . runner app/Tools/mock-runner; do
     (cd "$here" && "$NPM" ci --no-audit --no-fund --loglevel=error)
   fi
 done
+
+# The Swift app's freeze (scripts/swift-freeze.sh) as git's pre-commit hook,
+# so a commit to app/ or dock/ is refused in Mike's copy (and, once the GPUI
+# app is out, warned about in other people's) whichever agent makes it and
+# however it wrote the files. Hooks live in the shared .git, so this one
+# file covers the main checkout and every worktree, each running its own
+# copy of the script. Someone else's pre-commit hook, or a core.hooksPath of
+# their own, is left alone.
+hooks="$(git -C "$ROOT" rev-parse --path-format=absolute --git-common-dir)/hooks"
+if [ ! -f "$ROOT/scripts/swift-freeze-pre-commit" ]; then
+  :  # a copy without the freeze (a test's bare worktree): nothing to hook in
+elif [ -n "$(git -C "$ROOT" config core.hooksPath || true)" ]; then
+  echo "pre-commit: core.hooksPath is set, so the Swift app's freeze isn't hooked in"
+elif [ -e "$hooks/pre-commit" ] && ! grep -q threadbear-swift-freeze "$hooks/pre-commit"; then
+  echo "pre-commit: there's already a hook, so the Swift app's freeze isn't hooked in"
+else
+  mkdir -p "$hooks"
+  # Copied, not linked, as this worktree may go; rewritten each time, so a
+  # newer stub replaces an older one.
+  cp "$ROOT/scripts/swift-freeze-pre-commit" "$hooks/pre-commit"
+  chmod +x "$hooks/pre-commit"
+fi

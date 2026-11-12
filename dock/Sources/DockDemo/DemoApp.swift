@@ -65,7 +65,7 @@ enum Demo {
             .group(DockGroup(id: "left", panels: ["threads"])),
             .group(DockGroup(id: "middle", panels: ["transcript"])),
             .split(DockSplit(id: "right", axis: .vertical, children: [
-                .group(DockGroup(id: "right-top", panels: ["highlights", "worktrees"])),
+                .group(DockGroup(id: "right-top", panels: ["highlights", "worktrees", "terminal", "files"])),
                 .group(DockGroup(id: "right-bottom", panels: ["convex"])),
             ], fractions: [0.55, 0.45])),
         ], fractions: [0.24, 0.5, 0.26])), hiddenTitles: ["threads"])

@@ -83,7 +83,7 @@ import UniformTypeIdentifiers
         #expect(rows[0].placeText == "Threadbear")
         #expect(rows[1].status == .unknown)
         #expect(rows[1].folderName == "x")
-        guard case let .approval(_, _, _, options, summary) = rows[1].pendingApproval else {
+        guard case let .approval(_, _, _, options, summary, _) = rows[1].pendingApproval else {
             Issue.record("expected an approval")
             return
         }
@@ -327,6 +327,16 @@ import UniformTypeIdentifiers
         let old = thread("Picker from last year", 9000)
         let withOlder = ThreadSearch("picker", sections: sections, hibernating: [], archived: [archived, asleep], olderArchived: [asleep, old])
         #expect(withOlder.archived.map(\.threadId) == ["Old picker work", "Picker from last year"])
+        // The librarian's search words count, and a thread the phone has
+        // that phone:search found by a word in one of its messages stays in
+        // its own section rather than going under archived.
+        var tooth = thread("Wisdom tooth meeting location", 3)
+        tooth.keywords = "dentist dental"
+        let teeth = InboxSections.build([tooth, dates], now: now)
+        #expect(ThreadSearch("dentist", sections: teeth, hibernating: [], archived: []).inbox.map(\.threadId) == ["Wisdom tooth meeting location"])
+        let said = ThreadSearch("calendar", sections: teeth, hibernating: [], archived: [], olderArchived: [dates])
+        #expect(said.inbox.map(\.threadId) == ["Dates on small screens"])
+        #expect(said.archived.isEmpty)
         // Mid-move, in the inbox and hibernating at once: shown once.
         #expect(ThreadSearch("dates", sections: sections, hibernating: [dates], archived: []).hibernating.isEmpty)
     }
@@ -526,6 +536,25 @@ import UniformTypeIdentifiers
         """
         let row = try JSONDecoder().decode(PhoneThread.self, from: Data(json.utf8))
         #expect(row.snoozedUntil == nil)
+    }
+
+    /// The done card's loose ends (backend API 73): an odd entry reads as
+    /// what it can, rather than losing the thread row.
+    @Test func looseEndsReadLeniently() throws {
+        let json = """
+        {"threadId":"t","runnerId":"m5","title":"A","cwd":"/","accountId":"a","provider":"claude","status":"idle",
+         "needsYou":false,"unread":false,"preview":"","lastActivityAt":"2026-10-27T08:23:19.962Z","lastActivityMs":1,
+         "view":"inbox","createdAt":"2026-10-27T08:00:00Z","needs":"nothing",
+         "looseEnds":[{"kind":"thread","text":"\\"Side job\\", a thread it started, is still working","threadId":"c1"},
+                      {"kind":"scheduled","text":"Review the week","at":"2026-11-13T01:30:00.000Z"},
+                      {"kind":"later","text":5}]}
+        """
+        let row = try JSONDecoder().decode(PhoneThread.self, from: Data(json.utf8))
+        let ends = try #require(row.looseEnds)
+        #expect(ends.map(\.kind) == ["thread", "scheduled", "later"])
+        #expect(ends[0].threadId == "c1")
+        #expect(ends[1].isBooked)
+        #expect(ends[2].text == "")
     }
 
     @Test func notFoundBecomesNilForAThread() async throws {

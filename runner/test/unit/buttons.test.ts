@@ -2,7 +2,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { makeHarness } from '../helpers/fakes.ts';
+import { makeHarness, tick } from '../helpers/fakes.ts';
+import { SessionNotFoundError } from '../../src/adapters/types.ts';
 import { buildThreadbearTools } from '../../src/threadbear-mcp.ts';
 import { AGENT_MESSAGE_PREFIX } from '../../src/protocol.ts';
 
@@ -90,10 +91,9 @@ test('a press that fails is saved as failed and can be pressed again', () => {
   assert.ok(ok.pressed && !ok.failed);
 });
 
-test('add_button is only handed out with the experiment on, and returns the link', async () => {
+test('add_button is handed to every thread, and returns the link', async () => {
   const { h, thread } = fixture();
-  assert.equal(buildThreadbearTools(h.runner, thread.id).find((t) => t.name === 'add_button'), undefined);
-  const tool = buildThreadbearTools(h.runner, thread.id, Date.now, undefined, undefined, undefined, { replyButtons: () => true }).find((t) => t.name === 'add_button');
+  const tool = buildThreadbearTools(h.runner, thread.id).find((t) => t.name === 'add_button');
   assert.ok(tool);
   const r = await tool.handler({ title: 'Look into it', start: { text: 'Look at the camera panning', folder: '.' } } as any, {} as any);
   assert.equal(r.isError, undefined, JSON.stringify(r));
@@ -110,4 +110,252 @@ test('access is checked again when pressed', () => {
   h.adapter.last.result();
   assert.throws(() => h.runner.pressButton(thread.id, button.id), /now has Ask before edits/);
   assert.ok(h.runner.listButtons(thread.id).buttons[0].failed);
+});
+
+// Run on the card (docs/protocol.md): end_turn's asks[].run.
+function runFixture(on = true) {
+  const { h, thread, folder } = fixture();
+  fs.writeFileSync(path.join(h.home, 'runner.json'), JSON.stringify({ ...JSON.parse(readJson(path.join(h.home, 'runner.json'))), experiments: { runAsks: on } }));
+  const st = (h.runner as any).threads.get(thread.id);
+  st.rec.cwd = folder;
+  // The card is what a finished turn leaves.
+  st.rt.turn = undefined;
+  return { h, thread, st, folder };
+}
+function readJson(file: string): string {
+  return fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '{}';
+}
+function arm(h: any, st: any, command: string) {
+  const asks = h.runner.armRunAsks(st, [{ action: 'Backfill prod?', run: { command } }], 'turn_x');
+  st.rec.needs = { seq: 99, needs: 'you', asks };
+  return asks[0].run;
+}
+async function until(check: () => boolean) {
+  for (let i = 0; i < 400 && !check(); i++) await new Promise((r) => setTimeout(r, 25));
+  assert.ok(check(), 'timed out waiting');
+}
+const told = (h: any, id: string) => [...h.runner.events(id).events.filter((e: any) => e.type === 'user.message').map((e: any) => e.text), ...h.store.load(id)!.queue.map((q: any) => q.text)];
+
+test('a command on the card runs once and the agent hears how it went', async () => {
+  const { h, thread, st, folder } = runFixture();
+  const run = arm(h, st, 'echo ran >> count.txt; echo hello; exit 3');
+  assert.match(run.buttonId, /^[a-z0-9]{8}$/);
+  assert.equal(run.cwd, folder);
+  const first = h.runner.pressButton(thread.id, run.buttonId).button;
+  assert.ok(first.running, 'it answers at once, running');
+  assert.equal(st.rec.needs.asks[0].run.running, true, 'the phone sees it going');
+  h.runner.pressButton(thread.id, run.buttonId);
+  await until(() => Boolean(h.runner.listButtons(thread.id).buttons[0].pressed));
+  const button = h.runner.listButtons(thread.id).buttons[0];
+  assert.equal(button.running, undefined);
+  assert.equal(button.ran?.exitCode, 3);
+  assert.equal(button.ran?.ok, false);
+  assert.equal(fs.readFileSync(path.join(folder, 'count.txt'), 'utf8'), 'ran\n', 'a second press ran nothing');
+  await until(() => told(h, thread.id).some((t: string) => t.includes('pressed Run')));
+  const message = told(h, thread.id).find((t: string) => t.includes('pressed Run'))!;
+  assert.match(message, /failed with exit 3/);
+  assert.match(message, /hello/);
+  assert.ok(h.runner.events(thread.id).events.some((e: any) => e.type === 'action.run' && e.patch === 'card' && e.exitCode === 3));
+  h.runner.pressButton(thread.id, run.buttonId);
+  assert.equal(fs.readFileSync(path.join(folder, 'count.txt'), 'utf8'), 'ran\n', 'pressed for good');
+});
+
+test('only the open card can be run', () => {
+  const { h, thread, st } = runFixture();
+  const run = arm(h, st, 'echo hi');
+  st.rec.needs = { seq: 100, needs: 'nothing' };
+  assert.throws(() => h.runner.pressButton(thread.id, run.buttonId), /replaced/);
+  assert.match(h.runner.listButtons(thread.id).buttons[0].failed!.error, /replaced/);
+});
+
+test('a command can\'t be run once the agent has moved on', () => {
+  const { h, thread, st } = runFixture();
+  const run = arm(h, st, 'echo hi');
+  st.rt.turn = { turnId: 'turn_y' };
+  assert.throws(() => h.runner.pressButton(thread.id, run.buttonId), /out of date/);
+  st.rt.turn = undefined;
+});
+
+test('with the experiment off a run is dropped from the card', () => {
+  const { h, st } = runFixture(false);
+  const asks = h.runner.armRunAsks(st, [{ action: 'x', run: { command: 'ls' } }], 't');
+  assert.equal(asks[0].run, undefined);
+  assert.equal(st.rec.buttons, undefined);
+});
+
+test('a restart mid-run says it may have partly run, and can be pressed again', () => {
+  const { h, thread, st } = runFixture();
+  const run = arm(h, st, 'echo hi');
+  h.runner.persistButton(st, { ...st.rec.buttons[0], running: { at: new Date().toISOString() } });
+  h.runner.tellInterruptedRuns(st);
+  const button = h.runner.listButtons(thread.id).buttons[0];
+  assert.equal(button.running, undefined);
+  assert.match(button.failed!.error, /partly/);
+  assert.match(st.rec.needs.asks[0].run.failed, /partly/);
+  assert.equal(run.buttonId, button.id);
+  assert.ok(told(h, thread.id).some((t: string) => t.includes('partly run')));
+});
+
+// The Daily brief, 8 Nov: Mike pressed "RSVP yes", then told the brief to go
+// ahead in his reply, and its agent (which hadn't seen the press) sent the
+// same job again with send_message.
+test("the agent hears which of its buttons were pressed, before the user's next message", () => {
+  const { h, thread, folder } = fixture();
+  const other = h.runner.create({ text: 'SF trip', accountId: 'claude-3' }).thread;
+  const rsvp = h.runner.createButton(thread.id, { title: 'RSVP yes', send: { threadId: other.id, text: 'RSVP yes to the party' } }).button;
+  const scope = h.runner.createButton(thread.id, { title: 'Scope the video', start: { text: 'Scope it', cwd: folder } }).button;
+  h.runner.createButton(thread.id, { title: 'Not pressed', start: { text: 'x', cwd: folder } });
+  const session = h.adapter.sessions.find((s) => s.opts.threadId === thread.id)!;
+  session.result();
+  h.runner.pressButton(thread.id, rsvp.id);
+  const started = h.runner.pressButton(thread.id, scope.id).button.pressed!.threadId;
+  h.runner.send(thread.id, 'Yeah go ahead with the RSVP');
+  const text = session.sent.at(-1)!.text;
+  assert.match(text, /pressed/);
+  assert.match(text, /"RSVP yes"/);
+  assert.match(text, new RegExp(other.id.slice(0, 8)));
+  assert.match(text, new RegExp(`"Scope the video".*${started.slice(0, 8)}`));
+  assert.doesNotMatch(text, /Not pressed/);
+  assert.ok(text.endsWith('Yeah go ahead with the RSVP'));
+  // Told once: the message after doesn't say it again.
+  session.result();
+  h.runner.send(thread.id, 'thanks');
+  assert.equal(session.sent.at(-1)!.text, 'thanks');
+});
+
+test("a press told in a turn that didn't complete is told again", () => {
+  const { h, thread } = fixture();
+  const other = h.runner.create({ text: 'SF trip', accountId: 'claude-3' }).thread;
+  const rsvp = h.runner.createButton(thread.id, { title: 'RSVP yes', send: { threadId: other.id, text: 'RSVP yes' } }).button;
+  const session = h.adapter.sessions.find((s) => s.opts.threadId === thread.id)!;
+  session.result();
+  h.runner.pressButton(thread.id, rsvp.id);
+  h.runner.send(thread.id, 'go');
+  assert.match(session.sent.at(-1)!.text, /"RSVP yes"/);
+  session.result('failed', undefined, 'overloaded');
+  h.runner.send(thread.id, 'try again');
+  assert.match(session.sent.at(-1)!.text, /"RSVP yes"/);
+});
+
+// Codex's review of the first try at the above.
+function pressed() {
+  const { h, thread, folder } = fixture();
+  const other = h.runner.create({ text: 'SF trip', accountId: 'claude-3' }).thread;
+  const rsvp = h.runner.createButton(thread.id, { title: 'RSVP yes', send: { threadId: other.id, text: 'RSVP yes to the party for 11 Dec' } }).button;
+  const session = h.adapter.sessions.find((s) => s.opts.threadId === thread.id)!;
+  session.result();
+  h.runner.pressButton(thread.id, rsvp.id);
+  return { h, thread, folder, session };
+}
+const allSent = (h: ReturnType<typeof makeHarness>, id: string) => h.adapter.sessions.filter((s) => s.opts.threadId === id).flatMap((s) => s.sent.map((m) => m.text));
+
+test('the line says what the button sent, and outlives the button', () => {
+  const { h, thread, session } = pressed();
+  // As a move to another runner does.
+  (h.runner as any).threads.get(thread.id).rec.buttons = [];
+  h.runner.send(thread.id, 'go');
+  assert.match(session.sent.at(-1)!.text, /"RSVP yes" messaged "[^"]*" \([0-9a-f]{8}\): RSVP yes to the party for 11 Dec/);
+  assert.match(session.sent.at(-1)!.text, /something different/);
+});
+
+test('a restart part way through the turn that told it tells it again', () => {
+  const { h, thread } = pressed();
+  h.runner.send(thread.id, 'go');
+  const back = h.restart();
+  back.runner.send(thread.id, 'still there?');
+  const texts = allSent(back, thread.id);
+  assert.ok(texts.some((t) => /"RSVP yes"/.test(t)), JSON.stringify(texts));
+});
+
+test('a completed turn that told it, then a restart, does not tell it again', () => {
+  const { h, thread, session } = pressed();
+  h.runner.send(thread.id, 'go');
+  session.result();
+  const back = h.restart();
+  back.runner.send(thread.id, 'thanks');
+  assert.ok(!allSent(back, thread.id).some((t) => /"RSVP yes"/.test(t)));
+});
+
+test('editing back past the message that told it tells it again', async () => {
+  const { h, thread, session } = pressed();
+  h.adapter.rewind = async () => ({ resumeAt: 'entry-1' });
+  const { turnId } = h.runner.send(thread.id, 'go ahead');
+  session.result();
+  const seq = h.store.log(thread.id).read(1, h.store.log(thread.id).lastSeq).find((e) => e.type === 'user.message' && e.turnId === turnId)!.seq;
+  await h.runner.editMessage(thread.id, seq, 'go ahead, and book the gym');
+  const texts = allSent(h, thread.id);
+  assert.match(texts.at(-1)!, /"RSVP yes"[\s\S]*go ahead, and book the gym$/);
+});
+
+test('a fresh session that replays the message keeps the line', async () => {
+  const { h, thread } = pressed();
+  const back = h.restart();
+  back.runner.send(thread.id, 'go');
+  const resumed = back.adapter.last;
+  assert.equal(resumed.opts.resume, true);
+  assert.match(resumed.sent.at(-1)!.text, /"RSVP yes"/);
+  resumed.sink.exited(new SessionNotFoundError('gone'));
+  await tick();
+  const fresh = back.adapter.last;
+  assert.notEqual(fresh, resumed);
+  assert.match(fresh.sent[0].text, /"RSVP yes"[\s\S]*go$/);
+});
+
+// Codex's second look.
+test('a crash after a failed turn ended on disk tells it again', () => {
+  const { h, thread, session } = pressed();
+  h.runner.send(thread.id, 'go');
+  (h.runner as any).flush();
+  const file = path.join(h.store.threadDir(thread.id), 'thread.json');
+  const saved = fs.readFileSync(file, 'utf8');
+  session.result('failed', undefined, 'overloaded');
+  // thread.json as it was before the turn ended: the crash.
+  fs.writeFileSync(file, saved);
+  const back = h.restart();
+  back.runner.send(thread.id, 'still there?');
+  assert.ok(allSent(back, thread.id).some((t) => /"RSVP yes"/.test(t)));
+});
+
+test('a fresh session hears presses told in earlier turns', async () => {
+  const { h, thread, session } = pressed();
+  h.runner.send(thread.id, 'go');
+  session.result();
+  const back = h.restart();
+  back.runner.send(thread.id, 'finish the RSVP if it has not gone');
+  const resumed = back.adapter.last;
+  assert.doesNotMatch(resumed.sent.at(-1)!.text, /"RSVP yes"/);
+  resumed.sink.exited(new SessionNotFoundError('gone'));
+  await tick();
+  assert.match(back.adapter.last.sent[0].text, /"RSVP yes"/);
+});
+
+test('no press goes untold however many there are', () => {
+  const { h, thread } = fixture();
+  const other = h.runner.create({ text: 'Jobs', accountId: 'claude-3' }).thread;
+  const session = h.adapter.sessions.find((s) => s.opts.threadId === thread.id)!;
+  session.result();
+  for (let i = 0; i < 25; i++) {
+    const b = h.runner.createButton(thread.id, { title: `Job ${i}`, send: { threadId: other.id, text: `Do job ${i}` } }).button;
+    h.runner.pressButton(thread.id, b.id);
+  }
+  h.runner.send(thread.id, 'go ahead with those');
+  const text = allSent(h, thread.id).at(-1)!;
+  assert.match(text, /go ahead with those$/);
+  for (let i = 0; i < 25; i++) assert.match(text, new RegExp(`"Job ${i}"`));
+});
+
+// Codex's third look: a press mid-turn doesn't push out ones still in flight.
+test('presses in flight survive more presses, and a failed turn tells them all again', () => {
+  const { h, thread } = fixture();
+  const other = h.runner.create({ text: 'Jobs', accountId: 'claude-3' }).thread;
+  const session = h.adapter.sessions.find((s) => s.opts.threadId === thread.id)!;
+  session.result();
+  const press = (i: number) => h.runner.pressButton(thread.id, h.runner.createButton(thread.id, { title: `Job ${i}`, send: { threadId: other.id, text: `Do job ${i}` } }).button.id);
+  for (let i = 0; i < 25; i++) press(i);
+  h.runner.send(thread.id, 'go ahead');
+  press(25);
+  session.result('failed', undefined, 'overloaded');
+  h.runner.send(thread.id, 'again');
+  const text = allSent(h, thread.id).at(-1)!;
+  for (let i = 0; i <= 25; i++) assert.match(text, new RegExp(`"Job ${i}"`));
 });

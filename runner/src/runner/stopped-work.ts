@@ -21,11 +21,18 @@ export const stoppedWorkPart = {
   // Once this runner is listening, for the threads it loaded at startup. A
   // thread coming across from a draining runner is told as adopt() loads it.
   tellStoppedWork(this: Runner): void {
-    for (const st of this.threads.values()) this.tellOneStoppedWork(st);
+    for (const st of this.threads.values()) {
+      try {
+        this.tellOneStoppedWork(st);
+      } catch (e) {
+        this.recoveryFailed(st, e);
+      }
+    }
   },
 
   tellOneStoppedWork(this: Runner, st: ThreadState): void {
     const { rec } = st;
+    this.tellInterruptedRuns(st);
     const stopped = rec.stoppedWork;
     if (!stopped) return;
     delete rec.stoppedWork;
@@ -72,6 +79,11 @@ export const stoppedWorkPart = {
       const { rec, rt } = st;
       const stopped = rec.stoppedMidTurn;
       if (!stopped) continue;
+      if (typeof stopped !== 'object' || typeof stopped.at !== 'string') {
+        delete rec.stoppedMidTurn;
+        this.markDirty(st);
+        continue;
+      }
       delete rec.stoppedMidTurn;
       this.markDirty(st);
       if (rt.deleted || rec.status !== 'stopped' || rt.turn || rec.queue.length || this.bucket(rec) !== 'inbox') continue;
