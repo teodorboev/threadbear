@@ -92,7 +92,7 @@ public enum NewThreadChoices {
 
     /// Every model on offer, Claude's first, each once.
     public static func models(_ accounts: [PhoneAccount]) -> [PhoneModelChoice] {
-        let order = ["claude", "codex", "opencode"]
+        let order = ["claude", "codex"]
         let sorted = accounts.enumerated().sorted { a, b in
             let x = order.firstIndex(of: a.element.provider) ?? order.count
             let y = order.firstIndex(of: b.element.provider) ?? order.count

@@ -106,7 +106,10 @@ describe('ACP threads end to end (real opencode acp)', { concurrency: false, ski
     ]);
     await r.turn('Call the threadbear say_code_word tool and tell me the code word it returns.');
     assert.equal(called > 0 || r.cards.some((c) => c.name.endsWith('say_code_word')), true, 'it reached the tool (the gate may have asked first)');
-    assert.equal(r.cards.filter((c) => !c.name.startsWith('mcp__threadbear__')).length, 0, "the agent's own request doesn't double up the gate's");
+    // OpenCode 2's own question tool, which a model may follow a denial
+    // with, asks as anything else does: that's a second question, not the
+    // call asking twice.
+    assert.equal(r.cards.filter((c) => !c.name.startsWith('mcp__threadbear__') && c.title !== 'question').length, 0, "the agent's own request doesn't double up the gate's");
   });
 
   test('models come from a real session', { timeout: 60_000 }, async () => {

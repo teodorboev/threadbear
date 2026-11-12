@@ -21,14 +21,6 @@ final class SignInTests: XCTestCase {
         XCTAssertTrue(script.contains("CODEX_HOME='/tmp/it'\\''s here' '/opt/codex' login"), script)
     }
 
-    func testOpenCodeRunsItsOwnSignInWithNoConfigFolder() {
-        let script = SignIn.script(Account(id: "opencode-main", provider: "opencode", title: "OpenCode", configDir: "/Users/x/.config/opencode"), cliPath: "")
-        XCTAssertTrue(script.contains("\nopencode auth login\n"), script)
-        XCTAssertTrue(script.contains("Signing in to OpenCode"), script)
-        XCTAssertFalse(script.contains("CLAUDE_CONFIG_DIR"))
-        XCTAssertFalse(script.contains("CODEX_HOME"))
-    }
-
     func testScriptRunsInZsh() throws {
         let script = SignIn.script(Account(id: "codex-1", provider: "codex", title: "c", configDir: "/tmp/it's here"), cliPath: "/bin/echo")
         XCTAssertTrue(script.hasPrefix("#!/bin/zsh -l\n"))

@@ -113,7 +113,6 @@ public enum ModelPicker {
         switch id {
         case "claude": return "sparkle"
         case "codex": return "chevron.left.forwardslash.chevron.right"
-        case "opencode": return "terminal"
         default: return "cpu"
         }
     }
@@ -134,8 +133,7 @@ public enum ModelPicker {
     ///
     /// Before the runner has the list, Claude offers the three aliases the
     /// CLI always takes; Codex offers just its default, since a Claude
-    /// alias would be the wrong provider's model. OpenCode reads as Codex
-    /// does: its "provider/model" ids are all main rows, in its order.
+    /// alias would be the wrong provider's model.
     public static func rows(choices: [ModelChoice], defaultId: String?, selected: String?, query: String = "", provider: String = "claude") -> [Row] {
         // Only Claude's CLI takes these aliases: anyone else lists its own.
         let codex = provider != "claude" && !provider.isEmpty

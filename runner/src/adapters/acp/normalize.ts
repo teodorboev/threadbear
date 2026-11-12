@@ -117,6 +117,31 @@ export function canonicalToolName(name: string): string {
   return m ? `mcp__threadbear__${m[1]}` : name;
 }
 
+// OpenCode 2 hands MCP tools to the model behind its code-mode `execute`
+// tool, and asks for `execute` before the threadbear gate gets a say: two
+// cards for every end_turn (2.2.7, 12 Nov 2026). The tool's name when the
+// script does nothing but call one threadbear tool with plain data (JSON,
+// keys quoted or not), so the gate alone decides. Anything else asks.
+const CODE_CALL = /^\s*(?:(?:const|let|var)\s+(\w+)\s*=\s*)?(?:return\s+)?(?:await\s+)?tools\.threadbear\.(\w+)\(([\s\S]*)\)\s*;?\s*(?:return\s+(\w+)\s*;?\s*)?$/;
+
+export function codeModeThreadbearCall(tool: string | undefined, input: Record<string, unknown>): string | undefined {
+  if (tool !== 'execute' || typeof input.code !== 'string') return undefined;
+  const m = CODE_CALL.exec(input.code);
+  if (!m || (m[4] !== undefined && m[4] !== m[1])) return undefined;
+  const args = m[3].trim();
+  if (args) {
+    // Only quotes are added, so what parses was a literal to begin with.
+    try {
+      const quoted = args.replace(/("(?:[^"\\]|\\.)*")|([{,]\s*)([A-Za-z_$][\w$]*)(\s*:)/g, (all, str, before, key, colon) => (str ? all : `${before}"${key}"${colon}`));
+      const v: unknown = JSON.parse(quoted);
+      if (!isPlainObject(v)) return undefined;
+    } catch {
+      return undefined;
+    }
+  }
+  return m[2];
+}
+
 export class AcpNormalizer {
   private ctx: NormalizerContext;
   private tools = new Map<string, Tool>();

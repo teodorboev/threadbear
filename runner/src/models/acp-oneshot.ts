@@ -13,7 +13,7 @@ import type { Account } from '../protocol.ts';
 import type { Logger } from '../log.ts';
 import type { ProcessRegistry } from '../proc.ts';
 import { cliEnv } from '../adapters/claude/adapter.ts';
-import type { AcpAgent } from '../adapters/acp/agents.ts';
+import { agentArgs, type AcpAgent } from '../adapters/acp/agents.ts';
 import { AcpProcess, AcpRpcError, AUTH_REQUIRED, type AcpTimings, type InitializeResult } from '../adapters/acp/connection.ts';
 import { isPlainObject } from '../adapters/acp/normalize.ts';
 import { providerInfo, providerName } from '../providers.ts';
@@ -69,7 +69,7 @@ export function acpAsker(deps: AcpAskerDeps): Asker {
     const env = cliEnv(req.account, deps.env ?? process.env);
     delete env.CLAUDE_CONFIG_DIR;
     delete env.CLAUDE_AGENT_SDK_CLIENT_APP;
-    const proc = new AcpProcess({ binary, args: deps.agent.args, env: { ...env, ...deps.agent.env({ noTools: true }) }, cwd: req.cwd, registry: deps.registry, log: deps.log, label: `ask:${req.account.id}`, timings: deps.timings });
+    const proc = new AcpProcess({ binary, args: agentArgs(deps.agent, binary), env: { ...env, ...deps.agent.env({ noTools: true }) }, cwd: req.cwd, registry: deps.registry, log: deps.log, label: `ask:${req.account.id}`, timings: deps.timings });
     let text = '';
     proc.onNotification = (method, params) => {
       if (method !== 'session/update' || !isPlainObject(params) || !isPlainObject(params.update)) return;

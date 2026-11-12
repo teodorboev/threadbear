@@ -23,10 +23,10 @@ import { toolGuidance, type ToolDefinition } from '../codex/tools.ts';
 import { fileContext, type NormalizerContext } from '../context.ts';
 import type { AdapterOutput, AgentAdapter, AgentSession, SessionSink, StartSessionOptions, ToolApprovalAnswer, TurnResult, UserInput } from '../types.ts';
 import { SessionNotFoundError } from '../types.ts';
-import type { AcpAgent } from './agents.ts';
+import { agentArgs, type AcpAgent } from './agents.ts';
 import { AcpExitedError, AcpProcess, AcpRpcError, AUTH_REQUIRED, type AcpTimings, type InitializeResult, type RequestId } from './connection.ts';
 import { AcpMcpServer } from './mcp-http.ts';
-import { AcpNormalizer, absolutePath, isPlainEdit, isPlainObject, requestPaths, writesFiles, type AcpToolCall } from './normalize.ts';
+import { AcpNormalizer, absolutePath, codeModeThreadbearCall, isPlainEdit, isPlainObject, requestPaths, writesFiles, type AcpToolCall } from './normalize.ts';
 
 // Where an execute call can say it runs (OpenCode's bash tool: workdir).
 const FOLDER_KEYS = ['workdir', 'cwd', 'workingDirectory', 'directory', 'dir'];
@@ -125,7 +125,7 @@ export class AcpAdapter implements AgentAdapter {
   async models(account: Account): Promise<ModelChoice[]> {
     const { deps } = this;
     const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'threadbear-acp-'));
-    const p = new AcpProcess({ binary: this.binary(), args: deps.agent.args, env: this.env(account), cwd, registry: deps.registry, log: deps.log, label: `models:${account.id}`, timings: deps.timings });
+    const p = new AcpProcess({ binary: this.binary(), args: agentArgs(deps.agent, this.binary()), env: this.env(account), cwd, registry: deps.registry, log: deps.log, label: `models:${account.id}`, timings: deps.timings });
     try {
       const init = await p.start();
       if (!deps.agent.identifies(init)) throw new Error(`The program found for ${providerName(this.provider)} isn't it.`);
@@ -183,7 +183,7 @@ export class AcpSession implements AgentSession {
     this.exitPromise = new Promise((r) => (this.resolveExit = r));
     this.ctx = fileContext(opts.cwd, opts.mediaDir, opts.blobsDir);
     this.normalizer = new AcpNormalizer(this.ctx);
-    this.proc = new AcpProcess({ binary, args: deps.agent.args, env, cwd: opts.cwd, registry: deps.registry, log: deps.log, label: opts.threadId, timings: deps.timings });
+    this.proc = new AcpProcess({ binary, args: agentArgs(deps.agent, binary), env, cwd: opts.cwd, registry: deps.registry, log: deps.log, label: opts.threadId, timings: deps.timings });
     this.proc.onNotification = (method, params) => this.notification(method, params);
     this.proc.onRequest = (id, method, params) => this.request(id, method, params);
     this.proc.onExit = (err) => this.exited(err);
@@ -402,6 +402,10 @@ export class AcpSession implements AgentSession {
     this.emit(seen.events);
     // Read at the moment it's asked, not when the turn began.
     if (this.mode === 'full') return this.answer(id, options, true);
+    // A code-mode script that only calls one threadbear tool: its own gate
+    // (mcp-http.ts) asks as the mode says, so no card here as well.
+    const raw = p.toolCall?.rawInput;
+    if (codeModeThreadbearCall(p.toolCall?.name ?? p.toolCall?.title ?? seen.title, isPlainObject(raw) && Object.keys(raw).length ? raw : seen.input)) return this.answer(id, options, true);
 
     const { kind } = seen;
     // What this request names and what earlier updates to the call said:

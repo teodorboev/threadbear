@@ -77,7 +77,6 @@ public enum ComposerChips {
     public static let codexEffortLevels = ["low", "medium", "high", "xhigh", "max", "ultra"]
 
     /// The levels a provider offers when the model's own list isn't known.
-    /// OpenCode takes none: its models' reasoning is set in opencode.json.
     public static func effortLevels(provider: String) -> [String] {
         switch Providers.info(provider).effort {
         case "codex": codexEffortLevels

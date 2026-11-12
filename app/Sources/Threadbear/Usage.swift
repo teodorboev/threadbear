@@ -177,7 +177,6 @@ extension AppModel {
         switch thread.provider {
         case "claude": return Account(id: "claude-main", provider: "claude", title: "Claude")
         case "codex": return Account(id: "codex-main", provider: "codex", title: "Codex")
-        case "opencode": return Account(id: "opencode-main", provider: "opencode", title: "OpenCode")
         default: return nil
         }
     }

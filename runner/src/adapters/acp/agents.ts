@@ -1,6 +1,7 @@
 // The agents Threadbear runs over ACP, one row each: everything that differs
 // between them. A new agent is a row here, a row in providers.ts and its
 // line in docs/on-your-mac.md.
+import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -20,6 +21,9 @@ export type AcpAgent = {
   // explicit: runner.json's path for it. Undefined when not installed.
   findBinary(o: { explicit?: string; home: string; pathEnv: string }): string | undefined;
   args: string[];
+  // What this copy of the program takes, when that differs between its
+  // versions (agentArgs). Falls back to args.
+  argsFor?(binary: string): string[];
   // Runs the agent's own updater, when Update is pressed.
   updateArgs: string[];
   // Set on every process it starts. What stops a thread running tools
@@ -105,7 +109,11 @@ export const ACP_AGENTS: Record<AcpProvider, AcpAgent> = {
       return isExecutableFile(own) ? own : onPath('opencode', pathEnv);
     },
     // --pure: no plugins, the user's own included, for the same reason.
+    // OpenCode 2 dropped the flag and won't start with it (2.2.7, 12 Nov
+    // 2026), and has nothing to turn the user's own plugins off with; the
+    // folder's still don't load, through OPENCODE_DISABLE_PROJECT_CONFIG.
     args: ['acp', '--pure'],
+    argsFor: (binary) => (takesFlag(binary, ['acp', '--help'], '--pure') ? ['acp', '--pure'] : ['acp']),
     updateArgs: ['upgrade'],
     env: opencodeEnv,
     identifies: (init) => /opencode/i.test(init.agentInfo?.name ?? '') || Boolean(init.authMethods?.some((m) => m.id === 'opencode-login')),
@@ -150,4 +158,28 @@ export function acpAccounts(o: { paths?: Partial<Record<AcpProvider, string>>; h
     out.push({ id: agent.accountId, provider: p, title: agent.title, configDir: agent.configDir(home) });
   }
   return out;
+}
+
+// The arguments an agent's program starts with.
+export function agentArgs(agent: AcpAgent, binary: string): string[] {
+  return agent.argsFor?.(binary) ?? agent.args;
+}
+
+// Whether the program's help lists a flag, asked once per copy of it (its
+// path and when it last changed, so an upgrade asks again).
+const helpSays = new Map<string, boolean>();
+export function takesFlag(binary: string, helpArgs: string[], flag: string): boolean {
+  let key: string;
+  try {
+    key = `${binary}\0${fs.statSync(binary).mtimeMs}\0${helpArgs.join(' ')}\0${flag}`;
+  } catch {
+    return false;
+  }
+  let said = helpSays.get(key);
+  if (said === undefined) {
+    const r = spawnSync(binary, helpArgs, { encoding: 'utf8', timeout: 10_000, stdio: ['ignore', 'pipe', 'pipe'] });
+    said = new RegExp(`(^|\\s)${flag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(\\s|=|,|$)`, 'm').test(`${r.stdout ?? ''}\n${r.stderr ?? ''}`) && !/Unrecognized flag/i.test(r.stderr ?? '');
+    helpSays.set(key, said);
+  }
+  return said;
 }

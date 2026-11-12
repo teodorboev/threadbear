@@ -7,7 +7,7 @@ import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { AcpAdapter, AcpSession, EDIT_RULE, modelChoices } from '../../src/adapters/acp/adapter.ts';
-import { ACP_AGENTS, acpAccounts, isCursorBinary, opencodeEnv } from '../../src/adapters/acp/agents.ts';
+import { ACP_AGENTS, acpAccounts, agentArgs, isCursorBinary, opencodeEnv } from '../../src/adapters/acp/agents.ts';
 import type { AcpAgent } from '../../src/adapters/acp/agents.ts';
 import { AcpMcpServer } from '../../src/adapters/acp/mcp-http.ts';
 import { commandRule } from '../../src/adapters/codex/approvals.ts';
@@ -887,4 +887,22 @@ test('no protocol version in initialize is refused', async () => {
   r.start();
   await r.exited();
   assert.match(String(r.exitError()), /ACP version/);
+});
+
+// OpenCode 2 dropped --pure and won't start with it (2.2.7, 12 Nov 2026).
+test("--pure goes only to an OpenCode whose help lists it", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tb-acp-args-'));
+  try {
+    const old = path.join(dir, 'old');
+    const now = path.join(dir, 'new');
+    fs.writeFileSync(old, '#!/bin/sh\necho "  --pure    run without external plugins"\n', { mode: 0o755 });
+    fs.writeFileSync(now, '#!/bin/sh\necho "  --login    Run auth login instead"\n', { mode: 0o755 });
+    assert.deepEqual(agentArgs(ACP_AGENTS.opencode, old), ['acp', '--pure']);
+    assert.deepEqual(agentArgs(ACP_AGENTS.opencode, now), ['acp']);
+    assert.deepEqual(agentArgs(ACP_AGENTS.opencode, path.join(dir, 'gone')), ['acp']);
+    // Cursor has one set of arguments.
+    assert.deepEqual(agentArgs(ACP_AGENTS.cursor, now), ACP_AGENTS.cursor.args);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });

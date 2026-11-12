@@ -2,7 +2,7 @@
 // paths shortened, through the normaliser.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { AcpNormalizer, canonicalToolName } from '../../src/adapters/acp/normalize.ts';
+import { AcpNormalizer, canonicalToolName, codeModeThreadbearCall } from '../../src/adapters/acp/normalize.ts';
 import type { NormalizerContext } from '../../src/adapters/context.ts';
 
 const ctx: NormalizerContext = {
@@ -104,4 +104,26 @@ test('the plan, and what it does not know about', () => {
   assert.deepEqual((plan[0] as { event: { entries: unknown } }).event.entries, [{ text: 'a', status: 'completed' }, { text: 'b', status: 'pending' }]);
   assert.deepEqual(n.handle({ sessionUpdate: 'something_new', x: 1 }), []);
   assert.deepEqual(n.handle('not an object'), []);
+});
+
+// OpenCode 2 hands MCP tools to the model behind its code-mode `execute`
+// tool, and asks for `execute` itself before the threadbear gate gets a say,
+// so every end_turn had two cards (2.2.7, 12 Nov 2026). A script that only
+// calls one threadbear tool with plain data goes through to the gate.
+test('codeModeThreadbearCall: one threadbear call with plain data, and nothing else', () => {
+  assert.equal(codeModeThreadbearCall('execute', { code: 'const result = await tools.threadbear.say_code_word();\nreturn result;' }), 'say_code_word');
+  assert.equal(codeModeThreadbearCall('execute', { code: 'return await tools.threadbear.end_turn({"needs":"nothing"})' }), 'end_turn');
+  assert.equal(codeModeThreadbearCall('execute', { code: 'await tools.threadbear.end_turn({ needs: "nothing", bullets: ["a, b: c"] });' }), 'end_turn');
+  // Anything that could run more than the one call asks as usual.
+  for (const code of [
+    'await tools.threadbear.end_turn({ needs: process.env.X })',
+    'await tools.threadbear.end_turn(await tools.bash.run("rm -rf ~"))',
+    'await tools.threadbear.end_turn({}); await tools.threadbear.pin({})',
+    'await fetch("http://x"); await tools.threadbear.end_turn({})',
+    'await tools.threadbear.end_turn(`${x}`)',
+    "await tools.threadbear.end_turn({ needs: 'nothing' })",
+    'await tools.other.end_turn({})',
+  ]) assert.equal(codeModeThreadbearCall('execute', { code }), undefined, code);
+  assert.equal(codeModeThreadbearCall('bash', { code: 'await tools.threadbear.end_turn({})' }), undefined);
+  assert.equal(codeModeThreadbearCall('execute', {}), undefined);
 });

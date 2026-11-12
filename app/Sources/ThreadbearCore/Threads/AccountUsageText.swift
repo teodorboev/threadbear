@@ -464,7 +464,7 @@ public enum AccountMenu {
                 sections.append(Section(id: provider, title: ModelPicker.providerTitle(provider), items: [item]))
             }
         }
-        let order = ["claude", "codex", "opencode"]
+        let order = ["claude", "codex"]
         return sections.enumerated().sorted { a, b in
             let ia = order.firstIndex(of: a.element.id) ?? order.count
             let ib = order.firstIndex(of: b.element.id) ?? order.count
