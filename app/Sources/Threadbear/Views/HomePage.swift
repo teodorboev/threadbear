@@ -224,6 +224,8 @@ private struct HomeStatTile: View {
 enum Art {
     @MainActor static let librarian: NSImage? = image("librarian")
     @MainActor static let scheduled: NSImage? = image("scheduled")
+    /// The GPUI app's icon (desktop/gpui/icons), for NewApp.swift.
+    @MainActor static let gpuiApp: NSImage? = image("gpui-app")
 
     private static let bundle: Bundle? = {
         let name = "Threadbear_Threadbear.bundle"

@@ -22,6 +22,18 @@
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+mod package;
+
+/// A bounded, private copy of an iWork package, rooted at the gate's open
+/// directory descriptor. Nested links and special files are refused.
+pub fn snapshot_package(from: &std::fs::File, folder: &Path, name: &str, limit: u64) -> std::io::Result<PathBuf> {
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    { package::snapshot(from, folder, name, limit) }
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    { let _ = (from, folder, name, limit); Err(std::io::Error::other("Package previews aren't available here")) }
+}
+
 /// Writes `data` as `path`, readable and writable by this user only.
 pub fn write(path: &Path, data: &[u8]) -> std::io::Result<()> {
     write_with_mode(path, data, 0o600)
@@ -117,22 +129,15 @@ pub fn snapshot(from: &std::fs::File, folder: &Path, name: &str, copy_limit: u64
     let dir = new_dir(folder)?;
     let path = dir.join(&name);
     #[cfg(target_os = "macos")]
-    {
-        use std::os::fd::AsRawFd as _;
-        use std::os::unix::ffi::OsStrExt as _;
-        let target = std::ffi::CString::new(path.as_os_str().as_bytes()).map_err(std::io::Error::other)?;
-        // The clone takes the file's own mode, but its folder is this user's
-        // alone; it's still made the owner's only, and read-only.
-        if unsafe { libc::fclonefileat(from.as_raw_fd(), libc::AT_FDCWD, target.as_ptr(), 0) } == 0 {
-            use std::os::unix::fs::PermissionsExt as _;
-            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o400))?;
-            return Ok(path);
-        }
+    match clone_file(from, &path) {
+        Ok(true) => return Ok(path),
+        Ok(false) => {},
+        Err(error) => { let _ = std::fs::remove_dir_all(&dir); return Err(error); }
     }
     let len = from.metadata()?.len();
     if len > copy_limit {
         let _ = std::fs::remove_dir(&dir);
-        return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "too big to copy"));
+        return Err(std::io::Error::new(std::io::ErrorKind::FileTooLarge, "too big to copy"));
     }
     let (mut file, temp) = new_file(&dir, &path, 0o600)?;
     // Not synced: it's a hand-over, read straight away, not kept.
@@ -144,6 +149,29 @@ pub fn snapshot(from: &std::fs::File, folder: &Path, name: &str, copy_limit: u64
         return Err(e);
     }
     Ok(path)
+}
+
+/// Clone one already-open regular file, never a directory tree whose links
+/// haven't been checked. Its private parent hides the inherited mode until
+/// the clone is made read-only. A disk without clones uses the bounded copy.
+#[cfg(target_os = "macos")]
+fn clone_file(from: &std::fs::File, path: &Path) -> std::io::Result<bool> {
+    use std::os::fd::AsRawFd as _;
+    use std::os::macos::fs::MetadataExt as _;
+    use std::os::unix::{ffi::OsStrExt as _, fs::PermissionsExt as _};
+    // System flags can't be cleared by this user. Don't inherit one that
+    // could prevent deleting our copy; the bounded copy doesn't keep flags.
+    if from.metadata()?.st_flags() & libc::SF_SETTABLE != 0 { return Ok(false); }
+    let target = std::ffi::CString::new(path.as_os_str().as_bytes()).map_err(std::io::Error::other)?;
+    if unsafe { libc::fclonefileat(from.as_raw_fd(), libc::AT_FDCWD, target.as_ptr(), 0) } != 0 { return Ok(false); }
+    // Finder's Locked bit is cloned too. Clear only user lock/append bits
+    // on our copy, keeping UF_COMPRESSED and the other flags intact. The
+    // original stays Locked; drag exports can still take an instant clone.
+    let flags = std::fs::metadata(path)?.st_flags();
+    let unlocked = flags & !(libc::UF_IMMUTABLE | libc::UF_APPEND);
+    if unlocked != flags && unsafe { libc::lchflags(target.as_ptr(), unlocked) } != 0 { return Err(std::io::Error::last_os_error()); }
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o400))?;
+    Ok(true)
 }
 
 /// `len` bytes of `from` from its start into `to`, read at their offsets so

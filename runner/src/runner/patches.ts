@@ -17,7 +17,7 @@ import { CLAUDE_PATCH_ID, claudeCommands, claudeOptions, settingsCommands, setti
 import { canonicalPath, runsAsCodeByName, type CodeWrite } from '../code-writes.ts';
 import { patchCommands, sayValue } from '../patch-commands.ts';
 import type { PatchInfo } from '../protocol.ts';
-import { actionRunProblem, automaticTrust, isInside, EMPTY_PATCH_SET, PATCH_EXTENSIONS, patchDirs, projectRoots, hookApplies, loadPatchSet, applyLive, hasLive, projectPanels, renderListPanel, renderPanel, runCommand, type CommandOutcome, type PanelRender, type PatchSet, type ProjectFolder, projectPatchFiles } from '../patches.ts';
+import { actionRunProblem, automaticTrust, isInside, EMPTY_PATCH_SET, PATCH_EXTENSIONS, patchDirs, projectRoots, hookApplies, loadPatchSet, applyLive, hasLive, projectPanels, renderListPanel, renderPanel, runCommand, PATCH_SH_MAX_BYTES, type CommandOutcome, type PanelRender, type PatchSet, type PatchThread, type ProjectFolder, projectPatchFiles } from '../patches.ts';
 import { liveCommandEnv } from '../shell-allowlist.ts';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -260,6 +260,11 @@ export function commandShown(command: string): string {
 const EDITS_ASK_FIX = "Write the command as plain text, or build it only from constants in the file (like `node ${join(import.meta.dirname, 'x.mjs')}`), so Threadbear can see what it runs.";
 
 export const patchesPart = {
+  // The thread as a patch's functions see it (PatchThread).
+  patchThread(this: Runner, rec: ThreadRecord): PatchThread {
+    return this.projects?.patchThread(rec) ?? { title: rec.title, projects: [] };
+  },
+
   // What the thread's folder gives it (see Runtime.patches): the last set
   // read, with a fresh read started when it's stale.
   patchSet(this: Runner, st: ThreadState): PatchSet {
@@ -267,7 +272,9 @@ export const patchesPart = {
     const now = this.clock.now();
     const folders = this.projects?.foldersFor(rec) ?? [];
     // A mode change can change what the folder's Claude settings wait on.
-    const key = JSON.stringify([rec.cwd, folders, rec.provider === 'claude' && claudeOptions(rec).grants]);
+    // The title and projects too, which a patch's `when` can look at
+    // (PatchThread): a rename or joining a project reads them again.
+    const key = JSON.stringify([rec.cwd, folders, rec.provider === 'claude' && claudeOptions(rec).grants, this.patchThread(rec)]);
     if (rt.patches && rt.patches.cwd === rec.cwd && rt.patches.key !== key) {
       // Same folder, different projects: keep showing what there is while
       // the new set loads, rather than flashing the panels away.
@@ -325,7 +332,7 @@ export const patchesPart = {
       const claude = rec.provider === 'claude' ? this.claudePatchInfo(cwd, claudeOptions(rec)) : undefined;
       if (claude) base = { ...base, patches: [...base.patches, claude] };
       base = this.withEditsAsk(base, cwd);
-      set = await applyLive(base, { cwd, threadId: rec.id, run: (command, dir) => this.runLiveCommand(rec.id, command, dir), verify: (file, hash) => this.patchTrust.verify(file, hash) });
+      set = await applyLive(base, { cwd, threadId: rec.id, thread: this.patchThread(rec), run: (command, dir) => this.runLiveCommand(rec.id, command, dir), verify: (file, hash) => this.patchTrust.verify(file, hash) });
     } catch (e) {
       this.log.warn('could not read the folder for patches', { threadId: rec.id, cwd, error: String(e) });
       base = entry.base;
@@ -402,6 +409,12 @@ export const patchesPart = {
     const key = `${cwd}\u0000${command}`;
     const hit = this.liveRuns.get(key);
     if (hit && (hit.doneAt === undefined || this.clock.now() - hit.doneAt < LIVE_SHARE_MS)) return hit.out;
+    // Finished runs past their share go now, not at the next turn's end: a
+    // command whose text changes each poll (a timestamp in it) would
+    // otherwise keep every output, each up to PATCH_SH_MAX_BYTES (Codex's
+    // review, 13 Nov).
+    const now = this.clock.now();
+    for (const [k, run] of this.liveRuns) if (run.doneAt !== undefined && now - run.doneAt >= LIVE_SHARE_MS) this.liveRuns.delete(k);
     const entry: { doneAt?: number; out: Promise<CommandOutcome> } = { out: this.runPatchCommand(threadId, command, cwd) };
     this.liveRuns.set(key, entry);
     void entry.out.then(
@@ -419,7 +432,7 @@ export const patchesPart = {
   // own .git/config could make git run (shell-allowlist.ts).
   runPatchCommand(this: Runner, threadId: string, command: string, cwd: string) {
     const env = { ...process.env, ...threadEnv(threadId, this.cfg.home) };
-    return runCommand(command, { cwd, env: { ...env, ...liveCommandEnv(env) }, shell: this.actionShell, timeoutMs: this.actionTimeoutMs, killGroup: true });
+    return runCommand(command, { cwd, env: { ...env, ...liveCommandEnv(env) }, shell: this.actionShell, timeoutMs: this.actionTimeoutMs, killGroup: true, maxBytes: PATCH_SH_MAX_BYTES });
   },
 
   // Reads live state again for the inbox's threads that have any, every
@@ -695,12 +708,14 @@ export const patchesPart = {
     else void this.refreshPatches(st);
   },
 
+  // Through rereadPatches, so a thread whose read is already going reads
+  // again once it ends: that read may have looked before the change (Trust
+  // pressed on a second patch while the first was still loading stayed
+  // "changed since you trusted it" until the next poll).
   rereadAllPatches(this: Runner): void {
     this.forgetFolders();
     for (const st of this.threads.values()) {
-      if (!st.rt.patches || st.rt.deleted) continue;
-      st.rt.patches.at = -Infinity;
-      void this.refreshPatches(st);
+      if (!st.rt.deleted) this.rereadPatches(st);
     }
   },
 
@@ -737,6 +752,7 @@ export const patchesPart = {
       return renderListPanel(panel, this.patchSet(st), {
         cwd: st.rec.cwd,
         threadId,
+        thread: this.patchThread(st.rec),
         run: (command, cwd) => this.runPatchCommand(threadId, command, cwd),
         verify: (file, hash) => this.patchTrust.verify(file, hash),
       });
@@ -812,6 +828,25 @@ export const patchesPart = {
   // The threads a turn-end hook is running for, which a restart waits for.
   threadsWithHooksRunning(this: Runner): string[] {
     return [...this.threads.values()].filter((st) => st.rt.hooksRunning && !st.rt.deleted).map((st) => st.rec.id);
+  },
+
+  // The threads running a card's Run command or a patch action, or tearing
+  // down a worktree after archiving. A release restart doesn't wait for
+  // these (it hands over); a LaunchAgent reinstall (reinstall.ts) does, as
+  // it stops every runner at once, and shutting down doesn't wait for a
+  // teardown. Each has its own time limit.
+  threadsRunningActions(this: Runner): string[] {
+    return [...this.threads.values()].filter((st) => (st.rt.runningActions?.size && !st.rt.deleted) || st.rt.cleaning).map((st) => st.rec.id);
+  },
+
+  // The threads a restart waits for between turns: one going back to an
+  // earlier message (editMessage), as one cut off between putting the files
+  // back and writing thread.rewound loses the edit but keeps the files'
+  // undoing; and one whose new worktree is being made or set up after Stop,
+  // as the next runner would start its CLI before the setup was done
+  // (Codex's review). Each takes seconds, or the setup's own time limit.
+  threadsBetweenTurns(this: Runner): string[] {
+    return [...this.threads.values()].filter((st) => (st.rt.editing || st.rt.preparing) && !st.rt.deleted).map((st) => st.rec.id);
   },
 
   async runHookList(this: Runner, st: ThreadState, hooks: PatchSet['hooks']): Promise<void> {

@@ -15,6 +15,13 @@ Feature: What a folder's patches give a thread
     And the patch "convex" comes from "built in"
 
   @patches.list
+  Scenario: A project heading in Patches opens the project
+    When I open the thread "Add dark mode to the dashboard"
+    And I show the "threadbear.patches" section of the pane
+    And I follow the project heading in Patches
+    Then the patch's project page is open
+
+  @patches.list
   Scenario: A patch that isn't trusted waits, and Trust brings it in
     When I open the thread "Pick a colour for the new Share button"
     And I show the "threadbear.patches" section of the pane
@@ -35,6 +42,15 @@ Feature: What a folder's patches give a thread
     When I open the thread "Pick a colour for the new Share button"
     And I show the "xcode.simulator" section of the pane
     Then the image panel shows a picture
+
+  # Swift launches Simulator directly and cannot record this scripted open.
+  @panel.image @swift-pending @windows-pending @linux-pending
+  Scenario: The simulator picture opens Simulator
+    When I open the thread "Pick a colour for the new Share button"
+    And I show the "xcode.simulator" section of the pane
+    Then the image panel shows a picture
+    When I open Simulator from the picture
+    Then Simulator was opened through the app
 
   @manual @panel.web
   Scenario: A url panel's link to another site doesn't take over the panel
@@ -64,3 +80,18 @@ Feature: What a folder's patches give a thread
     And I show the "threadbear.patches" section of the pane
     Then the patch says threads in Ask and Auto ask before every file edit, with the command, its line and what to change
     And an Auto thread's first edit that asks says the same in the transcript
+
+  # Each section of the pane draws its own wherever the dock puts it, as the
+  # Swift app's DockPane does; the GPUI pane drew one section for both until
+  # 13 Nov. `panels.drawn` is the GPUI dump's own.
+  @pane.sections @swift-pending
+  Scenario: Highlights beside Files shows both, each its own
+    When I open the thread "Rebuild the three landing pages"
+    And I show the "threadbear.files" section of the pane
+    And I move the "files" panel to the "right" edge
+    Then the "threadbear.highlights" section draws "highlights"
+    And the "threadbear.files" section draws "files"
+    When I show the "threadbear.highlights" section of the pane
+    And I click the highlight "copy-review.md"
+    Then the "threadbear.highlights" section draws "preview copy-review.md"
+    And the "threadbear.files" section draws "files"

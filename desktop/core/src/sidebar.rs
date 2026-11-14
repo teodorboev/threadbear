@@ -199,10 +199,15 @@ pub fn place_tip(t: &ThreadSummary) -> String {
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 struct StartedBy {
+    #[serde(default, deserialize_with = "crate::wire::field")]
     kind: String,
+    #[serde(default, deserialize_with = "crate::wire::field")]
     label: String,
+    #[serde(default, deserialize_with = "crate::wire::field")]
     icon: Option<String>,
+    #[serde(default, deserialize_with = "crate::wire::field")]
     thread_title: Option<String>,
+    #[serde(default, deserialize_with = "crate::wire::field")]
     why: Option<String>,
 }
 
@@ -215,7 +220,7 @@ pub struct Byline {
 
 pub fn byline(t: &ThreadSummary) -> Option<Byline> {
     let started: StartedBy = match (&t.started_by, &t.schedule) {
-        (Some(v), _) => serde_json::from_value(v.clone()).ok()?,
+        (Some(v), _) => crate::wire::read(v.clone())?,
         (None, Some(_)) => StartedBy { kind: "schedule".into(), label: "Schedule".into(), ..Default::default() },
         (None, None) => return None,
     };
@@ -419,16 +424,22 @@ pub const WAKE_PLACEHOLDER: &str = "at the weekend, in a few weeks, next time I 
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(default)]
 struct WakeWhen {
+    #[serde(default, deserialize_with = "crate::wire::field")]
     said: String,
+    #[serde(default, deserialize_with = "crate::wire::field")]
     topic: Option<String>,
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pending: bool,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(default)]
 struct WaitingOn {
+    #[serde(default, deserialize_with = "crate::wire::field")]
     title: String,
+    #[serde(default, deserialize_with = "crate::wire::field")]
     until: Option<String>,
+    #[serde(default, deserialize_with = "crate::wire::field")]
     done: bool,
 }
 
@@ -447,7 +458,7 @@ fn wake_time(t: &ThreadSummary) -> Option<i64> {
 /// with the rest (`WakeWords.row`): a topic, or Thinking… while the runner
 /// works out when. Nil for one hibernated the ordinary way.
 pub fn wake_row<Tz: TimeZone>(t: &ThreadSummary, now: &DateTime<Tz>) -> Option<(String, String)> {
-    let waiting: Vec<WaitingOn> = t.waiting_on.iter().flatten().filter_map(|v| serde_json::from_value(v.clone()).ok()).collect();
+    let waiting: Vec<WaitingOn> = t.waiting_on.iter().flatten().filter_map(|v| crate::wire::read(v.clone())).collect();
     let left: Vec<&WaitingOn> = waiting.iter().filter(|w| !w.done).collect();
     if let Some(first) = left.first() {
         let names = if left.len() == 1 { format!("\"{}\"", first.title) } else { format!("\"{}\" and {} more", first.title, left.len() - 1) };
@@ -463,7 +474,7 @@ pub fn wake_row<Tz: TimeZone>(t: &ThreadSummary, now: &DateTime<Tz>) -> Option<(
         }
         return Some((format!("Waiting on {names}"), format!("{tip}.")));
     }
-    let wake: WakeWhen = serde_json::from_value(t.wake_when.clone()?).ok()?;
+    let wake: WakeWhen = crate::wire::read(t.wake_when.clone()?)?;
     if wake.pending {
         return Some(("Thinking…".into(), format!("Working out when from \"{}\"", wake.said)));
     }
@@ -520,6 +531,7 @@ pub enum TrailingKind {
 
 /// What a row says at its right end (`ThreadRowView.trailing`). `kind` picks
 /// the style; `tip` is the tooltip when it has one.
+#[derive(Clone, Debug, PartialEq)]
 pub struct Trailing {
     pub text: String,
     pub kind: TrailingKind,
@@ -670,20 +682,33 @@ pub fn snooze_date<Tz: TimeZone>(preset_id: &str, now: &DateTime<Tz>) -> i64 {
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Subagent {
+    #[serde(default, deserialize_with = "crate::wire::id")]
     pub id: String,
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub parent_id: Option<String>,
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub description: String,
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub agent_type: Option<String>,
     /// The model it runs on, from its own replies: "claude-opus-5-5".
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub model: Option<String>,
     /// Its effort level, once the runner has read its transcript.
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub effort: Option<String>,
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub status: String,
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub background: bool,
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub activity: Option<String>,
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub summary: Option<String>,
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub tool_uses: Option<i64>,
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub started_at: String,
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub ended_at: Option<String>,
 }
 
@@ -701,7 +726,7 @@ impl Subagent {
 
 /// The thread's sub-agents, read leniently.
 pub fn subagents(t: &ThreadSummary) -> Vec<Subagent> {
-    t.subagents.iter().flatten().filter_map(|v| serde_json::from_value(v.clone()).ok()).collect()
+    t.subagents.iter().flatten().filter_map(|v| crate::wire::read(v.clone())).collect()
 }
 
 /// A sub-agent's row under its thread: 0 under the thread, 1 under another

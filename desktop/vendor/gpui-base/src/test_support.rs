@@ -28,6 +28,9 @@ pub struct ElementSnapshot {
     expanded: Option<bool>,
     value: Option<SharedString>,
     bounds: Bounds<Pixels>,
+    // The part of `bounds` left after the window and every enclosing clip
+    // (a scroll view's viewport), empty while not visible. Threadbear's.
+    visible_bounds: Bounds<Pixels>,
     visible: bool,
     focused: Option<bool>,
     focus_action: bool,
@@ -58,6 +61,7 @@ impl fmt::Debug for ElementSnapshot {
             .field("expanded", &self.expanded)
             .field("value", &self.value)
             .field("bounds", &self.bounds)
+            .field("visible_bounds", &self.visible_bounds)
             .field("visible", &self.visible)
             .field("focused", focused)
             .field("focus_action", &self.focus_action)
@@ -98,6 +102,19 @@ impl ElementSnapshot {
     }
     pub fn visible(&self) -> bool {
         self.visible
+    }
+    /// The part of `bounds` that was drawn: what's left inside the window
+    /// and every clip around it, such as a scroll view's viewport. Empty
+    /// (zero size) when the element isn't visible. A scripted click should
+    /// aim inside this, not at the middle of `bounds`, which for an element
+    /// scrolled partly out of its viewport can be over a neighbour.
+    pub fn visible_bounds(&self) -> Bounds<Pixels> {
+        self.visible_bounds
+    }
+    /// Where a scripted click lands on this element: the middle of what was
+    /// drawn of it, or `None` when none of it shows.
+    pub fn click_point(&self) -> Option<gpui::Point<Pixels>> {
+        self.visible.then(|| self.visible_bounds.center())
     }
     /// Whether the tracked focus scope contains the current keyboard focus.
     /// For a component with an explicit semantic owner, this is the owner's
@@ -210,6 +227,7 @@ impl Registration {
         ElementSnapshot {
             path: facts.path.clone(),
             bounds: facts.bounds,
+            visible_bounds: facts.visible_bounds,
             visible: facts.visible,
             role: semantics.role,
             checked: semantics.checked,
@@ -497,6 +515,7 @@ impl<E: Element<PrepaintState = Option<Hitbox>> + InteractiveElement> Element fo
             expanded: node.is_expanded(),
             value: node.value().map(|value| value.to_owned().into()),
             bounds,
+            visible_bounds: Bounds::default(),
             visible: false,
             focused: None,
             focus_action: node.supports_action(gpui::accesskit::Action::Focus),
@@ -566,6 +585,11 @@ impl<E: Element<PrepaintState = Option<Hitbox>> + InteractiveElement> Element fo
                 && style.opacity.unwrap_or(1.) > 0.
                 && clipped.size.width > px(0.)
                 && clipped.size.height > px(0.);
+            facts.visible_bounds = if facts.visible {
+                clipped
+            } else {
+                Bounds::default()
+            };
             facts.focused = self
                 .focus
                 .as_ref()

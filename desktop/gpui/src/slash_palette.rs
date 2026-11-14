@@ -122,6 +122,7 @@ struct PaletteView {
     query: String,
     recent: Vec<String>,
     provider: String,
+    cli_name: String,
     /// `paletteCurrent`: what /model and /effort would change, as it is now.
     current: HashMap<String, String>,
     /// Its command files are this Mac's to open only on this Mac's threads.
@@ -130,6 +131,16 @@ struct PaletteView {
     /// Typed partway through a message: only the skills the agent can run
     /// there are listed, and a pick goes into the words (Insert), never sent.
     mid_message: bool,
+}
+
+impl PaletteView {
+    fn category_title(&self, category: slash::Category) -> String {
+        if category == slash::Category::Cli { self.cli_name.clone() } else { category.title(&self.provider) }
+    }
+
+    fn category_tip(&self, category: slash::Category) -> String {
+        if category == slash::Category::Cli { format!("{}'s own commands", self.cli_name) } else { category.tip(&self.provider) }
+    }
 }
 
 impl Composer {
@@ -271,7 +282,8 @@ impl Composer {
             }
         }
         let can_open_files = data.away.is_none();
-        PaletteView { all, loading, query, recent, provider, current, can_open_files, home: std::env::var("HOME").unwrap_or_default(), mid_message }
+        let cli_name = data.logins.cli_name(&provider);
+        PaletteView { all, loading, query, recent, provider, cli_name, current, can_open_files, home: std::env::var("HOME").unwrap_or_default(), mid_message }
     }
 
     /// The palette's layer over the box, or None while it's closed.
@@ -362,15 +374,15 @@ impl Composer {
         let mut column = v_flex().p(px(8.)).gap(px(2.));
         for (category, count) in counts {
             let on = self.palette.category == category;
-            let tip: SharedString = category.tip(&view.provider).into();
-            let title = category.title(&view.provider);
+            let tip: SharedString = view.category_tip(category).into();
+            let title = view.category_title(category);
             let (fg, muted) = (cx.theme().foreground, cx.theme().muted_foreground);
             let hover = style::primary_opacity(cx, 0.05);
             column = column.child(
                 h_flex()
                     .id(SharedString::from(format!("slash-cat-{title}")))
                     .test_support()
-                    .aria_label(tip.clone())
+                    .role(Role::ListItem).aria_label(tip.clone())
                     .justify_between()
                     .gap(px(6.))
                     .px(px(10.))
@@ -430,7 +442,7 @@ impl Composer {
         div()
             .id(SharedString::from(format!("slash-row-{name}")))
             .test_support()
-            .aria_label(tip.clone())
+            .role(Role::ListItem).aria_label(tip.clone())
             .w_full()
             .px(px(14.))
             .py(px(6.))
@@ -471,7 +483,7 @@ impl Composer {
         if let Some(aliases) = command.aliases.as_ref().filter(|a| !a.is_empty()) {
             words = words.child(div().text_size(px(size::LABEL)).text_color(style::secondary_text(cx)).child(format!("Also {}", aliases.iter().map(|a| format!("/{a}")).collect::<Vec<_>>().join(", "))));
         }
-        let origin = v_flex().gap(px(3.)).child(div().text_size(px(size::LABEL)).text_color(style::tertiary_label(cx)).child(slash::origin(command, &view.provider))).when_some(command.path.clone(), |s, path| {
+        let origin = v_flex().gap(px(3.)).child(div().text_size(px(size::LABEL)).text_color(style::tertiary_label(cx)).child(slash::origin_named(command, &view.cli_name))).when_some(command.path.clone(), |s, path| {
             s.child(div().text_size(px(size::LABEL - 1.)).font_family(cx.theme().mono_font_family.clone()).text_color(style::tertiary_label(cx)).child(slash::short_path(&path, &view.home)))
         });
         words = words.child(origin);
@@ -530,7 +542,7 @@ impl Composer {
         let query = view.query.clone();
         let matches = slash::matches(&view.all, &query, self.palette.category, &view.recent);
         let picked = slash::picked(&matches, &self.palette).cloned();
-        let categories: Vec<Value> = slash::counts(&view.all, &query, &view.recent).into_iter().map(|(c, n)| json!({ "title": c.title(&view.provider), "count": n })).collect();
+        let categories: Vec<Value> = slash::counts(&view.all, &query, &view.recent).into_iter().map(|(c, n)| json!({ "title": view.category_title(c), "count": n })).collect();
         let note = if view.loading { Some("Getting this thread's commands…".to_owned()) } else if matches.is_empty() { Some(if query.is_empty() { "Nothing here yet.".to_owned() } else { format!("No command matches /{query}. Send it and it goes to the agent as words.") }) } else { None };
         let detail = picked.as_ref().map(|c| {
             let mut buttons = if view.mid_message { vec!["Insert"] } else { vec!["Run", "Add details"] };
@@ -543,14 +555,14 @@ impl Composer {
                 "description": c.description.clone().filter(|d| !d.is_empty()),
                 "now": view.current.get(&c.name),
                 "also": c.aliases.as_ref().filter(|a| !a.is_empty()).map(|a| format!("Also {}", a.iter().map(|x| format!("/{x}")).collect::<Vec<_>>().join(", "))),
-                "origin": slash::origin(c, &view.provider),
+                "origin": slash::origin_named(c, &view.cli_name),
                 "path": c.path.as_ref().map(|p| slash::short_path(p, &view.home)),
                 "buttons": buttons,
             })
         });
         json!({
             "query": query,
-            "category": self.palette.category.title(&view.provider),
+            "category": view.category_title(self.palette.category),
             "categories": categories,
             "commands": matches.iter().map(|c| format!("/{}", c.name)).collect::<Vec<_>>(),
             "picked": picked.map(|c| format!("/{}", c.name)),
@@ -574,7 +586,7 @@ fn palette_button(title: &'static str, tip: String, cx: &App, on_click: impl Fn(
     div()
         .id(SharedString::from(format!("slash-button-{title}")))
         .test_support()
-        .aria_label(tip)
+        .role(Role::Button).aria_label(tip)
         .px(px(10.))
         .py(px(4.))
         .rounded(px(6.))
@@ -602,6 +614,6 @@ fn list_natural_width(commands: &[SlashCommand]) -> f64 {
 
 /// `SlashPaletteView.categoriesWidth`: the longest title beside its count.
 fn categories_natural_width(view: &PaletteView) -> f64 {
-    let longest = slash::counts(&view.all, "", &view.recent).iter().map(|(c, n)| text_width(&c.title(&view.provider)) + text_width(&n.to_string())).fold(0., f64::max);
+    let longest = slash::counts(&view.all, "", &view.recent).iter().map(|(c, n)| text_width(&view.category_title(*c)) + text_width(&n.to_string())).fold(0., f64::max);
     longest + 10. * 2. + 8. * 2. + 14.
 }

@@ -5,9 +5,9 @@ import ThreadbearCore
 /// Their sidebar rows come from this Mac's runner, which reads them from
 /// the backend, and sit in `threads` beside this Mac's own, marked with
 /// `runnerId`, so the sidebar, the header and the composer take them as
-/// they are. Opening one connects to its own runner, and every request
-/// about it goes there (`client(for:)`). The connection closes again a
-/// minute after none of that runner's threads is on screen.
+/// they are. Every request about one goes through this Mac's runner,
+/// which passes it on through Convex (docs/protocol.md, "Other runners'
+/// threads through the backend"): the machines never connect to each other.
 extension AppModel {
     // MARK: The list
 
@@ -35,24 +35,33 @@ extension AppModel {
         applyDefaultRunner()
     }
 
-    /// Puts the table's rows in `threads`, except where that runner's own
-    /// connection has given a fuller summary, and lets go of rows that have
+    /// Puts the table's rows in `threads`, and lets go of rows that have
     /// gone from it (deleted there).
     func applyRemoteIndex() {
         var next = threads
         var listed: Set<String> = []
         for summary in remoteIndex.summaries {
-            // Never in place of one of this Mac's own.
-            if let existing = next[summary.id], !existing.isRemote { continue }
+            let waiting = madeRemote.contains(summary.id)
+            if let existing = next[summary.id] {
+                // Never in place of one of this Mac's own, unless it's
+                // moving to the runner that lists it.
+                if !existing.isRemote && !waiting { continue }
+                // While it waits on its move only the runner it's going to
+                // and the one it's leaving speak for it: an old Mac's
+                // lingering row can't take it, and the one it's leaving
+                // putting its row back keeps it that runner's, still locked
+                // with its move (Daybreak 113).
+                if waiting && summary.runnerId != existing.runnerId && summary.runnerId != existing.moving?.to { continue }
+            }
             listed.insert(summary.id)
             madeRemote.remove(summary.id)
-            if liveRemote.contains(summary.id), next[summary.id] != nil { continue }
             next[summary.id] = keepingAskedMove(summary, over: next[summary.id])
         }
-        let gone = next.values.filter { $0.isRemote && !listed.contains($0.id) && !liveRemote.contains($0.id) && !madeRemote.contains($0.id) }.map(\.id)
+        let gone = next.values.filter { $0.isRemote && !listed.contains($0.id) && !madeRemote.contains($0.id) }.map(\.id)
         if next != threads { threads = next }
         // A thread that moved off another runner stays, as its new one's.
-        for id in gone where !movedAway(id) { forget(id) }
+        let leaving = gone.filter { !movedAway($0) }
+        if !leaving.isEmpty { forgetUnlessHere(leaving) }
         threadCountMayHaveChanged()
     }
 
@@ -65,14 +74,14 @@ extension AppModel {
     /// (Mike, 6 Nov, on a Hetzner thread). So while it's open here they
     /// come from the card it's showing, in the relay's seqs like the card.
     func withRelayCard(_ summary: ThreadSummary) -> ThreadSummary {
-        guard summary.isRemote, !directRemoteLink else { return summary }
+        guard summary.isRemote else { return summary }
         return Decisions.withCard(summary, sessions[summary.id]?.openCard)
     }
 
     /// A relayed thread's card came or went (ThreadSession.syncOpenCard).
     /// Any summary stored over it gets the card too (`threads`' didSet).
     func relayCardChanged(_ threadId: String) {
-        guard viaRelay(threadId), let thread = threads[threadId] else { return }
+        guard isRemote(threadId), let thread = threads[threadId] else { return }
         let next = withRelayCard(thread)
         if next != thread { threads[threadId] = next }
     }
@@ -149,18 +158,9 @@ extension AppModel {
 
     func isRemote(_ threadId: String) -> Bool { threads[threadId]?.isRemote == true }
 
-    /// Another runner's thread reached through this Mac's runner and Convex
-    /// (the default), not a connection of its own.
-    func viaRelay(_ threadId: String) -> Bool { isRemote(threadId) && !directRemoteLink }
-
-    /// Another runner's thread on a connection of its own (the direct link).
-    func viaDirectLink(_ threadId: String) -> Bool { isRemote(threadId) && directRemoteLink }
-
-    func route(_ threadId: String) -> ThreadRoute { ThreadRoute.of(threads[threadId], runners: remoteRunners) }
-
     /// The logins a thread's pickers offer: its runner's. This Mac's for its
-    /// own threads; another runner's once its connection has said hello,
-    /// nil until then (the composer shows just that Mac's name). A new
+    /// own threads; another runner's once Convex has given them
+    /// (`loadRelayLogins`), nil until then (the composer shows just that Mac's name). A new
     /// thread's are those of the runner it's for (`newThreadLogins`).
     func logins(for thread: ThreadSummary?) -> RunnerLogins? {
         guard let thread else { return newThreadLogins }
@@ -194,18 +194,6 @@ extension AppModel {
     /// editor draws runners.
     func runnerIcon(of thread: ThreadSummary) -> String { RunnerIcon.symbol(remoteRunner(of: thread)?.icon) }
 
-    /// Why pictures can't go in a message for `thread` (a new thread's
-    /// runner when nil), or nil when they can. A picture is a file this
-    /// Mac's runner imported, so another runner hasn't got it: through
-    /// Convex this Mac's runner uploads it with the message (docs/protocol.md,
-    /// "Other runners' threads through the backend", Pictures), but the
-    /// direct link would hand that runner a path on this Mac. Mike pasted
-    /// one for Hetzner Cloud on 8 Nov and every remote runner refused them.
-    func picturesRefusal(for thread: ThreadSummary?) -> String? {
-        guard directRemoteLink, let name = thread.flatMap(runnerName(of:)) ?? (thread == nil ? newThreadRunner?.name : nil) else { return nil }
-        return "Pictures can't go to \(name) over the direct link yet. Turn off Connect to other machines directly in Settings > Runners to send them through Convex."
-    }
-
     /// "On bruce", and whether it's offline, for a remote row's tooltip.
     func runnerPlace(of thread: ThreadSummary) -> String? {
         guard let name = runnerName(of: thread) else { return nil }
@@ -214,50 +202,24 @@ extension AppModel {
 
     // MARK: Routing
 
-    /// Where a thread's requests go, without connecting: this Mac's runner
-    /// for its own threads (and with no thread), the thread's runner while
-    /// it's connected, else nil.
     /// A tool's output on another runner's thread, from Convex: once for each tool, as
     /// this Mac's runner keeps it, and it arrives as events on the thread.
     func fetchHeldBody(threadId: String, seq: Int) {
-        guard viaRelay(threadId), let client else { return }
+        guard isRemote(threadId), let client else { return }
         Task {
             _ = try? await client.call("threads.heldBody", .object(["threadId": .string(threadId), "seq": .number(Double(seq))]), as: JSONValue.self)
         }
     }
 
-    func client(for threadId: String?) -> RPCClient? {
-        guard let threadId, !viaRelay(threadId) else { return client }
-        return remoteClients.client(for: route(threadId), local: client)
-    }
+    /// Where a thread's requests go: always this Mac's runner, which takes
+    /// another runner's threads through Convex. Nil while it's not connected.
+    func client(for threadId: String?) -> RPCClient? { client }
 
-    /// The same, connecting to the thread's runner if need be. Throws
-    /// `RemoteUnreachable` when it can't be reached from this Mac.
+    /// The same, throwing when this Mac's runner isn't connected. Another
+    /// runner's thread also has its logins asked for, for the pickers.
     func openClient(for threadId: String) async throws -> RPCClient {
-        if viaRelay(threadId) {
-            guard let client else { throw RPCError.disconnected(nil) }
-            if let runnerId = threads[threadId]?.runnerId, remoteLogins[runnerId] == nil { loadRelayLogins(runnerId) }
-            return client
-        }
-        switch route(threadId) {
-        case .local:
-            guard let client else { throw RPCError.disconnected(nil) }
-            return client
-        case .remote(let runner):
-            return try await remoteClients.client(for: runner)
-        case .unknownRunner(let id):
-            throw RemoteUnreachable(runnerId: id, runnerName: "its runner", online: false, reason: .unknownRunner)
-        }
-    }
-
-    /// For something done to a thread from its sidebar row. It needn't be
-    /// open, and another runner's connection only lasts while one of its
-    /// threads is on screen, so this connects if need be. Only a change of
-    /// selection sets off the close, so this has to as well, or a connection
-    /// opened just for this would stay until the next one.
-    func rowClient(for threadId: String) async throws -> RPCClient {
-        let client = try await openClient(for: threadId)
-        if isRemote(threadId) { tidyRemoteClients() }
+        guard let client else { throw RPCError.disconnected(nil) }
+        if let runnerId = threads[threadId]?.runnerId, remoteLogins[runnerId] == nil { loadRelayLogins(runnerId) }
         return client
     }
 
@@ -269,9 +231,10 @@ extension AppModel {
         return "Not connected to the runner, so \(what). It's still in the box."
     }
 
-    /// Opens the thread's runner's connection again for a transcript that's
-    /// still loaded; its subscription comes back with it (`remoteConnected`).
-    /// One that can't says so where the transcript was.
+    /// For a transcript of another runner's thread that's still loaded but
+    /// no longer subscribed: one that can't reach this Mac's runner says so
+    /// where the transcript was. This Mac's runner subscribes it again once
+    /// it's back (AppModel+Connection).
     func reconnectRemote(for threadId: String) {
         Task {
             do {
@@ -282,37 +245,13 @@ extension AppModel {
         }
     }
 
-    /// In the main panel or a panel of its own.
-    func isOnScreen(_ threadId: String) -> Bool {
-        selection == threadId || dock.layout.contains(WindowDock.threadPanel(threadId))
-    }
-
-    /// Closes connections to runners none of whose threads is on screen, a
-    /// minute after the last one went, so going back and forth between
-    /// threads doesn't connect each time.
-    func tidyRemoteClients() {
-        guard !remoteClients.connectedRunners.isEmpty else { return }
-        remoteTidy?.cancel()
-        remoteTidy = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(60))
-            guard let self, !Task.isCancelled else { return }
-            var showing = Set(self.threads.values.filter { self.isOnScreen($0.id) }.compactMap(\.runnerId))
-            // A new thread being written for it needs it too.
-            if let draft = self.newThreadRunnerId { showing.insert(draft) }
-            for id in self.remoteClients.connectedRunners where !showing.contains(id) {
-                AppLog.write("connection", "closing the connection to \(self.remoteName(id)): none of its threads is open")
-                self.remoteClients.close(id)
-            }
-        }
-    }
-
     // MARK: New threads on another runner
 
     /// "Runs on" in the new-thread composer: nil for this Mac. Another
-    /// runner's connection is opened now, so its hello fills the pickers
-    /// with its logins before Mike sends. The folder, login and pool
-    /// picked so far were this Mac's, so they go back to that runner's
-    /// defaults (and this Mac's when he comes back to it).
+    /// runner's logins are asked for now, so they fill the pickers before
+    /// Mike sends. The folder, login and pool picked so far were this
+    /// Mac's, so they go back to that runner's defaults (and this Mac's
+    /// when he comes back to it).
     func chooseNewThreadRunner(_ runnerId: String?, byMike: Bool = true) {
         if byMike { newThreadRunnerPicked = true }
         guard runnerId != newThreadRunnerId else { return }
@@ -325,19 +264,8 @@ extension AppModel {
         newThreadAccount = nil
         newThreadPool = nil
         newThreadProvider = nil
-        guard let runnerId else { return tidyRemoteClients() }
-        guard directRemoteLink else { return loadRelayLogins(runnerId) }
-        Task {
-            do {
-                guard let runner = remoteRunners.first(where: { $0.id == runnerId }) else {
-                    throw RemoteUnreachable(runnerId: runnerId, runnerName: "that Mac", online: false, reason: .unknownRunner)
-                }
-                _ = try await remoteClients.client(for: runner)
-            } catch {
-                guard newThreadRunnerId == runnerId else { return }
-                newThreadRunnerProblem = Self.remoteFileReason(error)
-            }
-        }
+        guard let runnerId else { return }
+        loadRelayLogins(runnerId)
     }
 
     /// Makes `runnerId` (nil: this Mac) the default, and the runner the
@@ -348,8 +276,8 @@ extension AppModel {
         applyDefaultRunner()
     }
 
-    /// The default runner, if it can take a new thread now (listed, online,
-    /// and paired with this Mac), else this Mac. Nothing happens once Mike
+    /// The default runner, if it can take a new thread now (listed and
+    /// online), else this Mac. Nothing happens once Mike
     /// has picked one for this draft himself.
     func applyDefaultRunner() {
         guard !newThreadRunnerPicked else { return }
@@ -359,7 +287,7 @@ extension AppModel {
     /// The default is another runner that a new thread can go to now.
     var defaultRunnerReady: Bool {
         guard let id = defaultRunnerId, let runner = remoteRunners.first(where: { $0.id == id }) else { return false }
-        return runner.online && (!directRemoteLink || runner.tokenFile != nil)
+        return runner.online
     }
 
     /// The runner a new thread will be made on, when it isn't this Mac.
@@ -375,8 +303,8 @@ extension AppModel {
         return ([defaultFolder] + recent).filter { !$0.isEmpty && seen.insert($0).inserted }
     }
 
-    /// Makes the new thread on that runner, over its connection, with what
-    /// the composer's chips say (that runner's logins, a folder on that
+    /// Makes the new thread on that runner, through this Mac's runner and
+    /// Convex, with what the composer's chips say (that runner's logins, a folder on that
     /// Mac). It's listed as that runner's from the start, so its calls go
     /// there, and opened as a new thread here is. If the runner can't be
     /// reached the draft stays and the banner says why.
@@ -388,22 +316,15 @@ extension AppModel {
         Task {
             defer { creatingThread = false }
             do {
-                guard let runner = remoteRunners.first(where: { $0.id == runnerId }) else {
+                guard remoteRunners.contains(where: { $0.id == runnerId }) else {
                     throw RemoteUnreachable(runnerId: runnerId, runnerName: name, online: false, reason: .unknownRunner)
                 }
-                // Through Convex this Mac's runner uploads the pictures; the
-                // direct link never gets here with any (picturesRefusal).
+                // Through this Mac's runner, as a command for that one; it
+                // uploads the pictures with it.
                 var request = newThreadRequest(text: text, images: images)
-                let made0: ThreadSummary
-                if directRemoteLink {
-                    made0 = try await remoteClients.client(for: runner).createThread(request)
-                } else {
-                    // Through this Mac's runner, as a command for that one.
-                    guard let client else { throw RPCError.disconnected(nil) }
-                    request.runnerId = runnerId
-                    made0 = try await client.createThread(request)
-                }
-                var made = made0
+                guard let client else { throw RPCError.disconnected(nil) }
+                request.runnerId = runnerId
+                var made = try await client.createThread(request)
                 if drafts["new"] == draft { drafts["new"] = nil }
                 // The runner, folder, a picked mode and picks were for
                 // this thread; the next starts on the defaults again,
@@ -417,9 +338,8 @@ extension AppModel {
                 newThreadPool = nil
                 newThreadProvider = nil
                 made.runnerId = runnerId
-                // Its own connection's summaries keep a direct one fresh; a
-                // relayed one waits for the sidebar table's row.
-                if directRemoteLink { liveRemote.insert(made.id) } else { madeRemote.insert(made.id) }
+                // Kept until the sidebar table lists it.
+                madeRemote.insert(made.id)
                 threads[made.id] = made
                 showStartedThread(made.id)
                 applyDefaultRunner()
@@ -438,13 +358,12 @@ extension AppModel {
     // MARK: Through Convex
 
     /// That runner's logins for the pickers, from Convex through this Mac's
-    /// runner, when the direct link isn't there to say hello.
+    /// runner.
     func loadRelayLogins(_ runnerId: String) {
         guard let client else { return }
         Task {
             do {
                 let logins = try await client.remoteLogins(runnerId: runnerId)
-                guard !directRemoteLink else { return }
                 remoteLogins[runnerId] = logins
                 if newThreadRunnerId == runnerId { newThreadRunnerProblem = nil }
             } catch {
@@ -454,123 +373,7 @@ extension AppModel {
         }
     }
 
-    /// The direct link went on or off: other runners' open threads read
-    /// afresh the other way, and connections of their own close.
-    func switchedRemoteLink() {
-        AppLog.write("connection", directRemoteLink ? "other machines' threads: direct" : "other machines' threads: through Convex")
-        let remote = openSessions.filter { isRemote($0.threadId) }
-        // They were this Mac's runner's to watch: tell it they're not. Direct
-        // ones go with their connections.
-        if directRemoteLink, let client {
-            for session in remote where session.subscribed {
-                let threadId = session.threadId
-                Task { try? await client.unsubscribe(threadId: threadId) }
-            }
-        }
-        remoteClients.closeAll()
-        liveRemote.removeAll()
-        remoteLogins.removeAll()
-        applyRemoteIndex()
-        let width = transcript.width > 0 ? transcript.width : transcript.currentTableWidth
-        for session in remote {
-            if isOnScreen(session.threadId) { session.reload(width: width) } else { dropSession(session.threadId) }
-        }
-        if let runnerId = newThreadRunnerId {
-            newThreadRunnerId = nil
-            chooseNewThreadRunner(runnerId, byMike: newThreadRunnerPicked)
-        }
-    }
-
-    // MARK: Connections
-
-    func wireRemoteClients() {
-        remoteClients.onNotification = { [weak self] runnerId, notification in self?.receiveRemote(notification, from: runnerId) }
-        remoteClients.onConnected = { [weak self] runnerId, client in self?.remoteConnected(runnerId, client) }
-        remoteClients.onClosed = { [weak self] runnerId in self?.remoteClosed(runnerId) }
-        remoteClients.onLog = { AppLog.write("remote", $0) }
-    }
+    // MARK: Names
 
     private func remoteName(_ runnerId: String) -> String { remoteRunners.first { $0.id == runnerId }?.name ?? runnerId }
-
-    /// What that runner says about its own threads reaches them as this
-    /// runner's does about its; the rest (its accounts, schedules,
-    /// settings) is that Mac's business.
-    private func receiveRemote(_ notification: RPCNotification, from runnerId: String) {
-        switch notification {
-        case .threadUpdated(var thread):
-            // Never in place of one of this Mac's own.
-            if let existing = threads[thread.id], existing.runnerId != runnerId { return }
-            thread.runnerId = runnerId
-            liveRemote.insert(thread.id)
-            receive(thread)
-        case .threadEvent(let threadId, let event):
-            guard threads[threadId]?.runnerId == runnerId else { return }
-            loadedSession(threadId)?.receive(event)
-        case .threadDeleted(let threadId):
-            guard threads[threadId]?.runnerId == runnerId else { return }
-            liveRemote.remove(threadId)
-            if !movedAway(threadId) { forget(threadId) }
-        // Its own logins, for the pickers on its threads.
-        case .accountsUpdated(let list):
-            remoteLogins[runnerId]?.accounts = list
-        case .poolsUpdated(let list):
-            remoteLogins[runnerId]?.pools = list
-        default:
-            break
-        }
-    }
-
-    private func remoteConnected(_ runnerId: String, _ client: RPCClient) {
-        AppLog.write("connection", "connected to \(remoteName(runnerId))")
-        if newThreadRunnerId == runnerId { newThreadRunnerProblem = nil }
-        Task {
-            // Its logins (accounts with their models, pools, defaults) fill
-            // the composer's pickers on its threads; its accounts.updated
-            // and pools.updated keep them current.
-            if let hello = try? await client.hello(version: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev"), remoteClients.connected(runnerId) === client {
-                remoteLogins[runnerId] = RunnerLogins(hello: hello)
-            }
-            // Its own summaries are fuller than the table's rows (seqs, the
-            // open card, the permission), and its thread.updated keeps
-            // them fresh while it's connected.
-            if let list = try? await client.listThreads(include: [.inbox, .snoozed]), remoteClients.connected(runnerId) === client {
-                var next = threads
-                for var thread in list {
-                    if let existing = next[thread.id], existing.runnerId != runnerId { continue }
-                    thread.runnerId = runnerId
-                    liveRemote.insert(thread.id)
-                    next[thread.id] = thread
-                }
-                if next != threads { threads = next }
-                // The table's row has no panelRequest, so one waiting on the
-                // thread he already has open only turns up here.
-                if let selection, threads[selection]?.runnerId == runnerId, threads[selection]?.panelRequest != nil { servePanelRequest() }
-            }
-            // A transcript still loaded from before picks up where it was.
-            for session in openSessions where session.state == .loaded && threads[session.threadId]?.runnerId == runnerId {
-                await session.subscribe()
-            }
-        }
-    }
-
-    private func remoteClosed(_ runnerId: String) {
-        AppLog.write("connection", "the connection to \(remoteName(runnerId)) ended")
-        for thread in threads.values where thread.runnerId == runnerId { liveRemote.remove(thread.id) }
-        for session in openSessions where threads[session.threadId]?.runnerId == runnerId {
-            guard isOnScreen(session.threadId) else {
-                // Read afresh when it's next opened.
-                dropSession(session.threadId)
-                continue
-            }
-            session.connectionLost()
-            // A Mac waking up or a blip on the tailnet: one more go, then
-            // it says it can't reach it.
-            Task { [weak self, weak session] in
-                try? await Task.sleep(for: .seconds(2))
-                guard let self, let session, self.loadedSession(session.threadId) === session, !session.subscribed else { return }
-                self.reconnectRemote(for: session.threadId)
-            }
-        }
-        applyRemoteIndex()
-    }
 }

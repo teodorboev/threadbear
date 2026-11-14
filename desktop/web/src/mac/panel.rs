@@ -37,7 +37,7 @@ use std::sync::{Arc, Mutex};
 
 /// What the page's handlers share with it. They run on Chromium's UI
 /// thread, which is the app's main thread here, but CEF wants them Send.
-struct Shared {
+pub(crate) struct Shared {
     /// Scheme, host and port of the panel's own page.
     home: Mutex<String>,
     /// The address the app loaded in the panel: the only page that isn't a
@@ -61,6 +61,10 @@ struct Shared {
     /// A page to load once DevTools has answered this message: the Convex
     /// dashboard, once its credentials script is sure to run in it.
     load_after: Mutex<Option<(i32, String)>>,
+    /// DevTools messages that must succeed before `load_after` loads: a
+    /// local page's guards. One failing and the page never loads, rather
+    /// than running its scripts without them.
+    required: Mutex<Vec<i32>>,
     gone: AtomicBool,
 }
 
@@ -89,7 +93,7 @@ impl Shared {
         }
     }
 
-    fn fail_calls(&self, why: &str) {
+    pub(crate) fn fail_calls(&self, why: &str) {
         self.gone.store(true, Ordering::Release);
         let calls: Vec<_> = self.calls.lock().map(|mut c| c.drain().map(|(_, tx)| tx).collect()).unwrap_or_default();
         for tx in calls {
@@ -127,6 +131,10 @@ pub struct PanelPage {
     next: AtomicI32,
     /// Its DevTools answers' observer, let go of before the page closes.
     observer: Option<Registration>,
+    /// A local page running its scripts: nothing copies out of it, as a
+    /// script could have put what it read in the selection or the copy
+    /// (the Swift app's SealedPreviewWebView refuses copy: the same way).
+    no_copy: bool,
 }
 
 impl PanelPage {
@@ -155,30 +163,69 @@ impl PanelPage {
             events: Mutex::new(Some(tx)),
             calls: Mutex::new(HashMap::new()),
             load_after: Mutex::new(None),
+            required: Mutex::new(Vec::new()),
             gone: AtomicBool::new(false),
         });
         // Alloy (no Chrome toolbar or menus), a native child view.
         let window_info = WindowInfo { runtime_style: RuntimeStyle::ALLOY, ..WindowInfo::default() }.set_as_child(parent, &Rect { x: 0, y: 0, width: 1, height: 1 });
-        // A page reads the clipboard only when Mike pastes, as in a browser.
-        let settings = BrowserSettings { javascript_access_clipboard: State::DISABLED, ..Default::default() };
-        let mut client = PanelClient::new(
-            PanelRequests::new(shared.clone()),
-            PanelLife::new(shared.clone()),
-            PanelLoads::new(shared.clone()),
-            PanelDisplay::new(shared.clone()),
-            PanelMenu::new(),
-            super::sealed::NoDownloads::new(),
-        );
+        let (settings, mut client) = match &kind {
+            // A local page: the sealed rules, its scripts off unless Mike
+            // chose Run them (mac/preview.rs, preview_rules.rs).
+            Kind::Preview(preview) => {
+                let scripts = if preview.scripts { State::ENABLED } else { State::DISABLED };
+                let settings = BrowserSettings {
+                    javascript: scripts,
+                    javascript_access_clipboard: State::DISABLED,
+                    javascript_dom_paste: State::DISABLED,
+                    javascript_close_windows: State::DISABLED,
+                    local_storage: State::DISABLED,
+                    databases_deprecated: State::DISABLED,
+                    ..Default::default()
+                };
+                let client = PreviewClient::new(
+                    super::preview::PreviewRequests::new(preview.clone()),
+                    super::preview::PreviewLife::new(shared.clone()),
+                    PanelLoads::new(shared.clone()),
+                    PanelDisplay::new(shared.clone()),
+                    super::sealed::NoMenu::new(),
+                    super::sealed::NoDownloads::new(),
+                    super::preview::NoDrops::new(),
+                );
+                (settings, client)
+            }
+            _ => {
+                // A page reads the clipboard only when Mike pastes, as in a browser.
+                let settings = BrowserSettings { javascript_access_clipboard: State::DISABLED, ..Default::default() };
+                let client = PanelClient::new(
+                    PanelRequests::new(shared.clone()),
+                    PanelLife::new(shared.clone()),
+                    PanelLoads::new(shared.clone()),
+                    PanelDisplay::new(shared.clone()),
+                    PanelMenu::new(),
+                    super::sealed::NoDownloads::new(),
+                );
+                (settings, client)
+            }
+        };
         // The Convex dashboard starts blank, so its credentials answer is in
-        // place before its page's first script runs.
+        // place before its page's first script runs; so does a local page
+        // whose scripts run, so its guards are in before them.
         let first = match &kind {
             Kind::Patch => url.to_owned(),
-            Kind::Convex { .. } => "about:blank".to_owned(),
+            Kind::Preview(preview) if !preview.scripts => preview.page_url(),
+            Kind::Convex { .. } | Kind::Preview(_) => "about:blank".to_owned(),
         };
         let mut context = match &kind {
             Kind::Patch => request_context_get_global_context(),
             Kind::Convex { .. } => convex_context(),
+            Kind::Preview(_) => super::sealed::context(),
         };
+        if context.is_none() && matches!(kind, Kind::Preview(_)) {
+            return Err("the sealed pages' context isn't there".into());
+        }
+        if matches!(&kind, Kind::Preview(p) if p.scripts) && !super::sealed::all_rules() {
+            return Err("the web runtime couldn't keep a page with scripts off the network here, so it isn't run".into());
+        }
         let browser = browser_host_create_browser_sync(Some(&window_info), Some(&mut client), Some(&CefString::from(first.as_str())), Some(&settings), None, context.as_mut())
             .ok_or("Chromium didn't make the page")?;
         let host = browser.host().ok_or("the page has no host")?;
@@ -200,7 +247,27 @@ impl PanelPage {
             shared,
             next: AtomicI32::new(1),
             observer: registration,
+            no_copy: matches!(&kind, Kind::Preview(p) if p.scripts),
         };
+        if let Kind::Preview(preview) = &kind {
+            if preview.scripts {
+                // Before the page's own scripts, in every frame: the clipboard
+                // guard in its world, the copy and drag guard in one of its
+                // own; the page loads once DevTools has both, as the Convex
+                // dashboard does.
+                drop(page.devtools("Page.enable", json!({})));
+                let first = page.next.load(Ordering::Relaxed);
+                if let Ok(mut required) = page.shared.required.lock() {
+                    required.extend([first, first + 1]);
+                }
+                if let Ok(mut after) = page.shared.load_after.lock() {
+                    *after = Some((first + 1, preview.page_url()));
+                }
+                drop(page.devtools("Page.addScriptToEvaluateOnNewDocument", json!({ "source": crate::preview_rules::CLIPBOARD_GUARD })));
+                drop(page.devtools("Page.addScriptToEvaluateOnNewDocument", json!({ "source": crate::preview_rules::COPY_GUARD, "worldName": "threadbear-guard" })));
+            }
+            return Ok((page, rx));
+        }
         if let Kind::Convex { credentials_script } = kind {
             // In every frame from the start, as a WKUserScript at document
             // start; the script itself only answers on the dashboard's origin
@@ -366,6 +433,9 @@ impl PanelPage {
     /// One of the page's own Edit commands, for ⌘C and the like while it has
     /// the keyboard: the app's key bindings would otherwise take them.
     pub fn edit(&self, command: &str) {
+        if self.no_copy && matches!(command, "copy" | "cut") {
+            return;
+        }
         let Some(frame) = self.browser.focused_frame().or_else(|| self.browser.main_frame()) else { return };
         match command {
             "copy" => frame.copy(),
@@ -449,6 +519,42 @@ wrap_client! {
         }
         fn download_handler(&self) -> Option<DownloadHandler> {
             Some(self.downloads.clone())
+        }
+    }
+}
+
+wrap_client! {
+    struct PreviewClient {
+        requests: RequestHandler,
+        life: LifeSpanHandler,
+        loads: LoadHandler,
+        display: DisplayHandler,
+        menu: ContextMenuHandler,
+        downloads: DownloadHandler,
+        drags: DragHandler,
+    }
+
+    impl Client {
+        fn request_handler(&self) -> Option<RequestHandler> {
+            Some(self.requests.clone())
+        }
+        fn life_span_handler(&self) -> Option<LifeSpanHandler> {
+            Some(self.life.clone())
+        }
+        fn load_handler(&self) -> Option<LoadHandler> {
+            Some(self.loads.clone())
+        }
+        fn display_handler(&self) -> Option<DisplayHandler> {
+            Some(self.display.clone())
+        }
+        fn context_menu_handler(&self) -> Option<ContextMenuHandler> {
+            Some(self.menu.clone())
+        }
+        fn download_handler(&self) -> Option<DownloadHandler> {
+            Some(self.downloads.clone())
+        }
+        fn drag_handler(&self) -> Option<DragHandler> {
+            Some(self.drags.clone())
         }
     }
 }
@@ -611,6 +717,12 @@ wrap_dev_tools_message_observer! {
             // it events while it's still telling its observers this answer,
             // which Chromium flags ("Check failed: !check_reentrancy"), and
             // the app went down soon after (11 Nov).
+            // A guard that didn't go in: the page it was for never loads.
+            if success != 1 && self.shared.required.lock().is_ok_and(|r| r.contains(&message_id)) {
+                if let Ok(mut after) = self.shared.load_after.lock() {
+                    after.take();
+                }
+            }
             let then = self.shared.load_after.lock().ok().and_then(|mut after| after.take_if(|(id, _)| *id == message_id));
             if let (Some((_, url)), Some(browser)) = (then, browser) {
                 let mut task = LoadLater::new(browser.clone(), url);

@@ -26,9 +26,15 @@ use threadbear_dock::{DockLayout, DockModel, DockView};
 use tokio::sync::mpsc;
 
 pub struct Threadbear {
+    pub(crate) milestone: crate::milestones::Milestones,
     pub(crate) client: Arc<Client>,
     pub(crate) status: Status,
-    pub(crate) threads: HashMap<String, ThreadSummary>,
+    pub(crate) threads: crate::thread_map::ThreadMap,
+    /// Why the thread list couldn't load, under the search box until a
+    /// load works. Only that: it has no Dismiss, so a failed action (a
+    /// rename, archive, move, Continue now on) goes to the error bar
+    /// (`show_error`) instead. One here stuck until the next reconnect
+    /// (Mike, 13 Nov: a Pixel thread's refused login change).
     pub(crate) list_error: Option<String>,
     pub(crate) selected: Option<String>,
     pub(crate) pane: Option<Entity<ThreadPane>>,
@@ -66,10 +72,16 @@ pub struct Threadbear {
     /// The pane sections Hide Panels closed, for Show Panels (`hiddenPanes`).
     pub(crate) hidden_panes: Vec<String>,
     pub(crate) mode: SidebarMode,
+    /// When the activity bar last switched the sidebar's view, for the new
+    /// one to settle in (shell.rs `render_threads_panel`).
+    pub(crate) view_switched: Option<std::time::Instant>,
     pub(crate) history: NavigationHistory<NavPlace>,
     /// shortcuts.json's keys, and the chords bound to them so far.
     pub(crate) shortcuts: ShortcutBindings,
     pub(crate) bound_keys: HashMap<String, shell::Command>,
+    /// Whether Open Anything's keys were bound last time (`apply_shortcuts`):
+    /// its experiment turned on or off binds them again (render).
+    pub(crate) bound_open_anything: bool,
     pub(crate) shortcuts_watch: Option<Task<()>>,
     pub(crate) shortcuts_path: Option<PathBuf>,
     /// What the menu bar says, so it's rebuilt only when that changes.
@@ -89,6 +101,9 @@ pub struct Threadbear {
     /// The Threads button's badge, kept until the app next changes (the same
     /// observer clears it), as working it out sorts every thread.
     pub(crate) inbox_count_cache: std::cell::Cell<Option<usize>>,
+    /// The sections as last worked out, and what they were worked out from
+    /// (`shown_sections`).
+    sections_cache: std::cell::RefCell<Option<SectionsCache>>,
     pub(crate) last_window_title: String,
     pub(crate) archived_note: Option<ArchivedNote>,
     pub(crate) inbox_end_note: Option<InboxEndNote>,
@@ -125,6 +140,11 @@ pub struct Threadbear {
     pub(crate) renaming: Option<String>,
     pub(crate) rename_field: Option<(Entity<InputState>, Subscription)>,
     pub(crate) share_popover: Option<String>,
+    /// ⌘K's box while it's up (open_anything.rs), what it calls Recent,
+    /// and the patch panels showing last time the layout changed.
+    pub(crate) anything: Option<crate::open_anything::OpenAnything>,
+    pub(crate) anything_recent: Vec<String>,
+    pub(crate) anything_panels_shown: std::collections::HashSet<String>,
     pub(crate) share_busy: bool,
     /// Threads whose login, pool ("moving/<id>") or folder
     /// ("movingFolder/<id>") change hasn't landed: those can't be guessed,
@@ -183,9 +203,13 @@ pub struct Threadbear {
     subagent_events: Option<Subscription>,
     /// An agent's show_panel requests shown so far (`panelRequestGate`).
     pub(crate) panel_gate: threadbear_core::panel_requests::Gate,
-    /// Pin requests whose highlights have been fetched once for them, so a
-    /// pin unpinned since opens Highlights rather than fetching for good.
-    pub(crate) pins_fetched: HashSet<String>,
+    /// The open thread's pages handed to Mike, last looked at: the Browser
+    /// pane opens by itself when it changes (agent_browser.rs).
+    pub(crate) browser_handoff_seen: Option<String>,
+    browser_generation: u64,
+    /// The highlights fetch each pin request needs an answer from, so an
+    /// older answer or a failed fetch cannot consume the request.
+    pub(crate) pins_fetched: HashMap<String, u64>,
     /// Why the connection last went, kept while it tries again, so the banner
     /// says what's wrong rather than flicking to "Connecting" on each try
     /// (`connection()`). Cleared when it's back, and by Try again.
@@ -195,6 +219,14 @@ pub struct Threadbear {
     /// (`DROP_GRACE`), and the redraw at its end.
     pub(crate) dropped_at: Option<std::time::Instant>,
     pub(crate) drop_grace_task: Option<Task<()>>,
+    /// When the restart this outage belongs to began, kept from the drop
+    /// until this app sees itself connected again. The client clears its
+    /// own restart as soon as the new runner says hello, a moment before
+    /// that Connected reaches the app; read live in between, the banner saw
+    /// no restart, a runner down past the grace, and said "Can't reach the
+    /// runner." mid-restart (the connection spec, red on all three CI
+    /// systems, 13 Nov).
+    pub(crate) restart_outage: Option<std::time::Instant>,
     /// Start runner is under way (runner_launcher.rs): its button spins.
     pub(crate) starting_runner: bool,
     /// The checkout the runner follows main in (`runner.status`'s
@@ -236,6 +268,9 @@ pub struct Threadbear {
     pub(crate) move_sheet: Option<Entity<crate::move_sheet::MoveSheet>>,
     /// The pane beside the thread: Highlights, previews, Patches, Files (highlights.rs).
     pub(crate) side: Entity<SidePane>,
+    /// A view per pane section the dock has shown, each drawing its own
+    /// section from `side` (side_sections.rs).
+    pub(crate) side_views: HashMap<String, Entity<crate::side_sections::SectionView>>,
     /// The Threads panel's view, made the first time the dock asks for it
     /// (sidebar.rs, `SidebarView`).
     pub(crate) sidebar_view: Option<Entity<crate::sidebar::SidebarView>>,
@@ -248,12 +283,25 @@ pub struct Threadbear {
     pub(crate) swipe_nav: crate::swipe_nav::SwipeNav,
     /// Pages on their way to the Archived and Hibernating headings (archive_flight.rs).
     pub(crate) flight: crate::archive_flight::Flights,
+    /// How the next thread opens, and the new-thread page coming up (open_motion.rs).
+    pub(crate) opening: crate::open_motion::Openings,
+    /// The layer the sidebar's turning arcs are drawn in (spinner.rs).
+    pub(crate) arc_layer: Option<Entity<crate::spinner::ArcLayer>>,
+    /// The first-run tour and the pages' intros (tour.rs).
+    pub(crate) tour: crate::tour::TourState,
+    /// Finish setting up's devices (setup_panel.rs).
+    pub(crate) setup: crate::setup_panel::SetupState,
     _events: Task<()>,
     _subs: Vec<Subscription>,
 }
 
 impl Threadbear {
     pub(crate) fn new(settings: Settings, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let mut settings = settings;
+        if settings.saved.thread_milestone_shown.is_none() && crate::installed::launch().installed && crate::installed::on_real_data() {
+            settings.saved.thread_milestone_shown = crate::swift_import::milestone_shown();
+        }
+        let anything_recent = settings.saved.open_anything_recent.clone().unwrap_or_default();
         // gpui-kit starts in its light theme whatever the system says; follow
         // the system's light or dark, and keep following it when it changes,
         // in the system's own window colours (style.rs). Scroll bars show only
@@ -265,6 +313,8 @@ impl Threadbear {
         // as it changes.
         crate::style::set_appearance(crate::style::Appearance::from_name(settings.saved.appearance.as_deref().unwrap_or("system")), window, cx);
         let appearance = window.observe_window_appearance(|window, cx| {
+            crate::style::refresh_system_accent(cx);
+            crate::style::refresh_system_contrast(cx);
             if crate::style::appearance() == crate::style::Appearance::System {
                 Theme::sync_system_appearance(Some(window), cx);
             }
@@ -284,6 +334,26 @@ impl Threadbear {
         let status = client.status();
         let weak_app = cx.entity().downgrade();
         let side_client = client.clone();
+        // BrowserBear's pages, before the pane that lists them.
+        let browser = crate::agent_browser::install(cx);
+        let watched = cx.entity().downgrade();
+        browser.update(cx, |b, _| {
+            b.watch_pane(move |cx| {
+                let app = watched.upgrade()?;
+                let app = app.read(cx);
+                (app.projects.open.is_none() && app.dock.read(cx).controller.is_showing(crate::agent_browser::BROWSER)).then(|| app.pane_thread().map(|t| t.id))?
+            })
+        });
+        let browser_watch = cx.observe(&browser, |this, browser, cx| {
+            // Only the pages and whether BrowserBear is here are drawn by the
+            // window (the rail); the pane watches the rest itself.
+            let generation = browser.read(cx).generation;
+            if generation != this.browser_generation {
+                this.browser_generation = generation;
+                this.browser_changed(cx);
+                cx.notify();
+            }
+        });
         let side = cx.new(|cx| SidePane::new(weak_app, side_client, window, cx));
         crate::viewer::viewer_handle_global(side.downgrade(), cx);
         crate::open_gate::install(cx.entity().downgrade(), cx);
@@ -308,8 +378,8 @@ impl Threadbear {
         // A reply button's pill presses through here (reply_buttons.rs): the
         // kit draws it inside the reply's text, where there's no app to hand.
         let press_app = app.clone();
-        cx.set_global(crate::reply_buttons::PressHook(Rc::new(move |id: String, window: &mut Window, cx: &mut App| {
-            press_app.update(cx, |this, cx| this.press_reply_button(id, window, cx)).ok();
+        cx.set_global(crate::reply_buttons::PressHook(Rc::new(move |thread: String, id: String, window: &mut Window, cx: &mut App| {
+            press_app.update(cx, |this, cx| this.press_reply_button(thread, id, window, cx)).ok();
         })));
         let dock = cx.new(|_| {
             let mut model = DockModel::new(layout);
@@ -326,7 +396,7 @@ impl Threadbear {
             model
         });
         let content = Rc::new(shell::Panels { app: app.clone() });
-        let options = shell::dock_options(app.clone(), cx);
+        let options = shell::dock_options(app.clone(), &settings, cx);
         let dock_view = {
             let model = dock.clone();
             cx.new(|cx| DockView::new(model, content, options, cx))
@@ -334,14 +404,19 @@ impl Threadbear {
         let frame = cx.observe_window_bounds(window, |this, window, cx| this.window_frame_changed(window, cx));
         // What's typed and not sent is written as the app quits (drafts.rs).
         let quitting = cx.on_app_quit(|this, cx| {
+            // Handed over to the new build (handover.rs): the drafts and the
+            // settings are its to write now, and it's already in place.
+            let handed_over = crate::handover::handed_over();
             // Messages still held for a restarting runner stay held, so the
             // drafts written next can keep them without one also going.
-            this.client.stop_holding();
-            this.save_drafts(cx);
-            // A setting changed in the last moment waits for the throttled
-            // save (`save_settings_soon`), which a quit would otherwise lose.
-            if std::mem::take(&mut this.settings_dirty) {
-                this.settings.save();
+            if !handed_over {
+                this.client.stop_holding();
+                this.save_drafts(cx);
+                // A setting changed in the last moment waits for the throttled
+                // save (`save_settings_soon`), which a quit would otherwise lose.
+                if std::mem::take(&mut this.settings_dirty) {
+                    this.settings.save();
+                }
             }
             // The activity log's last line (activity.rs).
             crate::activity::quit();
@@ -354,10 +429,18 @@ impl Threadbear {
         // front): coming back reads the open one (appBecameActive). The
         // Settings window says so too (`SettingsWindow::new`).
         crate::thread::set_looking(crate::thread::window_key(window), window.is_window_active());
-        let looking = cx.observe_window_activation(window, |this, window, cx| this.looking_changed(crate::thread::window_key(window), window.is_window_active(), cx));
+        let looking = cx.observe_window_activation(window, |this, window, cx| {
+            this.milestone.active = window.is_window_active();
+            cx.notify();
+            this.looking_changed(crate::thread::window_key(window), window.is_window_active(), cx);
+        });
         // A pin an agent asked to show may only be in Highlights once they've
         // been fetched: their coming is a moment to try it again.
-        let side_changed = cx.observe(&side, |this: &mut Threadbear, _, cx| this.serve_panel_request(cx));
+        let side_changed = cx.observe(&side, |this: &mut Threadbear, _, cx| {
+            this.serve_panel_request(cx);
+            // Another thread on show may have a page handed to Mike.
+            this.browser_changed(cx);
+        });
         // Everything the menus say is the app's state, which notifies when it
         // changes (the dock's layout too: `dock_layout_changed`).
         // Its 20-second tick notifies too (SidebarState), so the badge's
@@ -366,6 +449,8 @@ impl Threadbear {
             this.menus_stale = true;
             this.inbox_count_cache.set(None);
             this.projects.pane_cache.take();
+            // A project's page opened anew works out the tab it opens on.
+            this.note_project_visit();
         });
         // Tabs opened beside the main panel for what it showed go when it
         // moves on (thread_panels.rs, `mainContextChanged`).
@@ -382,9 +467,10 @@ impl Threadbear {
             None => HashSet::from(["hibernating", "archived"]),
         };
         let mut this = Threadbear {
+            milestone: crate::milestones::Milestones::new(window.is_window_active()),
             client,
             status,
-            threads: HashMap::new(),
+            threads: Default::default(),
             list_error: None,
             selected: None,
             pane: None,
@@ -407,9 +493,11 @@ impl Threadbear {
             frame_rate: None,
             hidden_panes: Vec::new(),
             mode: SidebarMode::Inbox,
+            view_switched: None,
             history: NavigationHistory::default(),
             shortcuts: ShortcutBindings::default(),
             bound_keys: HashMap::new(),
+            bound_open_anything: false,
             shortcuts_watch: None,
             shortcuts_path: None,
             menu_signature: String::new(),
@@ -417,6 +505,7 @@ impl Threadbear {
             failed_on_account: HashMap::new(),
             limit_pick: HashMap::new(),
             inbox_count_cache: Default::default(),
+            sections_cache: Default::default(),
             last_window_title: String::new(),
             archived_note: None,
             inbox_end_note: None,
@@ -436,10 +525,14 @@ impl Threadbear {
             restart_expiry: None,
             dropped_at: Some(std::time::Instant::now()),
             drop_grace_task: None,
+            restart_outage: None,
             creating_investigation: false,
             renaming: None,
             rename_field: None,
             share_popover: None,
+            anything: None,
+            anything_recent,
+            anything_panels_shown: Default::default(),
             share_busy: false,
             chip_busy: Default::default(),
             continuing_refusal: None,
@@ -461,10 +554,12 @@ impl Threadbear {
             waiting_link: None,
             dock_badge: None,
             panel_gate: Default::default(),
+            browser_handoff_seen: None,
+            browser_generation: 0,
             subagent: None,
             subagent_pane: None,
             subagent_events: None,
-            pins_fetched: HashSet::new(),
+            pins_fetched: HashMap::new(),
             last_drop: None,
             starting_runner: false,
             runner_checkout: None,
@@ -485,13 +580,18 @@ impl Threadbear {
             slash: Default::default(),
             move_sheet: None,
             side,
+            side_views: HashMap::new(),
             sidebar_view: None,
             main_view: None,
             thread_panels: Default::default(),
             swipe_nav: Default::default(),
             flight: Default::default(),
+            opening: Default::default(),
+            arc_layer: None,
+            tour: crate::tour::TourState::new(),
+            setup: Default::default(),
             _events: events,
-            _subs: vec![appearance, searching, frame, menus, looking, quitting, side_changed, main_context],
+            _subs: vec![appearance, searching, frame, menus, looking, quitting, side_changed, main_context, browser_watch],
         };
         // Records nothing unless it's switched on in Settings (activity.rs).
         let showing = crate::activity::showing(this.dock.read(cx).layout());
@@ -500,6 +600,9 @@ impl Threadbear {
         // made itself for an update (app_update.rs).
         this.start_updater(cx);
         this.restore_after_update(cx);
+        // The incoming side of a handover: shows itself under the old window
+        // once it's loaded, then takes over (handover.rs).
+        this.start_incoming(cx);
         // The window starts on the Inbox with nothing open (`noteNavigation`
         // on launch), so Back from the first thread comes back here.
         this.note_navigation();
@@ -511,16 +614,24 @@ impl Threadbear {
     /// pressed yet: presses it, "…" until the runner answers, and a second
     /// click meanwhile does nothing. Pressed: opens the thread it started or
     /// messaged rather than pressing again.
-    pub(crate) fn press_reply_button(&mut self, id: String, window: &mut Window, cx: &mut Context<Self>) {
-        let Some((thread_id, button)) = crate::reply_buttons::known(&id) else { return };
-        // Only from the transcript of the thread that made it: ids are the
-        // runner's per thread, and a link copied into another thread's reply
-        // mustn't press this one. A thread in a panel of its own has its
-        // transcript there (thread_panels.rs).
-        if self.selected.as_deref() != Some(thread_id.as_str()) && self.thread_panel_pane(&thread_id).is_none() {
+    pub(crate) fn press_reply_button(&mut self, from: String, id: String, window: &mut Window, cx: &mut Context<Self>) {
+        // `from` is the thread whose transcript the pill was drawn in, not a
+        // guess from the id: a button presses only from its own thread's
+        // transcript, so `[Go](button:<id>)` copied into another thread's
+        // reply presses nothing, even while the thread that made it is open
+        // beside it in a panel (Daybreak 107, 12 Nov 2026). `known` looks the
+        // id up among `from`'s own buttons only.
+        let Some(button) = crate::reply_buttons::known(&from, &id) else {
             self.show_error("That button belongs to another thread, so it can't be pressed from here.".into(), cx);
             return;
+        };
+        // And that transcript is one on show: the main panel's thread, or one
+        // in a panel of its own (thread_panels.rs).
+        if self.selected.as_deref() != Some(from.as_str()) && self.thread_panel_pane(&from).is_none() {
+            self.show_error("That button's thread isn't open, so it can't be pressed from here.".into(), cx);
+            return;
         }
+        let thread_id = from;
         if let Some(pressed) = &button.pressed {
             if self.threads.contains_key(&pressed.thread_id) {
                 self.open(pressed.thread_id.clone(), window, cx);
@@ -530,7 +641,7 @@ impl Threadbear {
             }
             return;
         }
-        if !crate::reply_buttons::set_pressing(&id, true) {
+        if !crate::reply_buttons::set_pressing(&thread_id, &id, true) {
             return;
         }
         self.redraw_pane(cx);
@@ -546,7 +657,7 @@ impl Threadbear {
                     }
                     Err(e) => this.show_error(e.message, cx),
                 }
-                crate::reply_buttons::set_pressing(&id, false);
+                crate::reply_buttons::set_pressing(&thread_id, &id, false);
                 this.redraw_pane(cx);
             })
             .ok();
@@ -567,6 +678,16 @@ impl Threadbear {
     /// front, the open thread is read.
     pub(crate) fn looking_changed(&mut self, window: u64, active: bool, cx: &mut Context<Self>) {
         crate::thread::set_looking(window, active);
+        if active {
+            crate::style::refresh_system_accent(cx);
+            crate::style::refresh_system_contrast(cx);
+            crate::style::refresh_system_clock();
+            // A script's explicit motion choice is independent of the test
+            // host's setting, including when both happened to start equal.
+            if !cfg!(feature = "automation") || !matches!(std::env::var("THREADBEAR_REDUCE_MOTION").as_deref(), Ok("on" | "off")) {
+                gpui_kit::base::apply_system_reduce_motion(cx);
+            }
+        }
         // ⌘-Tab away lets ⌘ go in the other app, so this one never hears it.
         if !active {
             self.hints_reset(cx);
@@ -595,12 +716,31 @@ impl Threadbear {
         let Some(request) = self.panel_gate.take(Some(&thread), crate::thread::is_looking()) else { return };
         if let Some(pin) = request.highlight.clone() {
             let item = self.side.read(cx).highlights.get(&thread.id).and_then(|h| h.highlights.iter().find(|x| x.id == pin).cloned());
-            if item.is_none() && self.pins_fetched.insert(request.id.clone()) {
-                // Fetched first; their coming tries it again.
-                self.panel_gate.release(&request.id);
-                let id = thread.id.clone();
-                self.side.update(cx, |side, cx| side.refresh_highlights(id, std::time::Duration::ZERO, cx));
-                return;
+            if item.is_none() {
+                let target = match self.pins_fetched.get(&request.id).copied() {
+                    Some(target) => target,
+                    None => {
+                        let id = thread.id.clone();
+                        let target = self.side.update(cx, |side, cx| {
+                            side.refresh_highlights(id.clone(), std::time::Duration::ZERO, cx);
+                            side.highlights_wanted(&id)
+                        });
+                        self.pins_fetched.insert(request.id.clone(), target);
+                        target
+                    }
+                };
+                if !self.side.read(cx).highlights_answered(&thread.id, target) {
+                    // A busy turn may keep fetching newer snapshots, but the
+                    // first successful answer for this request is enough.
+                    self.panel_gate.release(&request.id);
+                    // Returning after an error stopped retries while away
+                    // needs a new fetch even when the thread stayed quiet.
+                    if !self.side.read(cx).highlights_fetching(&thread.id) {
+                        let id = thread.id.clone();
+                        self.side.update(cx, |side, cx| side.refresh_highlights(id, std::time::Duration::ZERO, cx));
+                    }
+                    return;
+                }
             }
             self.show_requested(&RequestedPanel::Section(requests::HIGHLIGHTS.to_owned()), &RequestedPlace::Usual, &thread, cx);
             // Only the pane: an agent showing a file never starts its app.
@@ -704,14 +844,19 @@ impl Threadbear {
                         self.last_drop = None;
                         self.dropped_at = None;
                         self.drop_grace_task = None;
+                        self.restart_outage = None;
                         self.clear_connection_error();
                     }
                     Status::Disconnected { kind, reason, .. } => {
                         self.last_drop = Some((*kind, reason.clone()));
+                        self.note_restart_outage();
                         self.watch_restart_expiry(cx);
                         self.start_drop_grace(cx);
                     }
-                    Status::Connecting { .. } => self.start_drop_grace(cx),
+                    Status::Connecting { .. } => {
+                        self.note_restart_outage();
+                        self.start_drop_grace(cx);
+                    }
                 }
                 self.status = status;
                 // Each time it's connected, the whole list again, and the
@@ -725,6 +870,7 @@ impl Threadbear {
                     self.load_remote(cx);
                     self.load_clis(cx);
                     self.load_connectors(cx);
+                    self.load_setup_devices(cx);
                     self.side.update(cx, |side, cx| side.connected(cx));
                     for pane in self.pane.iter().chain(self.thread_panels.panes()) {
                         pane.update(cx, |p, cx| p.load(cx));
@@ -737,10 +883,21 @@ impl Threadbear {
             }
             Seen::Note(method, params) => match method.as_str() {
                 "thread.updated" => {
-                    if let Ok(mut t) = serde_json::from_value::<ThreadSummary>(params["thread"].clone()) {
+                    if let Some(mut t) = threadbear_core::wire::read::<ThreadSummary>(params["thread"].clone()) {
                         // Another runner's thread from this Mac's runner (the
                         // relay) stays marked as that runner's.
-                        t.runner_id = self.threads.get(&t.id).and_then(|old| old.runner_id.clone());
+                        // Relay summaries carry runnerId. A local update for
+                        // a row still labelled remote may be a move arriving;
+                        // its moving flag can already have been cleared at
+                        // claimed, so verify the local list regardless of it.
+                        let arriving = t.runner_id.is_none() && self.threads.get(&t.id).is_some_and(|old| old.is_remote() || self.remote.made.contains(&t.id));
+                        if let Some(old) = self.threads.get(&t.id) { t.runner_id = old.runner_id.clone(); }
+                        if arriving {
+                            // Relay and local updates share a notification. Verify
+                            // ownership with the local list before replacing it.
+                            if t.moving.is_none() { t.moving = self.threads.get(&t.id).and_then(|old| old.moving.clone()); }
+                            self.load_list(cx);
+                        }
                         if let Some(pane) = &self.pane {
                             pane.update(cx, |p, cx| p.summary_changed(&t, cx));
                         }
@@ -753,9 +910,9 @@ impl Threadbear {
                         if let Some(pane) = self.kept.get(&t.id, cx) {
                             pane.update(cx, |p, cx| p.summary_changed(&t, cx));
                         }
-                        let before = self.threads.insert(t.id.clone(), t.clone());
-                        self.note_failed_account(before.as_ref(), &t);
-                        self.thread_changed_outside(before.as_ref(), &t, cx);
+                        let before = self.threads.insert(t.id.clone(), Arc::new(t.clone()));
+                        self.note_failed_account(before.as_deref(), &t);
+                        self.thread_changed_outside(before.as_deref(), &t, cx);
                         if t.panel_request.is_some() && self.selected.as_deref() == Some(t.id.as_str()) {
                             self.serve_panel_request(cx);
                         }
@@ -770,12 +927,17 @@ impl Threadbear {
                 "thread.deleted" => {
                     let id = params["threadId"].as_str().unwrap_or("");
                     crate::terminal::thread_deleted(id, cx);
-                    self.kept.forget(id, cx);
-                    // Its panel of its own goes with it (`forget`).
-                    self.close_thread_panel(id, cx);
-                    self.threads.remove(id);
-                    self.failed_on_account.remove(id);
-                    self.refresh_dock_badge();
+                    if !self.moved_away(id, cx) {
+                        crate::open_motion::forget_titles(|t| t != id);
+                        self.kept.forget(id, cx);
+                        // Its panel of its own goes with it (`forget`).
+                        self.close_thread_panel(id, cx);
+                        self.threads.remove(id);
+                        self.failed_on_account.remove(id);
+                        self.refresh_dock_badge();
+                    } else {
+                        self.apply_remote_index(cx);
+                    }
                 }
                 "runner.notice" => {
                     // A restart notice moves the quiet banner along (the
@@ -784,6 +946,11 @@ impl Threadbear {
                     // go in the error bar (`notice`).
                     let message = params["message"].as_str().unwrap_or("");
                     if threadbear_client::restart::RunnerRestart::parse(message).is_some() {
+                        // Heard while it's still reconnecting: this outage is
+                        // the restart's now (`restart_outage`).
+                        if !matches!(self.status, Status::Connected { .. }) {
+                            self.note_restart_outage();
+                        }
                         self.refresh_restart(cx);
                         self.watch_restart_expiry(cx);
                     } else if params["level"].as_str().is_some_and(|l| l != "info") && !message.is_empty() {
@@ -828,10 +995,18 @@ impl Threadbear {
                     if let Some(pane) = self.kept.get(id, cx) {
                         pane.update(cx, |p, cx| p.event(&params, cx));
                     }
+                    // Each pane draws its own events again, a few at a time
+                    // (its 33 ms flush), so the app isn't told: telling it
+                    // drew the sidebar, the main panel and the side pane
+                    // again for every word of a reply coming in, for any
+                    // thread kept loaded too. What else an event changes
+                    // (a title, its status) comes as `thread.updated`.
+                    return;
                 }
                 _ => {}
             },
         }
+        self.consider_milestone(cx);
         cx.notify();
     }
 
@@ -852,7 +1027,7 @@ impl Threadbear {
 
     /// The Dock badge: the threads waiting on Mike (`refreshDockBadge`).
     pub(crate) fn refresh_dock_badge(&mut self) {
-        let label = threadbear_core::inbox::dock_badge(threadbear_core::inbox::needs_you_count(self.threads.values(), now_ms()));
+        let label = threadbear_core::inbox::dock_badge(threadbear_core::inbox::needs_you_count(self.threads.values().map(|t| &**t), now_ms()));
         if label != self.dock_badge {
             crate::notify::set_badge(label.as_deref());
             self.dock_badge = label;
@@ -899,38 +1074,59 @@ impl Threadbear {
         });
     }
 
-    fn load_list(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn load_list(&mut self, cx: &mut Context<Self>) {
         let client = self.client.clone();
         cx.spawn(async move |this, cx| {
             let res = call(client, "threads.list", json!({ "include": ["inbox", "snoozed", "archived"] })).await;
             this.update(cx, |this, cx| {
                 match res {
                     Ok(v) => {
-                        let list: Vec<ThreadSummary> = serde_json::from_value(v["threads"].clone()).unwrap_or_default();
-                        let before = std::mem::take(&mut this.threads);
-                        this.threads = list.into_iter().map(|t| (t.id.clone(), t)).collect();
+                        let list = match threadbear_core::inbox::ThreadList::decode(&v) {
+                            Ok(list) => list,
+                            Err(message) => { this.list_error = Some(message.into()); cx.notify(); return; }
+                        };
+                        let confirmed: std::collections::HashSet<_> = list.rows.iter().map(|t| t.id.clone()).collect();
+                        // An explicit, readable archive is still authoritative
+                        // even when another row could not be read.
+                        for thread in &list.rows { crate::terminal::thread_updated(thread, cx); }
+                        let before = (*this.threads).clone();
+                        let cleanup = list.apply(&mut *this.threads);
+                        let reload: std::collections::HashSet<_> = confirmed.iter().filter(|id| {
+                            this.remote.made.contains(*id) || before.get(*id).is_some_and(|t| t.is_remote())
+                        }).cloned().collect();
+                        this.remote.made.retain(|id| !confirmed.contains(id));
+                        // A destination's first index row can lag behind a
+                        // reconnect. Keep known remote rows until the remote
+                        // index reconciles them, including moves in flight.
+                        for old in before.values().filter(|t| t.is_remote() || this.remote.made.contains(&t.id)) {
+                            this.threads.entry(old.id.clone()).or_insert_with(|| old.clone());
+                        }
                         // Open panes take the summaries as they are now: on
                         // a reconnect this list is the only word of what
                         // changed while it was away (a loose-ends check that
                         // finished then isn't sent again), and each pane's
                         // reload reads its own summary (Codex's review, 12 Nov).
-                        let panes: Vec<_> = this.pane.iter().chain(this.subagent_pane.iter()).chain(this.thread_panels.panes()).chain(this.kept.panes()).cloned().collect();
-                        for pane in panes {
-                            let Some(mut t) = this.threads.get(&pane.read(cx).summary.id).cloned() else { continue };
-                            t.runner_id = pane.read(cx).summary.runner_id.clone();
-                            pane.update(cx, |p, cx| p.summary_changed(&t, cx));
-                        }
-                        crate::terminal::list_loaded(&this.threads, cx);
+                        this.sync_thread_panes(&reload, cx);
+                        if cleanup { crate::terminal::list_loaded(&this.threads, cx); }
                         this.note_failed_accounts(&before);
                         // Other runners' rows stay listed beside these (and
                         // kept threads no longer listed go, remote.rs).
                         this.apply_remote_index(cx);
                         this.list_error = None;
                         this.sidebar.loaded = true;
+                        this.consider_milestone(cx);
                         this.refresh_dock_badge();
                         this.open_pending(cx);
                         this.try_waiting_link(cx);
                     }
+                    // A load the connection cut off says nothing here: the
+                    // connection banner speaks for that (quietly through a
+                    // restart), and the list loads again once it's back. A
+                    // restart's drop put "The connection to the runner
+                    // closed" under the search box (Codex's review, 13 Nov).
+                    // Not a timeout: the socket's still up then, and nothing
+                    // would load the list again (Codex's second look).
+                    Err(e) if matches!(e.code, threadbear_client::runner::NOT_CONNECTED | threadbear_client::runner::CLOSED) => {}
                     Err(e) => this.list_error = Some(e.message),
                 }
                 cx.notify();
@@ -1043,6 +1239,10 @@ impl Threadbear {
     /// `open`, with the pane of a thread brought back from a panel of its own
     /// (thread_panels.rs), which goes on reading it rather than reading it again.
     pub(crate) fn open_with(&mut self, id: String, moved: Option<Entity<ThreadPane>>, window: &mut Window, cx: &mut Context<Self>) {
+        // How it comes in (open_motion.rs): taken now, so an open that goes
+        // nowhere doesn't leave it for the next one. One brought back from a
+        // panel of its own was on screen a moment ago.
+        let opening = if moved.is_some() { crate::open_motion::Opening::Still } else { self.opening.take() };
         // A thread (its own row, say) in place of one of its sub-agents.
         self.close_subagent(cx);
         // A thread open in a panel of its own is shown there.
@@ -1087,8 +1287,11 @@ impl Threadbear {
                 });
                 pane
             }
-            (None, None) => cx.new(|cx| ThreadPane::new(client, summary, composer.clone(), cx)),
+            (None, None) => cx.new(|cx| ThreadPane::new(client, ThreadSummary::clone(&summary), composer.clone(), cx)),
         };
+        let reduce = cx.reduce_motion();
+        pane.update(cx, |p, _| p.entering = crate::open_motion::Entering::new(opening, reduce));
+        self.opening.last = self.selected.clone().map(|id| (id, opening));
         composer.update(cx, |c, cx| {
             c.attach(pane.downgrade());
             c.focus(window, cx);
@@ -1158,7 +1361,7 @@ impl Threadbear {
         self.close_subagent(cx);
         let (Some(summary), Some(composer)) = (self.threads.get(&thread_id).cloned(), self.composers.get(&thread_id).cloned()) else { return };
         let client = self.client.clone();
-        let pane = cx.new(|cx| ThreadPane::new_subagent(client, summary, subagent_id.clone(), composer, cx));
+        let pane = cx.new(|cx| ThreadPane::new_subagent(client, ThreadSummary::clone(&summary), subagent_id.clone(), composer, cx));
         // A thread: link in its transcript opens that thread, as in a thread's.
         self.subagent_events = Some(cx.subscribe_in(&pane, window, |this, _, event: &crate::rows::OpenThreadRequest, window, cx| this.open_thread_link(&event.0, window, cx)));
         self.subagent = Some((thread_id, subagent_id));
@@ -1200,9 +1403,10 @@ impl Threadbear {
     pub(crate) fn update_open(&mut self, change: impl FnOnce(&mut ThreadSummary), params: Value, cx: &mut Context<Self>) -> Result<(), String> {
         let Some(id) = self.selected.clone() else { return Err("no thread open".into()) };
         let before = self.threads.get(&id).cloned();
-        if let Some(t) = self.threads.get_mut(&id) {
+        if let Some(t) = self.threads.get_mut(&id).map(std::sync::Arc::make_mut) {
             change(t);
         }
+        let guess = self.threads.get(&id).cloned();
         // A folder, login or pool change isn't guessed, so its chip spins.
         let busy = if params.get("cwd").is_some() {
             Some(format!("movingFolder/{id}"))
@@ -1226,10 +1430,8 @@ impl Threadbear {
                     this.chip_busy.remove(key);
                 }
                 if let Err(e) = res {
-                    this.list_error = Some(e.message);
-                    if let Some(before) = before {
-                        this.threads.insert(before.id.clone(), before);
-                    }
+                    this.show_error(e.message, cx);
+                    threadbear_core::inbox::roll_back(&mut *this.threads, before, guess.as_deref());
                 }
                 cx.notify();
             })
@@ -1386,6 +1588,11 @@ impl Threadbear {
         // What came across from the Swift app, while its note's up. Set
         // after, as the literal above is as long as serde_json's macro goes.
         dump["importNote"] = json!(self.import_note);
+        // Panels pinned to their threads (pinned_panels.rs).
+        dump["pinnedPanels"] = self.pinned_panels_dump(cx);
+        // The tour or a page's intro on show, and Finish setting up (tour.rs, setup_panel.rs).
+        dump["tour"] = self.tour_dump(cx);
+        dump["setup"] = self.setup_dump(cx);
         // Videos and PDFs up in the system's views, in any window (media_view.rs).
         dump["media"] = crate::media_view::dump();
         // The card a page swipe shows while it's under way (swipe_nav.rs).
@@ -1395,6 +1602,25 @@ impl Threadbear {
         dump["flight"] = self.flight.dump();
         // Whether motion is reduced (automation.rs): no flights or glides then.
         dump["reduceMotion"] = json!(cx.reduce_motion());
+        dump["increaseContrast"] = json!(crate::style::increase_contrast(cx));
+        dump["sidebarSelectionAlpha"] = json!(crate::style::sidebar_selection(cx, self.milestone.active).a);
+        // How the last thread opened, and from the new-thread page, how far
+        // its box dropped (open_motion.rs).
+        dump["opening"] = self.opening.last.as_ref().map_or(Value::Null, |(id, how)| {
+            let dropped = self.pane.as_ref().filter(|_| self.selected.as_deref() == Some(id.as_str())).and_then(|p| p.read(cx).entering.box_drop());
+            json!({ "thread": id, "how": how.name(), "boxDrop": dropped })
+        });
+        dump["milestoneNote"] = json!(self.milestone.note.map(threadbear_core::milestones::title));
+        dump["systemAccent"] = json!(Rgba::from(crate::style::control_accent(cx)));
+        // The small motions, as last seen (juice.feature): the row a click
+        // last slid off (row_swipe.rs), and the card that last arrived in
+        // the box while it was on screen (composer_card.rs).
+        dump["juice"] = json!({
+            "slidOff": self.sidebar.gestures.last_slid(),
+            "cardArrived": self.composer(cx).and_then(|c| c.read(cx).card_arrival.last),
+        });
+        // ⌘K's box, while it's up (open_anything.rs).
+        dump["anything"] = self.open_anything_dump(cx);
         // The last time the panels moved (a panel opened or closed): where
         // each panel was and went, and whether they're still on their way.
         dump["panelMotion"] = self.dock_view.read(cx).last_motion().map_or(Value::Null, |(from, to, moving)| {
@@ -1410,7 +1636,7 @@ impl Threadbear {
     /// (automation's `motion`).
     #[cfg(feature = "automation")]
     pub(crate) fn moving(&self, cx: &App) -> bool {
-        self.dock_view.read(cx).last_motion().is_some_and(|(_, _, moving)| moving) || self.flight.in_flight()
+        self.dock_view.read(cx).last_motion().is_some_and(|(_, _, moving)| moving) || self.flight.in_flight() || crate::open_motion::moving()
     }
 
     /// The composer's part of the dump (AppDump.composer).
@@ -1457,18 +1683,32 @@ impl Threadbear {
             if let Some(answers) = composer.answer_chip_lines(cx) {
                 out["answers"] = json!(answers);
             }
-            if let Some(runs) = crate::card_run::composer_lines(composer, cx) {
-                out["cardRuns"] = json!(runs);
-            }
         }
         out
     }
 
     /// The sections with the search applied, as they're drawn.
-    pub(crate) fn shown_sections(&self, cx: &App, now: i64) -> Vec<inbox::Section> {
+    /// The sidebar's sections as they stand. Worked out again only when the
+    /// threads, the search, the order or the schedules changed, or a snooze
+    /// ran out since: the list, its badge and the arrow keys each ask for it,
+    /// every frame, and sorting all of Mike's threads each time was half a
+    /// frame's work (thread_map.rs).
+    pub(crate) fn shown_sections(&self, cx: &App, now: i64) -> Rc<Vec<inbox::Section<Arc<ThreadSummary>>>> {
         let query = self.search.read(cx).value().trim().to_lowercase();
         let wakes = inbox::wakes(&self.scheduled.list);
-        inbox::sections_ordered(self.threads.values().filter(|t| query.is_empty() || inbox::matches(t, &query)), now, self.sidebar.order, &wakes)
+        let changes = self.threads.changes();
+        if let Some(c) = self.sections_cache.borrow().as_ref() {
+            if c.changes == changes && c.query == query && c.order == self.sidebar.order && c.wakes == wakes && c.from <= now && now < c.until {
+                return c.sections.clone();
+            }
+        }
+        // Shared rows: working them out again copies pointers (thread_map.rs).
+        let sections = Rc::new(inbox::sections_ordered(self.threads.values().filter(|t| query.is_empty() || inbox::matches(t, &query)), now, self.sidebar.order, &wakes));
+        // Until the next snooze runs out, when a thread moves out of
+        // Hibernating; nothing else in the sorting goes by the clock.
+        let until = self.threads.values().map(|t| &**t).filter_map(|t| t.snoozed_until_ms()).filter(|at| *at > now).min().unwrap_or(i64::MAX);
+        *self.sections_cache.borrow_mut() = Some(SectionsCache { changes, query, order: self.sidebar.order, wakes, from: now, until, sections: sections.clone() });
+        sections
     }
 
     /// The connection as the Swift app tells it (`ConnectionState`). While it
@@ -1561,6 +1801,10 @@ pub(crate) fn project_list(projects: &Value) -> Vec<(String, String, bool)> {
 impl Render for Threadbear {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if std::mem::take(&mut self.menus_stale) {
+            // The openAnything experiment turned on or off: ⌘K and ⌘P with it.
+            if self.open_anything_on() != self.bound_open_anything {
+                self.apply_shortcuts(cx);
+            }
             self.sync_menus(cx);
         }
         let open_menu = self.render_open_menu();
@@ -1568,16 +1812,30 @@ impl Render for Threadbear {
         let open_menu = open_menu.into_iter().map(IntoElement::into_any_element).chain(self.frame_rate.clone().map(|f| f.into_any_element()));
         // The web panels' pages are native views: shown and placed once the
         // window's laid out, where their panels were drawn (web_panels.rs).
-        let pages = crate::web_panels::sweeper(self.open_menu_at(), self.share_popover.is_some());
+        // ⌘K's box covers them as the share popover does (open_anything.rs).
+        let pages = crate::web_panels::sweeper(self.open_menu_at(), self.share_popover.is_some() || self.anything.is_some());
         // Videos and PDFs in the system's views the same way (media_view.rs),
         // hidden under the picture viewer and the pane's own menus too.
         let media = {
             let side = self.side.read(cx);
-            let everything = self.share_popover.is_some() || side.viewer.is_open();
+            let everything = self.share_popover.is_some() || self.anything.is_some() || side.viewer.is_open();
             let menus = self.open_menu_at().into_iter().chain(side.menu.as_ref().map(|m| m.position)).collect();
             crate::media_view::sweeper(window, crate::media_view::Cover { everything, menus })
         };
         // Last: every press in the window, for the activity log (tips.rs).
-        self.render_shell(window, cx).children(open_menu).child(pages).child(media).child(crate::tips::window_presses())
+        let anything = self.render_open_anything();
+        self.render_shell(window, cx).children(open_menu).children(anything).child(pages).child(media).child(crate::tips::window_presses())
     }
+}
+
+/// What `shown_sections` last worked out, and from what.
+struct SectionsCache {
+    changes: u64,
+    query: String,
+    order: inbox::InboxOrder,
+    wakes: HashMap<String, inbox::Wake>,
+    /// The clock it was worked out at, and when it next needs to be again.
+    from: i64,
+    until: i64,
+    sections: Rc<Vec<inbox::Section<Arc<ThreadSummary>>>>,
 }

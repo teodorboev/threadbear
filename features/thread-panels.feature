@@ -113,6 +113,10 @@ Feature: The panels round the thread
     When I open the thread "Morning brief"
     And I'm looking at the app
     And the agent asks to show the "updates" panel as a tab
-    And I move the "updates" panel to the "left" edge
+    # The ask reaches the app through the runner, so the tab may not be
+    # there yet: on GitHub's Windows the move came first ("updates isn't in
+    # the layout", run 43399468986).
+    Then the dock has the "updates" panel
+    When I move the "updates" panel to the "left" edge
     And I open the thread "Rename the Settings tabs"
     Then the dock has the "updates" panel

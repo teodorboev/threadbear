@@ -197,6 +197,89 @@ test('end_turn snooze: words are read as Hibernate in words reads them', async (
   assert.deepEqual(t.wakeWhen, { said: 'when the parts arrive', topic: 'the parts arriving' });
 });
 
+// 13 Nov 2026: an agent hibernated "until the GPUI app replaces the Swift
+// app", the model made that a topic, the librarian woke it when Mike talked
+// about the plan in another thread, and it sat in the inbox with nothing done.
+test('end_turn snooze in words: an agent waiting for something wakes with a turn to check, and can go back to sleep', async () => {
+  const { h, thread, asked } = setup(() => ok({ until: null, topic: 'the GPUI app has replaced the Swift app', why: 'an event' }));
+  turnWithSnooze(h, thread.id, { needs: 'nothing', snooze: 'until the GPUI app replaces the Swift app' });
+  await tick();
+  await tick();
+  assert.match(asked[0].prompt, /The thread's agent is waiting: until the GPUI app replaces the Swift app/);
+  assert.match(asked[0].system!, /thread's own agent asking/);
+  const t = h.runner.get(thread.id);
+  // Who set it stays in the runner: the protocol's wakeWhen is unchanged.
+  assert.deepEqual(t.wakeWhen, { said: 'until the GPUI app replaces the Swift app', topic: 'the GPUI app has replaced the Swift app' });
+  assert.deepEqual(checkSummary(t), []);
+  assert.match(h.events(thread.id).at(-1).text, /^Hibernating until the GPUI app has replaced the Swift app\. The agent said "until the GPUI app replaces the Swift app"\.$/);
+  assert.deepEqual(h.runner.waitingTopics(), [{ threadId: thread.id, title: 'Plan the workbench drawers', topic: 'the GPUI app has replaced the Swift app', happened: true }]);
+  const sessions = h.adapter.sessions.length;
+  const other = h.runner.create({ text: 'GPUI Port Coordinator', accountId: 'claude-3' }).thread;
+  assert.equal(h.runner.wakeForTopic(thread.id, other.id), true);
+  await tick();
+  assert.match(h.events(thread.id).filter((e) => e.type === 'system.note' && String(e.text).startsWith('Woke up')).at(-1).text, /^Woke up.*: to check whether the GPUI app has replaced the Swift app, from "GPUI Port Coordinator"\.$/);
+  const sent = h.events(thread.id).filter((e) => e.type === 'user.message').at(-1);
+  assert.match(String(sent.text), /You hibernated this thread until: until the GPUI app replaces the Swift app/);
+  assert.match(String(sent.text), new RegExp(`another thread \\(${other.id.slice(0, 8)}\\)`));
+  assert.match(String(sent.text), /snooze "until the GPUI app replaces the Swift app" to go back to sleep/);
+  assert.ok(h.adapter.sessions.length > sessions, 'a turn started');
+});
+
+test('an agent that checks and goes back to sleep is not woken again by the same claim, only by more from that thread', async () => {
+  const { h, thread } = setup(() => ok({ until: null, topic: 'the GPUI app has replaced the Swift app', why: 'an event' }));
+  const said = 'until the GPUI app replaces the Swift app';
+  turnWithSnooze(h, thread.id, { needs: 'nothing', snooze: said });
+  await tick();
+  await tick();
+  const other = h.runner.create({ text: 'GPUI Port Coordinator', accountId: 'claude-3' }).thread;
+  const shown = { topic: 'the GPUI app has replaced the Swift app', happened: true };
+  // A look that judged another wait (Mike's kind, or other words) wakes nothing.
+  assert.equal(h.runner.wakeForTopic(thread.id, other.id, { topic: 'woodworking', happened: true }), false);
+  assert.equal(h.runner.wakeForTopic(thread.id, other.id, { ...shown, happened: false }), false);
+  assert.equal(h.runner.wakeForTopic(thread.id, other.id, shown), true);
+  await tick();
+  // The agent checks, finds it hasn't, and snoozes again with the same words.
+  const s = h.adapter.last;
+  s.init();
+  s.out({ kind: 'event', event: { type: 'tool.call', itemId: 'e2', name: END_TURN, kind: 'mcp', title: 'end_turn', input: { needs: 'nothing', snooze: said } } });
+  s.text('m2', 'Not yet: the Swift app is still the one installed.');
+  s.result('completed');
+  await tick();
+  await tick();
+  assert.deepEqual(h.runner.list(['snoozed']).map((t) => t.id).includes(thread.id), true);
+  // The same claim, with nothing new in that thread, doesn't wake it again.
+  assert.equal(h.runner.wakeForTopic(thread.id, other.id, shown), false);
+  // More from that thread is new evidence.
+  h.runner.send(other.id, 'The GPUI app is now the one we ship.');
+  await tick();
+  assert.equal(h.runner.wakeForTopic(thread.id, other.id, shown), true);
+});
+
+test("Mike's own Wake when… still only brings the thread back, with no turn", async () => {
+  const { h, thread } = setup(() => ok({ until: null, topic: 'woodworking', why: 'topic' }));
+  await h.runner.hibernateWhen({ threadId: thread.id, said: 'next time I talk about woodworking' });
+  assert.deepEqual(h.runner.waitingTopics(), [{ threadId: thread.id, title: 'Plan the workbench drawers', topic: 'woodworking' }]);
+  const other = h.runner.create({ text: 'Router table jig', accountId: 'claude-3' }).thread;
+  const before = h.events(thread.id).filter((e) => e.type === 'user.message').length;
+  assert.equal(h.runner.wakeForTopic(thread.id, other.id), true);
+  await tick();
+  assert.equal(h.events(thread.id).filter((e) => e.type === 'user.message').length, before);
+});
+
+test('an agent woken from a thread with less access is told something happened, not which thread', async () => {
+  const { h, thread } = setup(() => ok({ until: null, topic: 'the parts have arrived', why: 'an event' }));
+  h.runner.update({ threadId: thread.id, permissionMode: 'full' });
+  turnWithSnooze(h, thread.id, { needs: 'nothing', snooze: 'when the parts arrive' });
+  await tick();
+  await tick();
+  const other = h.runner.create({ text: 'Parcel tracking', accountId: 'claude-3', permissionMode: 'ask' }).thread;
+  assert.equal(h.runner.wakeForTopic(thread.id, other.id), true);
+  await tick();
+  const sent = String(h.events(thread.id).filter((e) => e.type === 'user.message').at(-1).text);
+  assert.match(sent, /another thread looks to show it has/);
+  assert.doesNotMatch(sent, new RegExp(other.id.slice(0, 8)));
+});
+
 test('end_turn snooze: words the model cannot read leave the thread in the inbox, saying why', async () => {
   const { h, thread } = setup(() => ({ ok: false, reason: 'provider', message: 'down' }));
   turnWithSnooze(h, thread.id, { needs: 'nothing', snooze: 'whenever' });

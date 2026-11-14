@@ -38,7 +38,8 @@
         "width": 2480,
         "height": 980,
         "alt": "The Photo sync project page with New Thread at the top right. Clicking it opens the new-thread message box with an In Photo sync chip, starting in the photo-sync folder, and a message is typed in."
-      }
+      },
+      "credit": "Wayne Sutton"
     },
     {
       "kind": "added",
@@ -91,22 +92,37 @@
     "A swipe with nowhere to go says so, and a swipe has to go a little further before it counts",
     "The browser panel lists the pages an agent has open, each with a picture of the page, what the agent is doing there and Show window to bring the real window forward",
     "The Runners panel lists your runners in the same order as Settings and the phone, and you can drag them into a new order there",
-    "A patch's button can change its own label (say, \"Merge #707\"), and a patch's buttons update as soon as one of its commands finishes, so a Run can turn into Stop straight away",
+    {
+      "text": "A patch's button can change its own label (say, \"Merge #707\"), and a patch's buttons update as soon as one of its commands finishes, so a Run can turn into Stop straight away",
+      "credit": "Elie Hamouche"
+    },
     "Voice mode (talking with a thread out loud, an experiment you had to turn on) is gone from the Mac app; dictation on the iPhone stays",
     "The iPhone reads much less from your backend to know which threads a schedule will wake",
     "On iPhone, the microphone's bars move with your voice"
   ],
   "fixed": [
-    "Pasting a screenshot you took to the clipboard with ⌃⇧⌘4 works in the message box and a Needs you card's answer box, where Paste was greyed out and ⌘V did nothing (other pictures already pasted fine)",
+    {
+      "text": "Pasting a screenshot you took to the clipboard with ⌃⇧⌘4 works in the message box and a Needs you card's answer box, where Paste was greyed out and ⌘V did nothing (other pictures already pasted fine)",
+      "credit": "Mup"
+    },
     "On iPhone, scroll back through all of a long thread: past the newest 2,000 messages it used to say Loading… for good, and loading earlier messages now keeps your place, even mid-flick",
     "On iPhone, the Starred, Inbox and Running headings stay at the top again while you scroll, and pictures near the top bar or reply box no longer go blank",
-    "A schedule keeps the message box's permission mode, Auto included, where a schedule made on Auto used to stop and ask before every edit",
-    "Hibernate until… with words works on threads running on another Mac",
+    {
+      "text": "A schedule keeps the message box's permission mode, Auto included, where a schedule made on Auto used to stop and ask before every edit",
+      "credit": "David Clark"
+    },
+    {
+      "text": "Hibernate until… with words works on threads running on another Mac",
+      "credit": "jwsandeman"
+    },
     "A decision card from a thread on another runner shows what each answer does, as your own runner's cards do",
     "A thread another Mac asks to start here, with a folder named under that Mac's home folder, starts in the matching folder here, and the card says so when there's no such folder",
     "A thread still finishing on a runner that's being replaced by an update can still message threads on your other runners, and its last saves are no longer lost",
     "A thread brought back from the archive never carries on in a worktree folder that has since gone to another thread",
-    "The app menu has one Settings… item instead of two",
+    {
+      "text": "The app menu has one Settings… item instead of two",
+      "credit": "David Clark"
+    },
     "Closed several security holes, including a stopped share link that could still show newer messages, a repo's icon that could make a Linux runner run a script, and ways text from another runner or repo could get past an approval check"
   ]
 }

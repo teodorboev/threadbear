@@ -688,6 +688,11 @@ impl Client {
         let url_owned = url.to_string();
         let hello = tokio::spawn(async move {
             let mut params = json!({ "client": CLIENT_NAME, "version": env!("CARGO_PKG_VERSION") });
+            // The Browser pane and BrowserBear's handoff (docs/protocol.md,
+            // "Showing panels"): BrowserBear is a Mac thing.
+            if cfg!(target_os = "macos") {
+                params["browserPanel"] = json!(true);
+            }
             if let Some(build) = HELLO_BUILD.get() {
                 params["build"] = build.clone();
             }
@@ -712,7 +717,18 @@ impl Client {
                 Ok(Message::Close(_)) | Err(_) => break,
                 Ok(_) => continue,
             };
-            let Ok(v) = serde_json::from_str::<Value>(text.as_str()) else { continue };
+            let v = match serde_json::from_str::<Value>(text.as_str()) {
+                Ok(v) => v,
+                Err(e) => {
+                    // Say so: a reply dropped here leaves its call waiting
+                    // out its whole timeout with nothing in the log (14 Nov:
+                    // half an emoji in one event, a "\ud83e" serde refuses,
+                    // kept a thread from opening). Where it broke, never
+                    // what it says, as it may hold anything.
+                    log::write("rpc", &format!("dropped a message from the runner that isn't JSON ({} bytes): {e}", text.len()));
+                    continue;
+                }
+            };
             self.dispatch(v);
         }
         hello.abort();

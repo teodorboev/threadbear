@@ -25,7 +25,7 @@ import { loadConfig, readToken, runnerUrl } from '../src/config.ts';
 import { makePng } from '../test/helpers/png.ts';
 import { forTerminal } from '../src/terminal-text.ts';
 
-type Ev = { seq: number; type: string; text?: string; asks?: { action: string; options?: string[]; optionNotes?: string[] }[] };
+type Ev = { seq: number; type: string; text?: string; outcome?: string; asks?: { action: string; options?: string[]; optionNotes?: string[] }[] };
 type Runner = { id: string; name: string; online: boolean };
 type Login = { id: string; provider: string; models?: { id: string }[] };
 
@@ -87,6 +87,12 @@ async function check(r: Runner): Promise<void> {
   const id = made.thread.id;
   try {
     const first = await turnEnd(id, 0);
+    // A turn that failed there (a signed-out login, 13 Nov on bruce) is
+    // one line, not three FAILs that read as a broken runner. The relay
+    // says only that it failed; the reason is in the thread on that runner.
+    if (first.card?.outcome === 'failed') {
+      return say(false, `${r.name}: its first turn failed (thread ${id}; its events on ${r.name} say why, and \`claude auth status\` there shows a signed-out login)`);
+    }
     say(/\bready\b/i.test(reply(first.events, first.from)), `${r.name}: a new thread started there and answered`);
 
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tb-canary-'));

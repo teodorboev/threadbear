@@ -26,7 +26,7 @@ async function serve(extra: Opts = {}) {
   const token = readToken(h.home);
   const scheduler = new Scheduler({ runner: h.runner, home: h.home, clock: h.clock, log: nullLogger, zone: () => 'UTC' });
   const gate = new CallerGate({ runner: h.runner, schedules: scheduler });
-  const server = new RpcServer({ host: '127.0.0.1', port: 0, token, runner: h.runner, log: nullLogger, gate, methods: { ...scheduleMethods(scheduler), 'runner.restart': () => ({}), 'instructions.set': () => ({}), 'settings.update': () => ({}), 'pools.save': () => ({}), 'devices.pair': () => ({}) }, ...extra });
+  const server = new RpcServer({ host: '127.0.0.1', port: 0, token, runner: h.runner, log: nullLogger, gate, methods: { ...scheduleMethods(scheduler), 'runner.restart': () => ({}), 'runner.reinstall': () => ({ reinstall: null }), 'instructions.set': () => ({}), 'settings.update': () => ({}), 'pools.save': () => ({}), 'devices.pair': () => ({}) }, ...extra });
   const { port } = await server.listen();
   return { h, server, token, port, url: `ws://127.0.0.1:${port}/rpc`, scheduler };
 }
@@ -214,6 +214,9 @@ test('a thread on Full access still has the lot, through its key', async () => {
     assert.equal(made?.permissionMode, 'full');
     const c = await as(url, token, me.id);
     assert.equal((await c.call<{ limited: boolean }>('auth.whoami')).limited, false);
+    // Except reinstalling the runner, which stops every thread: the user's,
+    // from the Updates panel, on any mode.
+    await assert.rejects(c.call('runner.reinstall'), (e: { code?: number; message?: string }) => refused(e) && /Updates panel/.test(e.message ?? ''));
     c.close();
   } finally {
     await server.close();
@@ -419,19 +422,17 @@ test('tb goes by its key only for its own runner, never the token next to it', a
   assert.deepEqual(tbCredential(h.home, { THREADBEAR_THREAD_ID: 'th1', THREADBEAR_THREAD_KEY: '' }), { token });
 });
 
-test('tb runner and tb pair refuse in a limited thread, whatever its environment says', async () => {
+test('tb runner refuses in a limited thread, whatever its environment says', async () => {
   let from: string | undefined;
   const { h, server, token, url } = await serve({ callerOfPort: async () => from });
   const me = thread(h, 'auto');
   try {
     const key = threadKey(token, me.id);
-    for (const cmd of ['pair', 'runner']) {
-      const r = await tb(h, url, me.id, key, [cmd]);
-      assert.equal(r.code, 1, r.out);
-      assert.match(r.out, /Auto|Full access/);
-    }
+    const r = await tb(h, url, me.id, key, ['runner']);
+    assert.equal(r.code, 1, r.out);
+    assert.match(r.out, /Auto|Full access/);
     from = me.id;
-    const wiped = await tb(h, url, '', '', ['pair']);
+    const wiped = await tb(h, url, '', '', ['runner']);
     assert.equal(wiped.code, 1, wiped.out);
     from = undefined;
     assert.match((await tb(h, url, '', '', ['status'])).out, /Runner/);
@@ -483,16 +484,19 @@ test("a thread's connection can't pass as the Mac app in hello", async () => {
   }
 });
 
-test('the GPUI app counts as the app being open only once its experiment is on', async () => {
-  const { h, server, token, url } = await serve();
+test('the GPUI app counts as the app being open', async () => {
+  const { server, token, url } = await serve();
   try {
     const app = await RunnerClient.connect(url, token);
     await app.call('hello', { client: 'threadbear-desktop' });
-    assert.equal(server.appConnected(), false);
-    fs.writeFileSync(path.join(h.home, 'runner.json'), JSON.stringify({ experiments: { gpuiApp: true } }));
     assert.equal(server.appConnected(), true);
-    assert.equal(server.appConnected(true), false, 'only the Swift app has a browser panel');
+    assert.equal(server.appConnected(true), false, 'an older GPUI app has no Browser pane');
     app.close();
+    // One that says it has the Browser pane counts for BrowserBear's handoff.
+    const browsing = await RunnerClient.connect(url, token);
+    await browsing.call('hello', { client: 'threadbear-desktop', browserPanel: true });
+    assert.equal(server.appConnected(true), true);
+    browsing.close();
   } finally {
     await server.close();
   }
@@ -548,3 +552,25 @@ test("ask: schedules.update can't raise a schedule that inherits an Ask default"
     await server.close();
   }
 });
+
+// Codex's review of the Daybreak fix for finding 111: a title reaches the
+// renamed thread's agent, so tb renaming one above the caller is refused.
+for (const mode of MODES) {
+  test(`${mode}: renaming a thread with more access through tb is refused, its own or one no higher is not`, async () => {
+    const { h, server, token, url } = await serve();
+    const me = thread(h, mode);
+    const full = thread(h, 'full', 'full one');
+    const peer = thread(h, mode, 'peer');
+    const c = await as(url, token, me.id);
+    try {
+      await assert.rejects(c.call('threads.update', { threadId: full.id, title: 'SECURITY_POC' }), refused);
+      assert.equal(h.runner.get(full.id).title, 'full one');
+      await c.call('threads.update', { threadId: me.id, title: 'mine' });
+      await c.call('threads.update', { threadId: peer.id, title: 'renamed' });
+      assert.equal(h.runner.get(peer.id).title, 'renamed');
+    } finally {
+      c.close();
+      await server.close();
+    }
+  });
+}

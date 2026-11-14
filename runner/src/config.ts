@@ -9,6 +9,7 @@ import { RELEASE } from './release.ts';
 import { gatewayBase, gatewayUrlFrom } from './connectors.ts';
 import { credentialUrlProblem } from './secure-url.ts';
 import { findGatewayClient } from './notion-tasks.ts';
+import { onPath } from './adapters/acp/agents.ts';
 import { CLI_POLICIES, isEffortLevel, isProvider, type CliPolicy, type EffortLevel, type PermissionMode, type Provider } from './protocol.ts';
 
 // <package version>+<release id>, or +source when run from a checkout.
@@ -50,6 +51,10 @@ export const DEFAULT_CLI_UPDATES: CliUpdatesConfig = { claude: 'auto', codex: 'a
 // never touch ~/Library/Application Support/Threadbear.
 export type Config = {
   home: string; // data dir
+  // Account discovery uses the environment loadConfig was given, which may
+  // differ from this process's (a test or an embedded runner).
+  userHome: string;
+  pathEnv: string;
   port: number;
   host: string;
   logFile: string;
@@ -89,7 +94,7 @@ export type Config = {
   // one the codex next to the runner's Node; never ~/.local/bin/codex.
   codexPath?: string;
   // Used as is by the ACP agents (adapters/acp/agents.ts), else wherever
-  // each is installed. Only with the acpAgents experiment on.
+  // each is installed.
   cursorPath?: string;
   opencodePath?: string;
   codexArgs: string[]; // extra `codex app-server` arguments
@@ -138,7 +143,7 @@ export type Config = {
   // THREADBEAR_SYNC=off turns it off for tests and dev runners.
   // urlRefused: why the configured url isn't used (plain http off this
   // Mac, secure-url.ts), so sync is off and tb status says why.
-  sync: { enabled: boolean; url?: string; urlRefused?: string; site?: string; name?: string; runnerId?: string; icon?: string; rpcUrl?: string; pastedPictures?: boolean; full?: boolean };
+  sync: { enabled: boolean; url?: string; urlRefused?: string; site?: string; name?: string; runnerId?: string; icon?: string; pastedPictures?: boolean; full?: boolean; fullAsked?: string; usageWarning?: boolean };
   // The silent on-device secret check (src/secret-check.ts): off unless asked.
   secretCheck?: boolean;
   // Mike's Connectors gateway's base URL (connectors.ts), for the app's
@@ -189,9 +194,16 @@ export type RunnerJson = {
   // The ssh host that ./check.sh sends the repo's checks to, so suites and
   // the app's test windows stay off this Mac (scripts/check-remote.sh), or
   // checkHosts, several tried in order, which wins (a check.sh from before
-  // the list reads only checkHost). Only check.sh reads them.
+  // the list reads only checkHost). Trusted to run tests only: never to build
+  // anything this Mac then runs (updateBuildHosts).
   checkHost?: string;
   checkHosts?: string[];
+  // The ssh hosts the installed GPUI app's update is built on, tried in order
+  // (desktop/scripts/stage-update.sh): what one sends back is what this Mac
+  // runs next, so a host goes here only by the owner's choice, never because
+  // it's a check host (Daybreak 108, 12 Nov 2026). With check hosts but none
+  // of these the app builds nothing; with neither it builds on this Mac.
+  updateBuildHosts?: string[];
   // How far below normal the builds and tests Threadbear starts itself run:
   // 'background', 'low' (the default) or 'normal' (background.ts). check.sh
   // reads it too, for its fallback when no check host answers.
@@ -205,12 +217,15 @@ export type RunnerJson = {
   releases?: { publish?: boolean; signingKey?: string; signingProvider?: string; bringIn?: number | 'important' | 'off' };
   models?: { pool?: string | null; privateFolders?: string[] };
   // icon: an SF Symbol for this runner in lists (machine.ts works one out).
-  // rpcUrl: how a Mac app reaches this runner over the tailnet (step 6 part 2).
+  // An rpcUrl left from the direct link between Macs (gone 13 Nov 2026) is ignored.
   // full: true sends tool output to your Convex deployment as well, scrubbed first
-  // (docs/full-convex.md). Off unless you say so.
+  // (docs/full-convex.md). Unset to start: the main runner asks once, when a
+  // phone, the website or another machine would show it (convex-use.ts), noting
+  // when in fullAsked.
+  // usageWarning: false hides tb status's warning near Convex's Free limits.
   // pastedPictures: false keeps pictures you paste off your Convex deployment
   // (docs/on-your-mac.md).
-  sync?: { enabled?: boolean; url?: string; site?: string; name?: string; runnerId?: string; icon?: string; rpcUrl?: string; pastedPictures?: boolean; full?: boolean };
+  sync?: { enabled?: boolean; url?: string; site?: string; name?: string; runnerId?: string; icon?: string; pastedPictures?: boolean; full?: boolean; fullAsked?: string; fullAskedThread?: string; fullAskedQuestion?: string; usageWarning?: boolean };
   secretCheck?: { enabled?: boolean };
   // Days after a thread is archived that housekeeping clears its pictures
   // (housekeeping.ts). Absent: they're kept. Mike's runners set 30.
@@ -230,14 +245,26 @@ export function defaultModeOf(v: unknown): DefaultMode | undefined {
   return v === 'full' || v === 'ask' || v === 'auto' ? v : undefined;
 }
 
-export function defaultHome(): string {
-  return path.join(os.homedir(), 'Library', 'Application Support', 'Threadbear');
+export function defaultHome(userHome = os.homedir()): string {
+  return path.join(userHome, 'Library', 'Application Support', 'Threadbear');
 }
 
-export function expandHome(p: string): string {
-  if (p === '~') return os.homedir();
-  if (p.startsWith('~/')) return path.join(os.homedir(), p.slice(2));
+export function expandHome(p: string, userHome = os.homedir()): string {
+  if (p === '~') return userHome;
+  if (p.startsWith('~/')) return path.join(userHome, p.slice(2));
   return p;
+}
+
+// Claude Code's native install (~/.local/bin/claude) first, then a claude on
+// the runner's PATH, which is where npm and Homebrew put theirs. Kept as the
+// link they made rather than where it points, so an update that moves the
+// link is followed. With neither, the native path, which the runner's notice
+// then says is missing. Only ~/.local/bin counted until 13 Nov 2026, though
+// INSTALL.md said the PATH's would do (jayehzzz's fork).
+function findClaude(pathEnv: string, userHome: string): string {
+  const native = path.join(userHome, '.local', 'bin', 'claude');
+  if (onPath('claude', path.dirname(native))) return native;
+  return onPath('claude', pathEnv) ?? native;
 }
 
 // A runner.json that's there but doesn't read as a JSON object: a hand edit
@@ -373,8 +400,10 @@ adoptOldNames(process.env);
 // Nothing loaded that way may write runner.json.
 export function loadConfig(env: NodeJS.ProcessEnv = process.env, opts: { readOnly?: boolean } = {}): Config {
   adoptOldNames(env);
+  const userHome = env.HOME || os.homedir();
+  const expand = (p: string) => expandHome(p, userHome);
   // THREADBEAR_DATA_DIR is the name the Mac app uses for the same override.
-  const home = path.resolve(expandHome(env.THREADBEAR_HOME || env.THREADBEAR_DATA_DIR || defaultHome()));
+  const home = path.resolve(expand(env.THREADBEAR_HOME || env.THREADBEAR_DATA_DIR || defaultHome(userHome)));
   const json = opts.readOnly ? peekRunnerJson(home) : readRunnerJson(home);
   const port = Number(env.THREADBEAR_PORT || json.port || DEFAULT_PORT);
   const idleMs = env.THREADBEAR_IDLE_MS
@@ -386,14 +415,16 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, opts: { readOnl
   const efforts = providerMap(json.defaults?.efforts, (v) => (isEffortLevel(v) ? v : undefined));
   return {
     home,
+    userHome,
+    pathEnv: env.PATH ?? '',
     port,
     host: '127.0.0.1',
     maxLive: Number.isFinite(maxLive) && maxLive >= 1 ? Math.floor(maxLive) : DEFAULT_MAX_LIVE,
-    logFile: expandHome(env.THREADBEAR_LOG || path.join(os.homedir(), 'Library', 'Logs', 'threadbear-runner.log')),
-    claudePath: expandHome(env.THREADBEAR_CLAUDE_PATH || json.claudePath || '~/.local/bin/claude'),
+    logFile: expand(env.THREADBEAR_LOG || path.join(userHome, 'Library', 'Logs', 'threadbear-runner.log')),
+    claudePath: expand(env.THREADBEAR_CLAUDE_PATH || json.claudePath || findClaude(env.PATH ?? '', userHome)),
     idleMs,
     defaults: {
-      cwd: expandHome(json.defaults?.cwd || DEFAULT_CWD),
+      cwd: expand(json.defaults?.cwd || DEFAULT_CWD),
       accountId: json.defaults?.accountId,
       ...(nonEmpty(json.defaults?.poolId) ? { poolId: nonEmpty(json.defaults?.poolId) } : {}),
       model: nonEmpty(json.defaults?.model),
@@ -401,9 +432,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, opts: { readOnl
       ...(efforts ? { efforts } : {}),
       ...((m) => (m ? { permissionMode: m } : {}))(defaultModeOf(json.defaults?.permissionMode)),
     },
-    claudeMainDir: expandHome(env.THREADBEAR_CLAUDE_MAIN_DIR || '~/.claude'),
-    claudeMainJson: expandHome(env.THREADBEAR_CLAUDE_MAIN_JSON || '~/.claude.json'),
-    tokenStatsAccountsDir: expandHome(
+    claudeMainDir: expand(env.THREADBEAR_CLAUDE_MAIN_DIR || '~/.claude'),
+    claudeMainJson: expand(env.THREADBEAR_CLAUDE_MAIN_JSON || '~/.claude.json'),
+    tokenStatsAccountsDir: expand(
       env.THREADBEAR_ACCOUNTS_DIR || '~/Library/Application Support/Token Stats/Accounts',
     ),
     accountsDir: path.join(home, 'accounts'),
@@ -416,25 +447,25 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, opts: { readOnl
     // On for everyone since 10 Nov 2026, after a few days as an experiment
     // on Mike's Mac; Settings turns it off for anyone who'd rather.
     keepAwake: json.keepAwake !== false,
-    ...(json.releases?.publish === true ? { releases: { publish: true, ...(typeof json.releases.signingKey === 'string' ? { signingKey: expandHome(json.releases.signingKey) } : {}), ...(typeof json.releases.signingProvider === 'string' ? { signingProvider: expandHome(json.releases.signingProvider) } : {}) } } : {}),
+    ...(json.releases?.publish === true ? { releases: { publish: true, ...(typeof json.releases.signingKey === 'string' ? { signingKey: expand(json.releases.signingKey) } : {}), ...(typeof json.releases.signingProvider === 'string' ? { signingProvider: expand(json.releases.signingProvider) } : {}) } } : {}),
     models: modelSettingsFrom(json),
-    ...(codexPath ? { codexPath: expandHome(codexPath) } : {}),
-    ...(nonEmpty(json.cursorPath) ? { cursorPath: expandHome(nonEmpty(json.cursorPath)!) } : {}),
-    ...(nonEmpty(json.opencodePath) ? { opencodePath: expandHome(nonEmpty(json.opencodePath)!) } : {}),
+    ...(codexPath ? { codexPath: expand(codexPath) } : {}),
+    ...(nonEmpty(json.cursorPath) ? { cursorPath: expand(nonEmpty(json.cursorPath)!) } : {}),
+    ...(nonEmpty(json.opencodePath) ? { opencodePath: expand(nonEmpty(json.opencodePath)!) } : {}),
     codexArgs: Array.isArray(json.codexArgs) ? json.codexArgs.filter((a): a is string => typeof a === 'string') : [],
-    codexMainDir: expandHome(env.THREADBEAR_CODEX_MAIN_DIR || '~/.codex'),
-    tokenStatsLimitsFile: expandHome(
+    codexMainDir: expand(env.THREADBEAR_CODEX_MAIN_DIR || '~/.codex'),
+    tokenStatsLimitsFile: expand(
       env.THREADBEAR_TOKEN_STATS_LIMITS || '~/Library/Application Support/Token Stats/limits.json',
     ),
     cliUpdates: cliUpdatesConfig(json.cliUpdates, env.THREADBEAR_CLI_UPDATES),
     tokenTally: env.THREADBEAR_TOKEN_TALLY !== 'off',
     accountNotes: stringMap(json.accountNotes) ?? { ...DEFAULT_ACCOUNT_NOTES },
     poolFolders: folderMap(json.poolFolders) ?? { ...DEFAULT_POOL_FOLDERS },
-    ...((sb) => (sb ? { sandbox: sb } : {}))(readSandbox(json.sandbox, expandHome)),
+    ...((sb) => (sb ? { sandbox: sb } : {}))(readSandbox(json.sandbox, expand)),
     ...(Array.isArray(json.pools) && json.pools.length ? { pools: json.pools } : {}),
     sync: syncConfig(json.sync, env),
     secretCheck: json.secretCheck?.enabled === true,
-    ...connectorsConfig(json.connectors, env, expandHome(env.THREADBEAR_CLAUDE_MAIN_JSON || '~/.claude.json')),
+    ...connectorsConfig(json.connectors, env, expand(env.THREADBEAR_CLAUDE_MAIN_JSON || '~/.claude.json')),
   };
 }
 
@@ -477,10 +508,14 @@ function syncConfig(raw: RunnerJson['sync'], env: NodeJS.ProcessEnv): Config['sy
   if (runnerId) out.runnerId = runnerId;
   const icon = nonEmpty(raw?.icon);
   if (icon) out.icon = icon;
-  const rpcUrl = nonEmpty(raw?.rpcUrl);
-  if (rpcUrl) out.rpcUrl = rpcUrl;
   if (raw?.pastedPictures === false) out.pastedPictures = false;
+  // Unset stays unset: an install from before full sync was the default is
+  // asked, never switched on by an update (docs/full-convex.md step 6).
   if (raw?.full === true) out.full = true;
+  else if (raw?.full === false) out.full = false;
+  const asked = nonEmpty(raw?.fullAsked);
+  if (asked) out.fullAsked = asked;
+  if (raw?.usageWarning === false) out.usageWarning = false;
   return out;
 }
 

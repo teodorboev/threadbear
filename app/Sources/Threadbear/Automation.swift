@@ -1407,6 +1407,13 @@ enum Automation {
             let checklist = app.setupChecklist
             let items = checklist.items.map { "[\($0.done ? "x" : " ")] \($0.item.rawValue)" }.joined(separator: ", ")
             return "ok \(checklist.left) left, icon \(app.setupShowsIcon ? "shown" : "hidden"), panel \(app.setupShown ? "open" : "closed"): \(items)"
+        case "newApp":
+            // The GPUI app's window and card (NewApp.swift), without a
+            // checkout or a thread: {"window": true, "thread": "<id>", "error": "..."}.
+            NewAppOffer.shared.preview(c, app: app)
+            try? await Task.sleep(for: .milliseconds(300))
+            let offer = NewAppOffer.shared
+            return "ok window \(offer.windowShown ? "shown" : "hidden"), card \(offer.cardShown ? "shown" : "hidden"), thread \(offer.threadId ?? "none")"
         case "tour":
             // {"do": "start"|"next"|"back"|"end"}, or nothing to just read
             // where it's at. Says the step, its title and what it lights up.

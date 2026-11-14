@@ -4,6 +4,7 @@
 // underneath) and where it goes. What the runner makes of the time shows
 // under it as it changes (`schedules.preview`, a quarter of a second after the
 // last change), so a cron typo is plain before saving.
+use crate::a11y::A11yRole as _;
 use crate::app::Threadbear;
 use crate::{call, icons, now_ms, style};
 use gpui_kit::base::TestSupportExt as _;
@@ -123,7 +124,7 @@ impl Threadbear {
     /// the new-thread box's login and model. `from` is a thread whose
     /// composer it came from, which it then sends to unless switched.
     pub(crate) fn new_schedule(&mut self, from: Option<String>, window: &mut Window, cx: &mut Context<Self>) {
-        let thread = from.as_ref().and_then(|id| self.threads.get(id)).cloned();
+        let thread = from.as_ref().and_then(|id| self.threads.get(id)).map(|t| (**t).clone());
         let settings = thread.clone().unwrap_or_else(|| self.draft_summary());
         let state = EditorState {
             at_ms: rules::default_once_ms(now_ms()),
@@ -150,7 +151,7 @@ impl Threadbear {
             let (text, images) = c.schedule_draft(cx);
             (text, images, c.thread_id.clone())
         };
-        let thread = thread_id.as_ref().and_then(|id| self.threads.get(id)).cloned();
+        let thread = thread_id.as_ref().and_then(|id| self.threads.get(id)).map(|t| (**t).clone());
         let settings = thread.clone().unwrap_or_else(|| self.draft_summary());
         let state = EditorState {
             text,
@@ -606,7 +607,7 @@ impl ScheduleEditor {
         div()
             .id(SharedString::from(format!("{id}-holder")))
             .test_support()
-            .aria_label(tip.to_owned())
+            .a11y_role(Role::GenericContainer).aria_label(tip.to_owned())
             .flex_none()
             .child(button.dropdown_menu(move |menu: PopupMenu, _window, _cx| {
                 let mut menu = menu;
@@ -817,7 +818,7 @@ impl Render for ScheduleEditor {
                 let t = app.read(cx);
                 let others: Vec<(String, String, bool, &'static str)> = t.remote.all_runners.iter().filter(|r| !r.is_self).map(|r| (r.id.clone(), r.name.clone(), r.online, icons::runner_symbol(r.icon.as_deref()))).collect();
                 let mut folders: Vec<String> = vec![state.cwd.clone(), t.logins.defaults.cwd.clone()];
-                let mut threads: Vec<&threadbear_core::inbox::ThreadSummary> = t.threads.values().filter(|t| t.runner_id.is_none()).collect();
+                let mut threads: Vec<&threadbear_core::inbox::ThreadSummary> = t.threads.values().map(|t| &**t).filter(|t| t.runner_id.is_none()).collect();
                 threads.sort_by_cached_key(|t| std::cmp::Reverse(t.activity_ms()));
                 folders.extend(threads.into_iter().map(|t| t.cwd.clone()));
                 let mut recent: Vec<String> = Vec::new();
@@ -869,7 +870,10 @@ impl Render for ScheduleEditor {
                 // A path on that Mac: nothing here can check or choose it.
                 let away = state.runner_name.clone().unwrap_or_else(|| "another Mac".into());
                 let tip = format!("A folder on {away}. Left empty, {away}'s default folder.");
-                let folder = div().id("schedule-away-folder").tip(tip.clone()).child(Input::new(&self.away_folder).small());
+                let about = format!("A path on {away}, checked there when it runs. Its threads use {away}'s default account and model.");
+                let folder = h_flex().gap(px(6.)).items_center()
+                    .child(div().id("schedule-away-folder").tip(tip.clone()).child(Input::new(&self.away_folder).small()))
+                    .child(crate::home_page::info_tip("schedule-away-folder-about", about, cx));
                 rows.push(form_row("Folder", folder, cx).into_any_element());
             } else {
                 let mut choices: Vec<Choice> = recent
@@ -948,7 +952,7 @@ impl Render for ScheduleEditor {
             .child(div().flex_1())
             .child(Button::new("schedule-cancel").label("Cancel").small().outline().tooltip("Close without saving (Esc)").on_click(cx.listener(|this, _, window, cx| this.cancel(window, cx))))
             .child(
-                div().id("schedule-save").test_support().aria_label(save_tip.to_owned()).child(
+                div().id("schedule-save").test_support().a11y_role(Role::GenericContainer).aria_label(save_tip.to_owned()).child(
                     Button::new("schedule-save-button")
                         .label(save_label)
                         .small()

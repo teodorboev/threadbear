@@ -16,6 +16,7 @@ import type { RunnerPart } from './part.ts';
 import type { LooseEnd } from '../protocol.ts';
 import { sentByAgent } from '../protocol.ts';
 import { experimentOn } from '../experiments.ts';
+import { above } from '../threadbear-mcp.ts';
 
 export const QUIET_INBOX = 'quietInbox';
 export const HELPER_ARCHIVED_NOTE = 'Archived: another thread started this one, and it finished with nothing left for you.';
@@ -44,6 +45,14 @@ export const quietInboxPart = {
     // The threads it started, as they stand now rather than when git began.
     const open = [...ends.filter((e) => e.kind !== 'thread' && e.kind !== 'scheduled'), ...this.childEnds(st)];
     const waits = open.filter((e) => e.kind === 'thread' && e.threadId).map((e) => ({ id: e.threadId! }));
+    // Only on threads with as much access as it has: the wake passes on what
+    // they said, which from one with less would need send_message's card
+    // (Daybreak, 12 Nov 2026). Otherwise it stays in the inbox, as before.
+    const me = this.authorityNow(rec.id);
+    if (waits.some((w) => above(me, this.authorityNow(w.id)))) {
+      this.log.info('quiet inbox: not waiting on threads it started with less access', { threadId: rec.id });
+      return;
+    }
     if (waits.length && waits.length === open.length) {
       // All that's left is theirs to finish: it waits on them, as end_turn's
       // waitFor would have, and wakes with what they said. No longer

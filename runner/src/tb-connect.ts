@@ -66,8 +66,8 @@ export function newTbClient(cfg: Config, url: string = runnerUrl(cfg), opts: Run
   return new RunnerClient(url, c.token, options(c, opts));
 }
 
-// Why tb's commands that use this Mac's keys straight from disk (tb runner,
-// tb pair) shouldn't run here, or undefined if they may: they don't go through
+// Why tb's commands that use this Mac's keys straight from disk (tb runner)
+// shouldn't run here, or undefined if they may: they don't go through
 // the RPC, so the runner can't refuse them itself. A thread's shell (by its key
 // or by what started it, so a wiped environment doesn't count) needs the real
 // runner to say it isn't limited, and THREADBEAR_URL can point at a stand-in.

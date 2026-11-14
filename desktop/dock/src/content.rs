@@ -57,6 +57,28 @@ pub trait DockContent: 'static {
         let _ = (panel, cx);
         true
     }
+
+    /// A line about the panel for its tab's tip, before how to move it
+    /// (whose a pinned panel is, say). Nil: only the move tip.
+    fn tip(&self, panel: &str, cx: &App) -> Option<SharedString> {
+        let _ = (panel, cx);
+        None
+    }
+
+    /// The app's own items for the panel's right-click menu, above Close
+    /// (Threadbear's Pin and Unpin). None by default.
+    fn menu_items(&self, panel: &str, cx: &App) -> Vec<DockMenuItem> {
+        let _ = (panel, cx);
+        Vec::new()
+    }
+}
+
+/// One of the app's items in a panel's right-click menu (`menu_items`).
+#[derive(Clone)]
+pub struct DockMenuItem {
+    pub label: SharedString,
+    pub icon: Option<gpui_kit::assets::IconName>,
+    pub on_click: Rc<dyn Fn(&mut Window, &mut App)>,
 }
 
 /// The app's content, shared by the dock and its windows.
@@ -91,6 +113,12 @@ pub struct DockOptions {
     /// a panel up always takes a press held for a moment first, with or
     /// without this.
     pub bars_move_window: bool,
+    /// A press held on a panel's background (not its bar) picks the panel up.
+    /// A panel with no bar along its top (its title hidden) can always be
+    /// picked up from its background, whatever this says. On by default,
+    /// as BearDock does it; Threadbear turns it off unless Settings says
+    /// otherwise, as Mike found it got in the way more than it helped (13 Nov).
+    pub background_moves_panel: bool,
     /// The colour of drop targets and the lit divider. Default: the theme's
     /// primary (Swift's `Color.accentColor`). Apps with an accent of their
     /// own (the demo's macOS blue) set it here.
@@ -111,10 +139,21 @@ impl Default for DockOptions {
             traffic_lights: 0.,
             corner_moves_window: false,
             bars_move_window: false,
+            background_moves_panel: true,
             accent: None,
             window_content: None,
             prepare_window: None,
             window_activation: None,
         }
     }
+}
+
+/// The menu's row for one of the app's items.
+pub(crate) fn popup_item(item: DockMenuItem) -> gpui_kit::component::menu::PopupMenuItem {
+    let on_click = item.on_click.clone();
+    let mut row = gpui_kit::component::menu::PopupMenuItem::new(item.label);
+    if let Some(icon) = item.icon {
+        row = row.icon(gpui_kit::component::Icon::new(icon));
+    }
+    row.on_click(move |_, window, cx| on_click(window, cx))
 }

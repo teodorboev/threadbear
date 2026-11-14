@@ -50,6 +50,8 @@ pub(crate) struct SwipeNav {
     held: Vec<ScrollEvent>,
     /// Handing those on: they're on their way, not new.
     replaying: bool,
+    /// A gesture begun over a board belongs to its scrollers through lift.
+    board_scroll: bool,
 }
 
 impl SwipeNav {
@@ -285,6 +287,23 @@ impl Threadbear {
                     }
                     let mine = app
                         .update(cx, |this, cx| {
+                            if event.touch_phase == TouchPhase::Started {
+                                this.swipe_nav.board_scroll = this.panel_available(crate::shell::HIGHLIGHTS, cx)
+                                    && this.dock.read(cx).controller.is_showing(crate::shell::HIGHLIGHTS)
+                                    && this.pane_thread().is_some_and(|thread| this.side.read(cx).board_scroll_at(&thread, event.position, window));
+                                if this.swipe_nav.board_scroll {
+                                    this.swipe_nav.swipe.reset();
+                                    this.swipe_nav.held.clear();
+                                    this.swipe_nav.touched = false;
+                                    this.swipe_nav.eating_momentum = false;
+                                }
+                            }
+                            if this.swipe_nav.board_scroll {
+                                if matches!(event.touch_phase, TouchPhase::Ended | TouchPhase::Cancelled) {
+                                    this.swipe_nav.board_scroll = false;
+                                }
+                                return false;
+                            }
                             // A row's swipe under way has the whole gesture,
                             // wherever the pointer's got to (row_swipe.rs).
                             if let Some(mine) = this.row_swipe_scrolled(event, window, cx) {

@@ -57,6 +57,10 @@ When('I press ⌘J', async function (this: ThreadbearWorld) {
   await this.app.do({ cmd: 'menu-key', key: 'j', modifiers: ['cmd'] });
 });
 
+When('I follow the Terminal link {string}', async function (this: ThreadbearWorld, words: string) {
+  await this.app.do({ cmd: 'terminal', follow: words });
+});
+
 // The empty panel and New Shell, by their tooltips' start, as each app's
 // tip names the folder.
 When('I start a shell from the empty Terminal', async function (this: ThreadbearWorld) {
@@ -328,4 +332,18 @@ Then('{string} is copied instead', async function (this: ThreadbearWorld, comman
     await new Promise((done) => setTimeout(done, 200));
   }
   assert.fail(`the clipboard has ${last}`);
+});
+
+When('the Terminal prints a link to a program in its folder', async function (this: ThreadbearWorld) {
+  const folder = openFolder(this, await this.app.dump());
+  const program = path.join(folder, 'terminal-link.command');
+  fs.writeFileSync(program, 'touch "' + path.join(folder, 'link-ran') + '"\n', { mode: 0o700 });
+  const uri = new URL('file://' + program).href;
+  await this.app.do({ cmd: 'terminal', keys: "printf '\\033]8;;" + uri + "\\033\\\\Run the program\\033]8;;\\033\\\\\\n'" });
+  await this.app.do({ cmd: 'terminal', press: 'enter' });
+  await untilScreen(this, 'the labelled link', (lines) => lines.includes('Run the program'));
+});
+
+Then("the Terminal link's program did not run", async function (this: ThreadbearWorld) {
+  assert.ok(!fs.existsSync(path.join(openFolder(this, await this.app.dump()), 'link-ran')));
 });

@@ -13,6 +13,13 @@ Feature: Staying connected to the runner
     Then the app is connected again
     And the transcript still shows the thread "Morning brief"
 
+  @foundation.rpc
+  Scenario: A malformed summary cannot hide the readable threads after reconnecting
+    When the runner's next list includes malformed fields and rows
+    And the runner restarts
+    Then the app is connected again
+    And the sidebar shows the recovered thread title
+
   @banner.connection
   Scenario: The bar says when the runner can't be reached, and goes once it's back
     When the runner goes away without a word for 8 seconds

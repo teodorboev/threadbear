@@ -5,12 +5,14 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { phoneCommands, primaryRemote, ThreadRouter } from '../../src/handover.ts';
+import { openCardEvents, phoneCommands, primaryRemote, ThreadRouter } from '../../src/handover.ts';
+import type { PersistedEvent } from '../../src/protocol.ts';
 import { FakeAccounts, FakeAdapter, makeHarness, testConfig, tick, type Harness } from '../helpers/fakes.ts';
 import { Runner, SAVE_RETRY_MS, type Notification } from '../../src/runner.ts';
 import { ThreadStore } from '../../src/store.ts';
 import { FakeClock } from '../../src/clock.ts';
 import { nullLogger } from '../../src/log.ts';
+import { RpcClientError } from '../../src/client.ts';
 import { ErrorCode, RpcError } from '../../src/protocol.ts';
 
 const MIN = 60_000;
@@ -528,15 +530,13 @@ test("the phone's commands reach a thread a draining runner still has", async ()
   await host.update({ threadId: busy.id, archived: true });
   await host.respondApproval({ threadId: busy.id, approvalId: 'a1', decision: 'allow' });
   await host.share(busy.id, { access: 'link' });
-  // Its buttons too, which a press from the phone checks first (Codex's review, 10 Nov).
-  await host.listButtons!(busy.id);
-  assert.deepEqual(sent.map(([m]) => m), ['threads.send', 'threads.markSeen', 'threads.update', 'approvals.respond', 'threads.share', 'buttons.list']);
+  assert.deepEqual(sent.map(([m]) => m), ['threads.send', 'threads.markSeen', 'threads.update', 'approvals.respond', 'threads.share']);
   assert.deepEqual(sent[0][1], { threadId: busy.id, text: 'from my phone', origin: 'phone' });
   assert.ok((sent[1][1].seq as number) >= Number.MAX_SAFE_INTEGER, 'seen up to whatever it has');
   // The primary's own threads are done here.
   await host.update({ threadId: idle.id, title: 'Renamed' });
   assert.equal(b.runner.get(idle.id).title, 'Renamed');
-  assert.equal(sent.length, 6);
+  assert.equal(sent.length, 5);
   // Handed over just as the command went: done here instead.
   moved = true;
   await host.update({ threadId: busy.id, title: 'Came across' });
@@ -891,4 +891,219 @@ test('primaryRemote: a draining runner reaches other runners\' threads through t
   assert.deepEqual(calls[0], ['remoteThreads.list', { forTools: true }], 'the primary waits for the rows, as for its own tools');
   await remote.call('ba5bb5ec-1', 'threads.send', { text: 'hi' });
   assert.deepEqual(calls.at(-1), ['threads.send', { threadId: 'ba5bb5ec-1', text: 'hi' }]);
+});
+
+test('openCardEvents: the requests nothing has answered, in order', () => {
+  const ts = '2026-11-13T00:00:00.000Z';
+  const events = [
+    { type: 'approval.requested', seq: 1, ts, approvalId: 'a', name: 'Bash', title: 'x', input: {}, options: ['allow'] },
+    { type: 'approval.resolved', seq: 2, ts, approvalId: 'a', decision: 'allow' },
+    { type: 'secret.requested', seq: 3, ts, approvalId: 's', label: 'Key', reason: 'why' },
+    { type: 'assistant.text', seq: 4, ts, itemId: 'i', text: 'hi' },
+    { type: 'approval.requested', seq: 5, ts, approvalId: 'b', name: 'threadbear.start_thread', title: 'Start?', input: {}, options: ['allow', 'deny'] },
+  ] as never as PersistedEvent[];
+  assert.deepEqual(openCardEvents(events).map((e) => e.seq), [3, 5]);
+});
+
+test("Peers.openCards, from a release before drain.openCards: each draining thread's unanswered cards, with its summary", async () => {
+  const h = makeHarness();
+  const { writeDrainInfo, Peers } = await import('../../src/handover.ts');
+  writeDrainInfo(h.home, { pid: 434343, port: 1, version: 'old', since: new Date().toISOString(), threads: ['t-wait', 't-busy'] });
+  const ts = '2026-11-13T00:00:00.000Z';
+  const logs: Record<string, unknown[]> = {
+    't-wait': [
+      { type: 'approval.requested', seq: 7, ts, approvalId: 'start-1', name: 'threadbear.start_thread', title: 'Start a thread on main?', input: {}, options: ['allow', 'deny'] },
+    ],
+    't-busy': [
+      { type: 'approval.requested', seq: 3, ts, approvalId: 'a', name: 'Bash', title: 'x', input: {}, options: ['allow'] },
+      { type: 'approval.resolved', seq: 4, ts, approvalId: 'a', decision: 'allow' },
+    ],
+  };
+  const client = {
+    call: async (method: string, p: any) => {
+      if (method === 'drain.hello') return { threads: ['t-wait', 't-busy'], version: 'old' };
+      if (method === 'drain.openCards') throw new RpcClientError(ErrorCode.methodNotFound, 'Unknown method drain.openCards');
+      if (method === 'threads.list') return { threads: ['t-wait', 't-busy'].map((id) => ({ id, title: id, status: 'waiting', lastActivityAt: ts })) };
+      if (method === 'threads.events') return { events: ((logs[p.threadId] ?? []) as { seq: number }[]).filter((e) => p.beforeSeq === undefined || e.seq < p.beforeSeq) };
+      return {};
+    },
+    onNotification: () => () => {},
+    waitClosed: () => new Promise<never>(() => {}),
+    close: () => {},
+  };
+  const peers = new Peers({ home: h.home, token: 't', log: nullLogger, runner: { adopt: () => undefined, publish: () => {}, waitedOnDeleted: () => {} }, sweep: async () => {}, connect: async () => client as any, alive: () => true });
+  await peers.connectAll();
+  const found = await peers.openCards();
+  // Every thread read, so a row still showing an answered card is written again.
+  assert.deepEqual(found.map((f) => [f.thread.id, f.thread.onOldRunner, f.events.map((e) => (e as { approvalId: string }).approvalId)]), [['t-wait', true, ['start-1']], ['t-busy', true, []]]);
+});
+
+test('Peers.openCards, from a release before drain.openCards: reads the whole log a page at a time, and gives up on a runner that stops answering', async () => {
+  const h = makeHarness();
+  const { writeDrainInfo, Peers } = await import('../../src/handover.ts');
+  writeDrainInfo(h.home, { pid: 454545, port: 1, version: 'old', since: new Date().toISOString(), threads: ['t-long', 't-hung'] });
+  const ts = '2026-11-13T00:00:00.000Z';
+  // A sub-agent's question at seq 2, with 30 events of other work after it.
+  const long = Array.from({ length: 32 }, (_, i) => (i === 1 ? { type: 'question.requested', seq: 2, ts, approvalId: 'old-q', questions: [] } : { type: 'assistant.text', seq: i + 1, ts, itemId: `i${i}`, text: 'x' }));
+  const pages: unknown[] = [];
+  const client = {
+    call: async (method: string, p: any) => {
+      if (method === 'drain.hello') return { threads: ['t-long', 't-hung'], version: 'old' };
+      if (method === 'drain.openCards') throw new RpcClientError(ErrorCode.methodNotFound, 'Unknown method drain.openCards');
+      if (method === 'threads.list') return { threads: ['t-long', 't-hung'].map((id) => ({ id, title: id, status: 'waiting', lastActivityAt: ts })) };
+      if (method === 'threads.events' && p.threadId === 't-hung') return new Promise(() => {});
+      if (method === 'threads.events') {
+        pages.push(p.beforeSeq);
+        const to = (p.beforeSeq ?? 33) - 1;
+        return { events: long.filter((e) => e.seq <= to && e.seq > to - p.limit) };
+      }
+      return {};
+    },
+    onNotification: () => () => {},
+    waitClosed: () => new Promise<never>(() => {}),
+    close: () => {},
+  };
+  const peers = new Peers({ home: h.home, token: 't', log: nullLogger, runner: { adopt: () => undefined, publish: () => {}, waitedOnDeleted: () => {} }, sweep: async () => {}, connect: async () => client as any, alive: () => true });
+  await peers.connectAll();
+  const started = Date.now();
+  const found = await peers.openCards({ page: 10, deadlineMs: 300 });
+  assert.ok(Date.now() - started < 2_000);
+  assert.deepEqual(pages, [undefined, 23, 13, 3]);
+  // The hung one isn't there: its row stays as it was.
+  assert.deepEqual(found.map((f) => [f.thread.id, f.events.map((e) => e.seq)]), [['t-long', [2]]]);
+});
+
+// THREADBEAR-1Z: read here a thread at a time on one shared deadline, the
+// first slow answer took it all, and no thread on either draining runner was
+// read. Each runner now sends a thread's open cards (drain.openCards), every
+// thread at once, and no log crosses the connection.
+test("Peers.openCards: each thread's open cards from its draining runner, all at once, a slow one costing only its own", async () => {
+  const h = makeHarness();
+  const { writeDrainInfo, Peers } = await import('../../src/handover.ts');
+  const since = new Date().toISOString();
+  writeDrainInfo(h.home, { pid: 474747, port: 1, version: 'older', since, threads: ['t-gone'] });
+  writeDrainInfo(h.home, { pid: 484848, port: 2, version: 'old', since, threads: ['t-hung', 't-a', 't-b'] });
+  const ts = '2026-11-13T00:00:00.000Z';
+  const asked: string[] = [];
+  const clientFor = (pid: number, threads: string[]) => ({
+    call: async (method: string, p: any) => {
+      if (method === 'drain.hello') return { threads, version: 'old' };
+      if (method === 'threads.list') return { threads: threads.map((id) => ({ id, title: id, status: 'waiting', lastActivityAt: ts })) };
+      if (method !== 'threads.subscribe') asked.push(`${method} ${p.threadId}`);
+      // The first runner has stopped answering, and so has one thread on the second.
+      if (method === 'drain.openCards' && (pid === 474747 || p.threadId === 't-hung')) return new Promise(() => {});
+      if (method === 'drain.openCards') return { events: p.threadId === 't-a' ? [{ type: 'question.requested', seq: 9, ts, approvalId: 'q-a', questions: [] }] : [] };
+      return {};
+    },
+    onNotification: () => () => {},
+    waitClosed: () => new Promise<never>(() => {}),
+    close: () => {},
+  });
+  const connect = async (_port: number, _token: string, _legacy: boolean, pid: number) => clientFor(pid, pid === 474747 ? ['t-gone'] : ['t-hung', 't-a', 't-b']) as any;
+  const peers = new Peers({ home: h.home, token: 't', log: nullLogger, runner: { adopt: () => undefined, publish: () => {}, waitedOnDeleted: () => {} }, sweep: async () => {}, connect, alive: () => true });
+  await peers.connectAll();
+  const found = await peers.openCards({ deadlineMs: 300 });
+  assert.deepEqual(found.map((f) => [f.thread.id, f.thread.onOldRunner, f.events.map((e) => (e as { approvalId: string }).approvalId)]), [['t-a', true, ['q-a']], ['t-b', true, []]]);
+  assert.deepEqual(asked.sort(), ['drain.openCards t-a', 'drain.openCards t-b', 'drain.openCards t-gone', 'drain.openCards t-hung']);
+});
+
+test('Runner.openCards: the cards nothing has answered on a kept thread, a chunk of log at a time', async () => {
+  const h = makeHarness();
+  const { thread } = h.runner.create({ text: 'Clean up', accountId: 'claude-3', permissionMode: 'ask' });
+  const s = h.adapter.last;
+  s.init();
+  const ac = new AbortController();
+  // One answered, its request and answer in different chunks, then one open.
+  const first = s.sink.requestApproval({ toolUseId: 'tu0', name: 'Bash', title: 'ls', input: { command: 'ls' }, canAlwaysAllow: true, signal: ac.signal });
+  const req = h.events(thread.id).find((e) => e.type === 'approval.requested');
+  s.text('x1', 'looking');
+  h.runner.respondApproval({ threadId: thread.id, approvalId: req.approvalId, decision: 'allow' });
+  await first;
+  void s.sink.requestApproval({ toolUseId: 'tu1', name: 'Bash', title: 'rm -rf build', input: { command: 'rm -rf build' }, canAlwaysAllow: true, signal: ac.signal });
+  const idle = h.runner.create({ text: 'Other', accountId: 'claude-3' }).thread;
+  h.adapter.last.init();
+  const moved = (e: unknown) => e instanceof RpcError && e.code === ErrorCode.moved;
+  // Not draining: nothing kept to ask about.
+  await assert.rejects(h.runner.openCards(thread.id), moved);
+  await h.runner.beginDrain([thread.id, idle.id], { onHandedOver: () => {}, backgroundMs: 30 * MIN });
+  const show = (events: PersistedEvent[]) => events.map((e) => [e.type, (e as { title?: string }).title]);
+  assert.deepEqual(show(await h.runner.openCards(thread.id, { chunk: 2 })), [['approval.requested', 'rm -rf build']]);
+  // Past its time it stops reading: the primary has stopped waiting.
+  await assert.rejects(h.runner.openCards(thread.id, { chunk: 1, scanMs: -1 }), (e: unknown) => e instanceof RpcError && e.code === ErrorCode.busy);
+  assert.deepEqual(show(await h.runner.openCards(thread.id)), [['approval.requested', 'rm -rf build']]);
+  assert.deepEqual(await h.runner.openCards(idle.id), []);
+  await assert.rejects(h.runner.openCards('t-not-here'), moved);
+  ac.abort();
+});
+
+test('Peers.openCards, from a release before drain.openCards: each summary as it is once every log is read', async () => {
+  const h = makeHarness();
+  const { writeDrainInfo, Peers } = await import('../../src/handover.ts');
+  writeDrainInfo(h.home, { pid: 464646, port: 1, version: 'old', since: new Date().toISOString(), threads: ['t-a', 't-b'] });
+  const ts = '2026-11-13T00:00:00.000Z';
+  let notify: (m: string, p: any) => void = () => {};
+  const client = {
+    call: async (method: string, p: any) => {
+      if (method === 'drain.hello') return { threads: ['t-a', 't-b'], version: 'old' };
+      if (method === 'drain.openCards') throw new RpcClientError(ErrorCode.methodNotFound, 'Unknown method drain.openCards');
+      if (method === 'threads.list') return { threads: ['t-a', 't-b'].map((id) => ({ id, title: id, status: 'idle', lastActivityAt: ts })) };
+      if (method === 'threads.events' && p.threadId === 't-b') {
+        // While t-b is read, t-a (read already) asks and says it waits.
+        notify('thread.updated', { thread: { id: 't-a', title: 't-a', status: 'waiting', lastActivityAt: ts } });
+      }
+      if (method === 'threads.events') return { events: [] };
+      return {};
+    },
+    onNotification: (fn: (m: string, p: any) => void) => ((notify = fn), () => {}),
+    waitClosed: () => new Promise<never>(() => {}),
+    close: () => {},
+  };
+  const peers = new Peers({ home: h.home, token: 't', log: nullLogger, runner: { adopt: () => undefined, publish: () => {}, waitedOnDeleted: () => {} }, sweep: async () => {}, connect: async () => client as any, alive: () => true });
+  await peers.connectAll();
+  const found = await peers.openCards();
+  assert.deepEqual(found.map((f) => [f.thread.id, f.thread.status]), [['t-a', 'waiting'], ['t-b', 'idle']]);
+});
+
+// Daybreak 122 (13 Nov 2026): a release from that morning answered
+// drain.openCards with every kept thread's cards, { threads: [...] }, and
+// took no threadId. Read as the new shape it was events: undefined, which
+// threw in seedCards: that runner's cards and every one after it were lost.
+test("Peers.openCards: a draining runner from the morning of 13 Nov, answering every thread at once, between two of today's", async () => {
+  const h = makeHarness();
+  const { writeDrainInfo, Peers } = await import('../../src/handover.ts');
+  const since = new Date().toISOString();
+  writeDrainInfo(h.home, { pid: 515151, port: 1, version: 'new', since, threads: ['n1'] });
+  writeDrainInfo(h.home, { pid: 525252, port: 2, version: 'morning', since, threads: ['m1', 'm2', 'm3'] });
+  writeDrainInfo(h.home, { pid: 535353, port: 3, version: 'new', since, threads: ['n2', 'odd'] });
+  const ts = '2026-11-13T00:00:00.000Z';
+  const card = (approvalId: string, seq: number) => ({ type: 'question.requested', seq, ts, approvalId, questions: [] });
+  const threadsOf: Record<number, string[]> = { 515151: ['n1'], 525252: ['m1', 'm2', 'm3'], 535353: ['n2', 'odd'] };
+  const clientFor = (pid: number) => ({
+    call: async (method: string, p: any) => {
+      const threads = threadsOf[pid]!;
+      if (method === 'drain.hello') return { threads, version: 'x' };
+      if (method === 'threads.list') return { threads: threads.map((id) => ({ id, title: id, status: 'waiting', lastActivityAt: ts })) };
+      if (method === 'drain.openCards') {
+        // The morning's: params ignored, every thread's cards (m3 had none).
+        if (pid === 525252) return { threads: [{ threadId: 'm1', events: [card('q-m1', 4)] }, { threadId: 'm2', events: [card('q-m2', 7), { junk: true }] }] };
+        if (p.threadId === 'odd') return { something: 'else' };
+        return { events: [card(`q-${p.threadId}`, 3)] };
+      }
+      return {};
+    },
+    onNotification: () => () => {},
+    waitClosed: () => new Promise<never>(() => {}),
+    close: () => {},
+  });
+  const connect = async (_port: number, _token: string, _legacy: boolean, pid: number) => clientFor(pid) as any;
+  const peers = new Peers({ home: h.home, token: 't', log: nullLogger, runner: { adopt: () => undefined, publish: () => {}, waitedOnDeleted: () => {} }, sweep: async () => {}, connect, alive: () => true });
+  await peers.connectAll();
+  const found = await peers.openCards({ deadlineMs: 1000 });
+  const ids = (f: (typeof found)[number]) => f.events.map((e) => (e as { approvalId: string }).approvalId);
+  assert.deepEqual(found.map((f) => [f.thread.id, ids(f)]).sort(), [['m1', ['q-m1']], ['m2', ['q-m2']], ['n1', ['q-n1']], ['n2', ['q-n2']]]);
+  // And seeding them doesn't stop at one it can't read.
+  const { openCardsAnswer } = await import('../../src/handover.ts');
+  assert.equal(openCardsAnswer({ threads: [] }, 'm3'), undefined);
+  assert.equal(openCardsAnswer(null, 'x'), undefined);
+  assert.equal(openCardsAnswer({ events: 'no' }, 'x'), undefined);
 });

@@ -535,6 +535,26 @@ impl RowContent {
     pub fn is_wake_note(&self) -> bool {
         matches!(self, RowContent::Note(text) if text.starts_with("Woke up"))
     }
+
+    /// The note a thread leaves when its login ran out: it moved to another
+    /// one ("Moved to mike@example.org: mike@example.net hit its 5-hour
+    /// limit, back at 6:10 pm."), or nothing had room and it's waiting
+    /// ("Every login in Claude is out of room. Carrying on at 5:00 am when
+    /// mike@example.net is back."). The runner words both
+    /// (runner/src/runner/pools.ts, `moveLogin` and `startWait`). It never
+    /// folds into the work: a thread that changed login by itself has to say
+    /// so, or all there is to see is a red "You've hit your limit" and then
+    /// a reply (Mike, 13 Nov 2026: "I keep hitting this but then it carries
+    /// on. Is that because it auto picked another provider? If so, it should
+    /// tell me"). A move to another folder starts "Moved to" too and still
+    /// folds: that one he asked for. "Won't carry on by itself." (his No on
+    /// the limit box) stays with them, or the wait note above it would go
+    /// on promising a time (Codex's review, 13 Nov).
+    pub fn is_login_note(&self) -> bool {
+        let RowContent::Note(text) = self else { return false };
+        let moved = text.starts_with("Moved to ") && text.contains(": ") && !text.contains("The session carries on there");
+        moved || text.contains(" Carrying on at ") || text.starts_with("Won't carry on by itself")
+    }
 }
 
 /// What Mike has put in an ask's own box (its Something else): his words

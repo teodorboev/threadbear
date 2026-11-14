@@ -51,7 +51,7 @@ pub fn group(command: ShortcutCommand) -> Group {
     use ShortcutCommand::*;
     match command {
         NewThread | Archive | Hibernate | Stop | CopyTranscript => Group::Threads,
-        Back | Forward | NextInboxThread | ShowInbox | ShowScheduled | ShowProjects | ShowLibrarian | ShowHibernating | ShowArchived | Settings => Group::Go,
+        Back | Forward | NextInboxThread | OpenAnything | OpenAnythingAlso | ShowInbox | ShowScheduled | ShowProjects | ShowLibrarian | ShowHibernating | ShowArchived | PreviousTab | NextTab | Settings => Group::Go,
         ZoomIn | ZoomOut | ActualSize | ToggleThreads | TogglePanels | ToggleTerminal | ResetPanelLayout | CollapseThreads => Group::View,
     }
 }
@@ -409,11 +409,11 @@ mod tests {
         let b = ShortcutBindings::default();
         r.start(Archive);
         assert!(r.waiting());
-        let next = r.press(key("cmd+k"), &b, true).unwrap();
-        assert_eq!(next.key(Archive), Some(key("cmd+k")));
+        let next = r.press(key("cmd+u"), &b, true).unwrap();
+        assert_eq!(next.key(Archive), Some(key("cmd+u")));
         assert_eq!(r, Recorder::default(), "and it stops listening");
         assert!(any_changed(&next));
-        assert_eq!(line(Archive, &next), "Archive: ⌘K (changed)");
+        assert_eq!(line(Archive, &next), "Archive: ⌘U (changed)");
         assert_eq!(line(Hibernate, &next), "Hibernate: none");
     }
 
@@ -437,7 +437,7 @@ mod tests {
         assert_eq!(look(&r, Archive, &b), Look::Listening);
         assert!(!r.waiting(), "a click elsewhere doesn't cancel with a question up");
         // Another go.
-        assert!(r.press(key("cmd+k"), &b, true).is_some());
+        assert!(r.press(key("cmd+u"), &b, true).is_some());
     }
 
     #[test]

@@ -189,9 +189,6 @@ final class TextFileController: NSObject, NSTextViewDelegate {
     static let saveDelay: DispatchTimeInterval = .milliseconds(800)
 
     var isMarkdown: Bool { PreviewRules.isMarkdown(url.path) }
-    /// A copy of another Mac's file draws no pictures from this Mac: its
-    /// `![](/path)` are that Mac's paths (MarkdownRenderer.localPictures).
-    var localPictures: Bool { !AppModel.shared.isRemoteCopy(url) }
     var language: String? { PreviewRules.codeLanguage(forPath: url.path) }
 
     init(url: URL) {
@@ -312,14 +309,14 @@ final class TextFileController: NSObject, NSTextViewDelegate {
         let storage = textView.textStorage!
         if !editing && isMarkdown {
             if text.utf8.count <= Self.renderInline {
-                storage.setAttributedString(MarkdownRenderer.withLocalPictures(localPictures) { MarkdownRenderer.render(text).string })
+                // Always this Mac's own file, so its pictures may be drawn.
+                storage.setAttributedString(MarkdownRenderer.withLocalPictures(true) { MarkdownRenderer.render(text).string })
                 drawnPage = true
             } else {
                 setPlain(text)
                 let mine = generation
-                let localPictures = localPictures
                 DispatchQueue.global(qos: .userInitiated).async {
-                    let rendered = MarkdownRenderer.withLocalPictures(localPictures) { MarkdownRenderer.render(text).string }
+                    let rendered = MarkdownRenderer.withLocalPictures(true) { MarkdownRenderer.render(text).string }
                     DispatchQueue.main.async {
                         MainActor.assumeIsolated {
                             guard mine == self.generation else { return }

@@ -178,9 +178,11 @@ function waitForOldLock(home) {
   }
 }
 
-// deploy-steps.mjs's step (its output in a log, printed if it fails), and
-// tried again if the network dropped: every step here is safe to repeat.
-const step = (name, cmd, args, opts) => stepRetryingNetwork(name, cmd, args, opts);
+// Runs a step with its output in a log file, printed only if it fails, and
+// runs it again if the network dropped under it (deploy-steps.mjs): every
+// step here is safe to repeat. Not deploy.mjs's sleep check, which would say
+// a failure across a sleep is tried again later; here it fails as it always has.
+const step = (name, cmd, args, opts) => stepRetryingNetwork(name, cmd, args, opts, { slept: () => undefined });
 
 function main(argv) {
   const { values: v } = parseArgs({

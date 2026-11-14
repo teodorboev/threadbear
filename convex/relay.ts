@@ -10,8 +10,9 @@
 // are read once and kept on the runner, a thread's row is one document, and
 // a command's state is one get by id.
 import { ConvexError, v } from 'convex/values';
+import type { OrderedQuery } from 'convex/server';
 import { internalMutation, internalQuery, mutation, query, type MutationCtx, type QueryCtx } from './_generated/server';
-import type { Id } from './_generated/dataModel';
+import type { DataModel, Doc, Id } from './_generated/dataModel';
 import { checkRunnerId, forbidden, pageLimit, runnerAuth, sha256, withoutCredentials } from './lib';
 import { docBytes, isThreadId } from './runnerAccess';
 import { messageButton } from './schema';
@@ -26,7 +27,8 @@ const ARGS_MAX_BYTES = 64 * 1024;
 
 const relayRow = v.object({
   seq: v.number(),
-  role: v.union(v.literal('user'), v.literal('assistant'), v.literal('tool')),
+  // "note" (API 78): a login's note, which only this route carries.
+  role: v.union(v.literal('user'), v.literal('assistant'), v.literal('tool'), v.literal('note')),
   text: v.string(),
   origin: v.optional(v.string()),
   toolKind: v.optional(v.string()),
@@ -42,7 +44,7 @@ const relayRow = v.object({
 });
 
 type Button = { id: string; title: string; kind: 'start' | 'send'; target?: string; pressedThreadId?: string; failed?: string };
-type Row = { seq: number; role: 'user' | 'assistant' | 'tool'; text: string; origin?: string; toolKind?: string; summary?: boolean; plan?: boolean; planDecision?: 'go' | 'revise'; turn?: string; wokeBy?: { kind: string; description: string }[]; buttons?: Button[]; at: string };
+type Row = { seq: number; role: 'user' | 'assistant' | 'tool' | 'note'; text: string; origin?: string; toolKind?: string; summary?: boolean; plan?: boolean; planDecision?: 'go' | 'revise'; turn?: string; wokeBy?: { kind: string; description: string }[]; buttons?: Button[]; at: string };
 function toRow(m: Row): Row {
   return {
     seq: m.seq,
@@ -62,15 +64,42 @@ function toRow(m: Row): Row {
   };
 }
 
+// How many login notes a page for a runner that didn't ask for them looks
+// past. They come a few at a time, when a login runs out.
+const NOTES_SKIPPED = 500;
+
+/**
+ * The first `want` rows of `q`, and whether there are more. A login's note
+ * (role "note", API 78) only for a runner that asks with `notes`: one from
+ * before draws any row it doesn't know as a tool call, and a row after the
+ * last turn took that turn's card and its failure away there (Codex's
+ * review, 13 Nov).
+ */
+async function pageOf(q: OrderedQuery<DataModel['messages']>, want: number, notes: boolean | undefined): Promise<{ rows: Doc<'messages'>[]; hasMore: boolean }> {
+  if (notes) {
+    const rows = await q.take(want + 1);
+    return { rows: rows.slice(0, want), hasMore: rows.length > want };
+  }
+  const rows: Doc<'messages'>[] = [];
+  let read = 0;
+  for await (const m of q) {
+    if (++read > want + 1 + NOTES_SKIPPED) return { rows, hasMore: true };
+    if (m.role === 'note') continue;
+    if (rows.length >= want) return { rows, hasMore: true };
+    rows.push(m);
+  }
+  return { rows, hasMore: false };
+}
+
 /** The newest rows of a thread, oldest first: the live tail. */
 export const remoteTail = query({
-  args: { key: v.string(), threadId: v.string(), limit: v.optional(v.number()) },
+  args: { key: v.string(), threadId: v.string(), limit: v.optional(v.number()), notes: v.optional(v.boolean()) },
   returns: v.object({ messages: v.array(relayRow), hasMore: v.boolean() }),
-  handler: async (ctx, { key, threadId, limit }) => {
+  handler: async (ctx, { key, threadId, limit, notes }) => {
     await runnerAuth(ctx, key, 'remoteTail');
     const want = pageLimit(limit, TAIL_MAX, TAIL_MAX);
-    const rows = await ctx.db.query('messages').withIndex('by_thread_seq', (q) => q.eq('threadId', threadId)).order('desc').take(want + 1);
-    return { messages: rows.slice(0, want).reverse().map(toRow), hasMore: rows.length > want };
+    const { rows, hasMore } = await pageOf(ctx.db.query('messages').withIndex('by_thread_seq', (q) => q.eq('threadId', threadId)).order('desc'), want, notes);
+    return { messages: rows.reverse().map(toRow), hasMore };
   },
 });
 
@@ -79,21 +108,24 @@ export const remoteTail = query({
  * after `afterSeq` (filling what a tail skipped), or the newest. Oldest first.
  */
 export const remoteMessages = query({
-  args: { key: v.string(), threadId: v.string(), beforeSeq: v.optional(v.number()), afterSeq: v.optional(v.number()), limit: v.optional(v.number()) },
+  args: { key: v.string(), threadId: v.string(), beforeSeq: v.optional(v.number()), afterSeq: v.optional(v.number()), limit: v.optional(v.number()), notes: v.optional(v.boolean()) },
   returns: v.object({ messages: v.array(relayRow), hasMore: v.boolean() }),
-  handler: async (ctx, { key, threadId, beforeSeq, afterSeq, limit }) => {
+  handler: async (ctx, { key, threadId, beforeSeq, afterSeq, limit, notes }) => {
     await runnerAuth(ctx, key, 'remoteMessages');
     const want = pageLimit(limit, PAGE_DEFAULT, PAGE_MAX);
     if (afterSeq !== undefined) {
-      const rows = await ctx.db.query('messages').withIndex('by_thread_seq', (q) => q.eq('threadId', threadId).gt('seq', afterSeq)).order('asc').take(want + 1);
-      return { messages: rows.slice(0, want).map(toRow), hasMore: rows.length > want };
+      const { rows, hasMore } = await pageOf(ctx.db.query('messages').withIndex('by_thread_seq', (q) => q.eq('threadId', threadId).gt('seq', afterSeq)).order('asc'), want, notes);
+      return { messages: rows.map(toRow), hasMore };
     }
-    const rows = await ctx.db
-      .query('messages')
-      .withIndex('by_thread_seq', (q) => (beforeSeq === undefined ? q.eq('threadId', threadId) : q.eq('threadId', threadId).lt('seq', beforeSeq)))
-      .order('desc')
-      .take(want + 1);
-    return { messages: rows.slice(0, want).reverse().map(toRow), hasMore: rows.length > want };
+    const { rows, hasMore } = await pageOf(
+      ctx.db
+        .query('messages')
+        .withIndex('by_thread_seq', (q) => (beforeSeq === undefined ? q.eq('threadId', threadId) : q.eq('threadId', threadId).lt('seq', beforeSeq)))
+        .order('desc'),
+      want,
+      notes,
+    );
+    return { messages: rows.reverse().map(toRow), hasMore };
   },
 });
 
@@ -169,6 +201,30 @@ export function commandArgs(kind: Kind, raw: unknown): Record<string, unknown> {
       out = pick(a, ['approvalId', 'decision', 'message', 'answers', 'secret', 'sealed']);
       break;
     case 'update':
+      // A login or model change (API 77): the composer's pickers and the
+      // limit box's Continue now on, for a thread on another runner. They
+      // go together, as one threads.update there, since a model picked from
+      // another provider's column moves the login with it, and only with
+      // nothing else, so it reads as the one change it is. Not effort: the
+      // rows don't carry it, so the Mac couldn't show what it became.
+      if (['accountId', 'model', 'carryOn'].some((k) => a[k] !== undefined)) {
+        out = pick(a, ['accountId', 'model']);
+        for (const [k, x] of Object.entries(out)) {
+          // null puts the model back to the login's default.
+          if (!(typeof x === 'string' && x.length > 0 && x.length <= 200) && !(x === null && k !== 'accountId')) throw bad(`${k} must be a short string`);
+        }
+        if (!Object.keys(out).length) throw bad('carryOn goes with accountId');
+        if (a.carryOn !== undefined) {
+          if (a.carryOn !== true || typeof out.accountId !== 'string') throw bad('carryOn goes with accountId');
+          out.carryOn = true;
+        }
+        // An agent on the main Mac made it (its threadbear tools): that
+        // runner keeps a sandboxed thread in its sandbox and starts no turn.
+        if (a.by === 'agent') out.by = 'agent';
+        const others = pick(a, ['snooze', 'wake', 'archive', 'unarchive', 'markSeen', 'title', 'star']);
+        if (Object.keys(others).length) throw bad('an update changes one thing');
+        break;
+      }
       out = pick(a, ['snooze', 'wake', 'archive', 'unarchive', 'markSeen', 'title', 'star']);
       if (Object.keys(out).length !== 1) throw bad('an update changes one thing');
       // How it went, with an archive (API 42), as phone:update takes it.
@@ -384,7 +440,12 @@ export const commandState = query({
   },
 });
 
-/** Another runner's logins, with their models, for the new-thread pickers on the main Mac. */
+/**
+ * Another runner's logins, with their models and (API 77) how much room each
+ * has, for the main Mac's pickers and its limit box on that runner's threads.
+ * Without the room, that box judged a Pixel thread by the Mac's own login of
+ * the same id, and offered the Mac's logins to switch it to.
+ */
 export const remoteAccounts = query({
   args: { key: v.string(), runnerId: v.string() },
   returns: v.array(v.any()),
@@ -392,7 +453,7 @@ export const remoteAccounts = query({
     await runnerAuth(ctx, key, 'remoteAccounts');
     const out = [];
     for (const a of await ctx.db.query('accounts').withIndex('by_runnerId', (q) => q.eq('runnerId', runnerId)).take(50)) {
-      const { _id, _creationTime, usage: _u, ...rest } = a;
+      const { _id, _creationTime, ...rest } = a;
       out.push(rest);
     }
     return out;

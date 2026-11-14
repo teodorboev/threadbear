@@ -60,8 +60,9 @@ export type LibrarianHost = {
   setKeywords?(threadId: string, words: string): void;
   // Threads hibernating until Mike next talks about something
   // (wake-when.ts), and waking one he just did.
-  waitingTopics?(): { threadId: string; title: string; topic: string }[];
-  wakeForTopic?(threadId: string, inThreadId: string): boolean;
+  waitingTopics?(): { threadId: string; title: string; topic: string; happened?: true }[];
+  // `shown`: the wait the look judged; one changed since isn't woken.
+  wakeForTopic?(threadId: string, inThreadId: string, shown?: { topic: string; happened: boolean }): boolean;
   // Threads hibernating until this one has done something in particular
   // (end_turn's waitFor until), and saying one has.
   waitedOnFor?(threadId: string): { threadId: string; title: string; until: string }[];
@@ -180,6 +181,10 @@ export class Librarian {
   private projects: Projects;
   // The conditions each look was shown (prompt), for its met (apply).
   private shownWaiters = new Map<string, { threadId: string; title: string; until: string }[]>();
+  // The topics each look was shown, for its wake (apply): an answer counts
+  // only for the wait it judged, not one set since while the model ran
+  // (Codex's review, 13 Nov 2026).
+  private shownTopics = new Map<string, { threadId: string; title: string; topic: string; happened?: true }[]>();
   private models?: Pick<Models, 'generate'> & { unavailable?(opts?: { poolOnly?: boolean }): string | undefined; isPrivateFolder?(cwd: string): boolean };
   private clock: Clock;
   private log: Logger;
@@ -711,9 +716,16 @@ export class Librarian {
     const worked = [...(this.workedIn.get(rec.id) ?? [])].filter((r) => !this.edited.get(rec.id)?.has(r)).map((r) => this.tilde(r));
     if (worked.length) lines.push(`Ran commands in: ${worked.join(', ')}`);
     const waiting = this.waitingFor(rec);
-    if (waiting.length) {
+    this.shownTopics.set(rec.id, waiting);
+    const talk = waiting.filter((w) => !w.happened);
+    const happen = waiting.filter((w) => w.happened);
+    if (talk.length) {
       lines.push('', 'Hibernating threads waiting for the user to talk about something:');
-      for (const w of waiting) lines.push(`- ${w.threadId.slice(0, 8)} "${w.title}": ${w.topic}`);
+      for (const w of talk) lines.push(`- ${w.threadId.slice(0, 8)} "${w.title}": ${w.topic}`);
+    }
+    if (happen.length) {
+      lines.push('', 'Hibernating threads waiting until something has happened:');
+      for (const w of happen) lines.push(`- ${w.threadId.slice(0, 8)} "${w.title}": ${w.topic}`);
     }
     // Not a waiter in a private folder: its title and condition aren't
     // sent, so its wait only ends at its time. Kept for apply, so an
@@ -927,12 +939,13 @@ export class Librarian {
       }
     }
     // Hibernating threads whose topic Mike has just talked about here.
+    const shownTopics = this.shownTopics.get(rec.id) ?? [];
+    this.shownTopics.delete(rec.id);
     if (Array.isArray(a.wake)) {
-      const waiting = this.waitingFor(rec);
       const woke: string[] = [];
       for (const id of a.wake) {
-        const w = typeof id === 'string' && id.length >= 8 ? waiting.find((x) => x.threadId.startsWith(id)) : undefined;
-        if (w && !woke.includes(w.title) && this.host.wakeForTopic?.(w.threadId, rec.id)) woke.push(w.title);
+        const w = typeof id === 'string' && id.length >= 8 ? shownTopics.find((x) => x.threadId.startsWith(id)) : undefined;
+        if (w && !woke.includes(w.title) && this.host.wakeForTopic?.(w.threadId, rec.id, { topic: w.topic, happened: Boolean(w.happened) })) woke.push(w.title);
       }
       if (woke.length) {
         said.push(`Woke ${woke.join(' and ')}`);
@@ -940,13 +953,18 @@ export class Librarian {
       }
     }
     // Threads waiting until this one had done something, which it has:
-    // only those the look was shown, by a unique id, with a reason.
+    // only those the look was shown, by a unique id, with a verdict of true
+    // and a reason. Before 13 Nov 2026 any reason counted, and a look that
+    // wrote "The GPUI port has not landed" as one woke the thread waiting
+    // for it to land; now every waiter gets an explicit verdict.
     const shown = this.shownWaiters.get(rec.id) ?? [];
     this.shownWaiters.delete(rec.id);
     if (a.met && typeof a.met === 'object' && !Array.isArray(a.met)) {
       const woke: { id: string; title: string }[] = [];
-      for (const [id, reason] of Object.entries(a.met as Record<string, unknown>)) {
-        if (typeof reason !== 'string' || !reason.trim() || id.length < 8) continue;
+      for (const [id, verdict] of Object.entries(a.met as Record<string, unknown>)) {
+        const v = verdict && typeof verdict === 'object' && !Array.isArray(verdict) ? (verdict as { met?: unknown; why?: unknown }) : undefined;
+        const reason = v?.met === true && typeof v.why === 'string' ? v.why : '';
+        if (!reason.trim() || id.length < 8) continue;
         const hits = shown.filter((x) => x.threadId.startsWith(id));
         const w = hits.length === 1 ? hits[0] : undefined;
         if (w && !woke.some((x) => x.id === w.threadId) && this.host.waitMet?.(w.threadId, rec.id, reason.trim(), w.until)) woke.push({ id: w.threadId, title: w.title });
@@ -962,7 +980,7 @@ export class Librarian {
   }
 
   // The other threads waiting on a topic.
-  private waitingFor(rec: ThreadRecord): { threadId: string; title: string; topic: string }[] {
+  private waitingFor(rec: ThreadRecord): { threadId: string; title: string; topic: string; happened?: true }[] {
     return (this.host.waitingTopics?.() ?? []).filter((w) => w.threadId !== rec.id);
   }
 
@@ -1580,8 +1598,8 @@ Reply with JSON only, no prose and no code fence:
  "title": null, or a new title when the thread's title no longer says what it's about (see below),
  "keywords": "${KEYWORDS_ASK}",
  "retitle": {"<project id>": "the project's new name"} for a project it's in whose name has gone out of date (see below), else {},
- "wake": ["<ids of hibernating threads the user is talking about here>"], or [] (see below),
- "met": {"<id of a thread waiting until this one has done something>": "what shows it has, in a few words"}, or {} (see below),
+ "wake": ["<ids of hibernating threads the user is talking about here, or whose thing has happened here>"], or [] (see below),
+ "met": {"<id of each thread waiting until this one has done something>": {"met": true or false, "why": "what shows it, in a few words"}}, or {} when none are listed (see below),
  "pocket": null, or {"save": [{"title": "short name", "text": "the card", "place": "optional", "icon": "optional"}], "remove": ["title"]} (see below),
  "why": "one short line"}
 
@@ -1595,9 +1613,9 @@ Keep the thread's title (title null) unless it no longer says what the thread is
 
 Keep projects' names too, unless one the thread is in has gone out of date: the thing it's about was renamed (an app renamed from Scribble to Inkwell leaves "Scribble" or a vaguer "drawing app" behind), or a project named for what it does now has a name of its own. Give the new name the user would say, keeping the old words in brackets when they still help: "Inkwell (drawing app)". A better wording of the same name is no reason, and never rename one marked as named by the user. Most looks rename none.
 
-Some hibernating threads are waiting for the user to talk about something again ("woodworking"). Put one in wake when the user's own messages in this thread are about that: they're working on it, planning it or asking about it. A passing mention, or only the agent bringing it up, isn't enough. Most looks wake none.
+Some hibernating threads are waiting for the user to talk about something again ("woodworking"). Put one in wake when the user's own messages in this thread are about that: they're working on it, planning it or asking about it. A passing mention, or only the agent bringing it up, isn't enough. Others are waiting until something has happened ("the GPUI app has replaced the Swift app"): put one of those in wake only when this thread's messages, the agent's or the user's, show it has: done, shipped or decided, not only planned, under way or talked about. Most looks wake none.
 
-Some hibernating threads are waiting until this thread has done something ("until it reports the I/O saving"). Put one in met when this thread's messages, the agent's or the user's, show it has: done, measured, reported or decided, not only planned, started or still going. Most looks meet none.
+Some hibernating threads are waiting until this thread has done something ("until it reports the I/O saving"). Give each of them a verdict in met: true only when this thread's messages, the agent's or the user's, show it has: done, measured, reported or decided; false when it's only planned, started or still going. Most looks meet none, so most verdicts are false.
 
 The Pocket is a deck of short cards on the user's phone, to read at a counter when they're out. Keep this thread's cards true: save one with the same title when a fact on it has changed, and remove one when the messages say it's done with (the parcel's posted, the trip's over). Add a card only when the user, in their own messages here, says they're going somewhere or will need something while out, the messages hold the facts they'd want there, and this thread has no card. A plan for someday isn't enough. If the messages say a card was filed and it isn't listed, the user took it out: leave it. Copy addresses, codes and numbers exactly from the messages and never guess one. The text is only the facts, a line each, with no explanation. The place is what you'd search a map for ("post office"), only if the card is for somewhere. The icon is the closest of ${POCKET_ICONS.join(', ')}, left out if none fits. Most looks change nothing: pocket null.
 

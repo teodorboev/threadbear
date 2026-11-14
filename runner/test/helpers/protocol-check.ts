@@ -310,7 +310,7 @@ export function checkSummary(t: Obj): string[] {
   if (t.looseEnds !== undefined) {
     const l = t.looseEnds;
     const ok = l && Number.isInteger(l.seq) && isIso(l.at) && Array.isArray(l.ends) &&
-      l.ends.every((e: any) => ['unlanded', 'uncommitted', 'unpushed', 'unmerged', 'thread', 'open', 'scheduled'].includes(e.kind) && isStr(e.text) &&
+      l.ends.every((e: any) => ['unlanded', 'uncommitted', 'unpushed', 'unmerged', 'thread', 'running', 'scheduled'].includes(e.kind) && isStr(e.text) &&
         (e.threadId === undefined || isStr(e.threadId)) && (e.at === undefined || isIso(e.at)) &&
         Object.keys(e).every((k) => ['kind', 'text', 'threadId', 'at'].includes(k))) &&
       Object.keys(l).every((k) => ['seq', 'ends', 'at'].includes(k));

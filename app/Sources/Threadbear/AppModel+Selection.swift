@@ -26,7 +26,7 @@ extension AppModel {
         if session.state == .idle || session.state.isFailed {
             session.open(width: transcript.width > 0 ? transcript.width : transcript.currentTableWidth)
         } else if isRemote(threadId), !session.subscribed {
-            // Its runner's connection closed while it was away.
+            // Its subscription went while it was away.
             reconnectRemote(for: threadId)
         }
         // Looked at now, so `woke` is on its way out: the note's bear needs telling first.
@@ -146,14 +146,6 @@ extension AppModel {
 
     /// A thread's session if it's open already, without opening one.
     func loadedSession(_ threadId: String) -> ThreadSession? { sessions[threadId] }
-
-    /// Every open session, for RemoteRunners.swift.
-    var openSessions: [ThreadSession] { Array(sessions.values) }
-
-    /// Lets a session go, so the thread loads afresh next time it's opened.
-    func dropSession(_ threadId: String) {
-        sessions.removeValue(forKey: threadId)?.unsubscribe()
-    }
 
     private func evictSessions() {
         guard sessions.count > Self.maxSessions else { return }

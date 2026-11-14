@@ -2,10 +2,8 @@
 // backend: what it writes, when it doesn't, and what the app hears.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import fs from 'node:fs';
-import path from 'node:path';
 import { makeHarness, tick } from '../helpers/fakes.ts';
-import { ThreadIndex, runnerTokenFile, type RemoteThreads } from '../../src/thread-index.ts';
+import { ThreadIndex, type RemoteThreads } from '../../src/thread-index.ts';
 import { nullLogger } from '../../src/log.ts';
 import type { Notification } from '../../src/runner.ts';
 
@@ -84,23 +82,20 @@ test('the first write has every thread and prunes the rest; later ones only what
   index.stop();
 });
 
-test('other runners’ threads reach the app, with a token file only when one was copied in', async () => {
-  const { h, index, heard, remote } = setup();
+test('other runners’ threads reach the app, without an old runner’s rpcUrl', async () => {
+  const { index, heard, remote, h } = setup();
   index.start();
   const lastSeenAt = h.clock.now() - 30_000;
+  // A runner from before the direct link went (13 Nov) may still send rpcUrl
+  // in its heartbeat, and the backend keeps it: the app never gets it.
   const value = {
     runners: [{ runnerId: 'r-bruce', name: 'bruce', icon: 'macmini', lastSeenAt, rpcUrl: 'wss://bruce.example.ts.net:8797/rpc' }],
     threads: [{ runnerId: 'r-bruce', threadId: 't1', title: 'Birthday check', cwd: '/Users/bruce', accountId: 'codex-main', provider: 'codex', status: 'idle', needsYou: false, unread: true, preview: 'No birthdays', createdAt: 'c', lastActivityAt: 'l' }],
   };
   remote(value);
   assert.equal(heard.length, 1);
-  assert.deepEqual(heard[0]!.runners, [{ id: 'r-bruce', name: 'bruce', icon: 'macmini', online: true, lastSeenAt: new Date(lastSeenAt).toISOString(), rpcUrl: 'wss://bruce.example.ts.net:8797/rpc' }]);
+  assert.deepEqual(heard[0]!.runners, [{ id: 'r-bruce', name: 'bruce', icon: 'macmini', online: true, lastSeenAt: new Date(lastSeenAt).toISOString() }]);
   assert.equal(heard[0]!.threads[0]!.title, 'Birthday check');
-
-  const file = runnerTokenFile(h.home, 'r-bruce');
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, 'secret\n', { mode: 0o600 });
-  assert.equal(index.list().runners[0]!.tokenFile, file);
   index.stop();
 });
 
@@ -149,9 +144,12 @@ test('other runners’ threads are watched only while a Mac app is connected', a
   // An app connecting asks for the list, which starts the watch at once.
   app = true;
   assert.deepEqual(index.list().threads, []);
+  assert.equal(index.list().ready, false, 'an unanswered empty list is not a deletion');
   assert.equal(watching(), true);
   remote({ runners: [{ runnerId: 'r-bruce', name: 'bruce', lastSeenAt: h.clock.now() }], threads: [] });
   assert.equal(heard.length, 1);
+  assert.equal(heard[0]!.ready, true);
+  assert.equal(index.list().ready, true);
 
   // A relaunch, gone for under two minutes, keeps the watch.
   app = false;

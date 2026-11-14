@@ -59,7 +59,7 @@ protocol RowCellDelegate: AnyObject {
     func approvePlan(itemId: String)
     func sendBackPlan()
     /// For a thread on another runner ("bruce"): its pictures are files
-    /// on that Mac, fetched through this. Nil for this Mac's own.
+    /// on that Mac, which its tiles say rather than show. Nil for this Mac's own.
     var remoteImages: RemoteImages? { get }
     /// The thread the row is in, which its links are followed in.
     var linkThreadId: String? { get }

@@ -823,3 +823,156 @@ for (const start of ['from the file', 'in full'] as const) {
     await again.stop();
   });
 }
+
+// A handover stops the old release's sync at once, while a busy thread it
+// keeps goes on writing; the new release hears that thread's events only
+// from when it connects (Peers subscribes from the end). What the thread
+// wrote in between went up nowhere, and the thread's head then moved past
+// the gap with its next message, so the phone, the website and other Macs
+// never saw those rows (13 Nov 2026, the implicit state machines scan).
+// Once the thread comes across, what's after the head the old release
+// left goes up again.
+test('a thread kept by the release before has what it wrote during the handover sent once it comes across', async () => {
+  const s = setup();
+  const t = s.h.runner.create({ text: 'busy', cwd: s.h.cfg.defaults.cwd, accountId: 'claude-3' }).thread;
+  await firstStart(s);
+  // Written on the old release after its sync stopped.
+  s.h.runner.send(t.id, 'written during the handover');
+  await settle();
+  // The new release starts with the thread still on the old one.
+  await s.h.runner.letGo(s.h.runner.threads.get(t.id)!);
+  s.elsewhere.add(t.id);
+  s.calls.length = 0;
+  const again = s.make();
+  again.start();
+  await settle();
+  s.h.clock.advance(SETTLE_MS);
+  await settle();
+  await again.flushNow();
+  // It comes across, and goes on.
+  s.elsewhere.delete(t.id);
+  s.h.runner.adopt(t.id);
+  s.h.runner.send(t.id, 'written after it came across');
+  await settle();
+  s.h.clock.advance(2000);
+  await settle();
+  await again.flushNow();
+  await again.flushNow();
+  const sent = s.named('sync:appendMessages').flatMap((c) => c.args.messages as { threadId: string; text: string }[]).filter((m) => m.threadId === t.id).map((m) => m.text);
+  assert.ok(sent.includes('written after it came across'), JSON.stringify(sent));
+  assert.ok(sent.includes('written during the handover'), JSON.stringify(sent));
+  await again.stop();
+});
+
+// From Codex's review of that fix: where the gap starts was kept only in
+// memory, and the file saved the head its live messages had moved on to,
+// so a second restart before the thread came across lost the gap.
+test('a kept thread still on the release before through a second restart still has its handover gap sent', async () => {
+  const s = setup();
+  const t = s.h.runner.create({ text: 'busy', cwd: s.h.cfg.defaults.cwd, accountId: 'claude-3' }).thread;
+  await firstStart(s);
+  s.h.runner.send(t.id, 'written during the handover');
+  await settle();
+  await s.h.runner.letGo(s.h.runner.threads.get(t.id)!);
+  s.elsewhere.add(t.id);
+  const second = s.make();
+  second.start();
+  await settle();
+  s.h.clock.advance(SETTLE_MS);
+  await settle();
+  // A live message from the old release, forwarded, moves its head on.
+  s.h.runner.publish({ method: 'thread.event', params: { threadId: t.id, event: { seq: 99, ts: new Date(s.h.clock.now()).toISOString(), threadId: t.id, type: 'user.message', text: 'forwarded live', images: [] } } } as never);
+  s.h.clock.advance(2000);
+  await settle();
+  await second.flushNow();
+  await second.stop();
+  s.calls.length = 0;
+  const third = s.make();
+  third.start();
+  await settle();
+  s.h.clock.advance(SETTLE_MS);
+  await settle();
+  await third.flushNow();
+  s.elsewhere.delete(t.id);
+  s.h.runner.adopt(t.id);
+  s.h.clock.advance(2000);
+  await settle();
+  await third.flushNow();
+  const sent = s.named('sync:appendMessages').flatMap((c) => c.args.messages as { threadId: string; text: string }[]).filter((m) => m.threadId === t.id).map((m) => m.text);
+  assert.ok(sent.includes('written during the handover'), JSON.stringify(sent));
+  await third.stop();
+});
+
+// From Codex's second review: the gap's head was forgotten as soon as the
+// thread came across, before its messages were written, so a failed write
+// and a restart before the retry lost the gap after all.
+test("a kept thread's handover gap that fails to go up once it comes across goes with the next start", async () => {
+  const s = setup();
+  const t = s.h.runner.create({ text: 'busy', cwd: s.h.cfg.defaults.cwd, accountId: 'claude-3' }).thread;
+  await firstStart(s);
+  s.h.runner.send(t.id, 'written during the handover');
+  await settle();
+  await s.h.runner.letGo(s.h.runner.threads.get(t.id)!);
+  s.elsewhere.add(t.id);
+  const second = s.make();
+  second.start();
+  await settle();
+  s.h.clock.advance(SETTLE_MS);
+  await settle();
+  s.h.runner.publish({ method: 'thread.event', params: { threadId: t.id, event: { seq: 99, ts: new Date(s.h.clock.now()).toISOString(), threadId: t.id, type: 'user.message', text: 'forwarded live', images: [] } } } as never);
+  s.h.clock.advance(2000);
+  await settle();
+  await second.flushNow();
+  s.elsewhere.delete(t.id);
+  s.h.runner.adopt(t.id);
+  s.failing.value = 'sync:appendMessages';
+  s.h.clock.advance(2000);
+  await settle();
+  await second.flushNow();
+  await second.stop();
+  s.failing.value = undefined;
+  s.calls.length = 0;
+  const third = s.make();
+  third.start();
+  await settle();
+  s.h.clock.advance(SETTLE_MS);
+  await settle();
+  await third.flushNow();
+  const sent = s.named('sync:appendMessages').flatMap((c) => c.args.messages as { threadId: string; text: string }[]).filter((m) => m.threadId === t.id).map((m) => m.text);
+  assert.ok(sent.includes('written during the handover'), JSON.stringify(sent));
+  await third.stop();
+});
+
+// And from its third: a log read that failed (too many open files, say)
+// gave back nothing, which went up fine, and that retired the head too.
+test("a kept thread's handover gap whose log can't be read when it comes across goes once it can", async () => {
+  const s = setup();
+  const t = s.h.runner.create({ text: 'busy', cwd: s.h.cfg.defaults.cwd, accountId: 'claude-3' }).thread;
+  await firstStart(s);
+  s.h.runner.send(t.id, 'written during the handover');
+  await settle();
+  await s.h.runner.letGo(s.h.runner.threads.get(t.id)!);
+  s.elsewhere.add(t.id);
+  const again = s.make();
+  again.start();
+  await settle();
+  s.h.clock.advance(SETTLE_MS);
+  await settle();
+  await again.flushNow();
+  s.elsewhere.delete(t.id);
+  s.h.runner.adopt(t.id);
+  const events = s.h.runner.events.bind(s.h.runner);
+  s.h.runner.events = () => {
+    throw new Error('EMFILE');
+  };
+  s.h.clock.advance(2000);
+  await settle();
+  await again.flushNow();
+  s.h.runner.events = events;
+  s.h.clock.advance(2000);
+  await settle();
+  await again.flushNow();
+  const sent = s.named('sync:appendMessages').flatMap((c) => c.args.messages as { threadId: string; text: string }[]).filter((m) => m.threadId === t.id).map((m) => m.text);
+  assert.ok(sent.includes('written during the handover'), JSON.stringify(sent));
+  await again.stop();
+});

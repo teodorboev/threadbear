@@ -38,6 +38,22 @@ struct LabReviewTests {
 }
 
 extension LabReviewTests {
+    /// Another runner writes these rows, and `Int(1e20)` stops the app past
+    /// any `try?` (Daybreak 109). Through a lossy list, as the
+    /// inbox decodes them, so a trap anywhere on the way fails the run.
+    @Test func numbersOutOfRangeNeverStopTheApp() throws {
+        for bad in ["1e20", "-1e20", "1.5", "-3", "9223372036854775808", "1.7976931348623157e308"] {
+            let json = "[{\"reviewer\":\"Codex\",\"rounds\":\(bad),\"findings\":[{\"id\":\(bad),\"claim\":\"Odd.\"},{\"id\":2,\"claim\":\"Fine.\"}]}]"
+            let rows = try JSONDecoder().decode(LossyList<PhoneLabReview>.self, from: Data(json.utf8)).elements
+            #expect(rows.count == 1, "\(bad)")
+            #expect(rows.first?.rounds == 1, "\(bad)")
+            #expect(rows.first?.findings.map(\.id) == [2], "\(bad)")
+        }
+        // The largest whole number a double holds exactly still counts.
+        let edge = try JSONDecoder().decode(PhoneLabReview.self, from: Data(#"{"rounds":9007199254740991,"findings":[]}"#.utf8))
+        #expect(edge.rounds == 9_007_199_254_740_991)
+    }
+
     @Test func goesOverItsOwnTurnsReplyOnly() {
         let at = Date(timeIntervalSince1970: 0)
         let messages = [

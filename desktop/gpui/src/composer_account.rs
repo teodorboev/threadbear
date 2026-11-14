@@ -28,7 +28,10 @@ impl Composer {
         let data = self.chip_data(cx);
         let selected = data.summary.as_ref().map(|t| t.account_id.clone()).unwrap_or_default();
         let now = threadbear_core::chrono::Local::now();
-        let sections = login_sections(&data.logins.accounts, &selected, &now);
+        let mut sections = login_sections(&data.logins.accounts, &selected, &now);
+        for section in &mut sections {
+            section.title = data.logins.provider_title(&section.id);
+        }
         let footer = threadbear_core::usage::source_line(&data.logins.accounts, now.timestamp_millis(), &threadbear_core::chrono::Local);
         (sections, footer)
     }
@@ -88,7 +91,7 @@ fn login_row(item: &LoginItem, _window: &mut Window, cx: &App, action: impl Fn(&
     h_flex()
         .id(SharedString::from(format!("login-{}", item.id)))
         .test_support()
-        .aria_label(name)
+        .role(Role::Button).aria_label(name)
         .gap(px(8.))
         .px(px(10.))
         .py(px(5.))

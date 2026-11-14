@@ -32,7 +32,6 @@ export const stoppedWorkPart = {
 
   tellOneStoppedWork(this: Runner, st: ThreadState): void {
     const { rec } = st;
-    this.tellInterruptedRuns(st);
     const stopped = rec.stoppedWork;
     if (!stopped) return;
     delete rec.stoppedWork;

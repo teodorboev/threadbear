@@ -33,6 +33,8 @@ pub struct WindowFrame {
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Saved {
+    /// Highest thread-count milestone actually shown, as in the Swift app.
+    pub thread_milestone_shown: Option<usize>,
     /// The window's frame, in points from the top left of the screens.
     pub window_frame: Option<WindowFrame>,
     /// `textZoomPercent`. Only saved when it isn't 100, as TextZoom removes it.
@@ -90,6 +92,29 @@ pub struct Saved {
     /// `threadsCollapsed`: ⌘/ folded the Threads panel away (thread_panels.rs).
     /// None is no.
     pub threads_collapsed: Option<bool>,
+    /// ⌘K's Recent (open_anything.rs): what was opened lately, newest first,
+    /// as the box's keys ("thread:<id>", "panel:<place>|<id>"). The GPUI
+    /// app's own; the Swift app hasn't got the box.
+    pub open_anything_recent: Option<Vec<String>>,
+    /// `tourSeen`: the first-run tour was done or skipped, so it doesn't come
+    /// up by itself again (tour.rs). Brought across from the Swift app's.
+    pub tour_seen: Option<bool>,
+    /// `setupHidden`: Finish setting up's Hide this list (setup_panel.rs).
+    pub setup_hidden: Option<bool>,
+    /// The pages' one-card intros seen, by name ("projects"): the Swift app's
+    /// `tourIntro.<name>` keys, one list here.
+    pub tour_intros_seen: Option<Vec<String>>,
+    /// When the Swift app's tour, intros and Finish setting up were brought
+    /// across (swift_import.rs, `tour_once`): once, and before the tour may
+    /// start by itself, so someone who finished it there never sees it again.
+    pub swift_tour_import: Option<String>,
+    /// `panelBackgroundDrag`: Settings > General's Move panels by their
+    /// background. A press held on a panel's background picks it up, as on
+    /// its bar. None is off: most of the time a press there is meant for
+    /// the panel, and its title or tab is the place to drag it from (Mike,
+    /// 13 Nov). A panel with its title hidden moves from its background
+    /// either way. The GPUI app's own.
+    pub panel_background_drag: Option<bool>,
 }
 
 /// The settings file: where it is and what's in it. Reading is at launch only;
@@ -130,6 +155,11 @@ impl Settings {
     /// half a file (the same as shortcuts.json's atomic write in the Swift app),
     /// and only this user's, as everything in the data folder is.
     pub fn save(&self) {
+        // A handover's incoming app: the file is the outgoing app's until
+        // this one takes over and reads it again (handover.rs).
+        if crate::handover::waiting() {
+            return;
+        }
         let _ = self.save_checked();
     }
 
@@ -166,6 +196,10 @@ impl Settings {
 
     pub fn ding_volume(&self) -> f64 {
         self.saved.completion_sound_volume.unwrap_or(completion_sound::DEFAULT_VOLUME).clamp(0.1, 1.)
+    }
+
+    pub fn panel_background_drag(&self) -> bool {
+        self.saved.panel_background_drag.unwrap_or(false)
     }
 
     pub fn asks_before_quitting(&self) -> bool {

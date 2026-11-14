@@ -517,7 +517,7 @@ final class AppUpdater {
         try? handle.close()
     }
 
-    nonisolated private static func run(_ executable: String, _ arguments: [String]) async -> (status: Int32, output: String) {
+    nonisolated static func run(_ executable: String, _ arguments: [String]) async -> (status: Int32, output: String) {
         await withCheckedContinuation { continuation in
             let process = Process()
             process.executableURL = URL(fileURLWithPath: executable)

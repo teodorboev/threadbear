@@ -7,6 +7,19 @@ mod support;
 
 use serde_json::json;
 use support::*;
+
+#[test]
+fn relay_subscription_reports_its_own_sparse_events_including_unflushed_results() {
+    let mut model = TranscriptModel::new(None);
+    model.load(vec![user(25, "First"), call(41, "tool"), text(73, "reply", "Done")], &[]);
+    let mut feed = ThreadFeed::new(model);
+    assert_eq!(feed.relay_seen(), None);
+    feed.set_sparse(true);
+    feed.receive(result(42, "tool"));
+    assert_eq!(feed.relay_seen(), Some(vec![[25, 25], [41, 42], [73, 73]]));
+    feed.flush();
+    assert_eq!(feed.relay_seen(), Some(vec![[25, 25], [41, 42], [73, 73]]));
+}
 use threadbear_core::reducer::*;
 
 #[test]

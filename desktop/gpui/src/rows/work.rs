@@ -268,7 +268,7 @@ impl ThreadPane {
 
     /// The bear and elapsed time that say a turn is running. It counts by
     /// itself once a second while it's on screen.
-    pub(crate) fn working_row(&mut self, started_at: Option<f64>, _window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+    pub(crate) fn working_row(&mut self, started_at: Option<f64>, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         self.ensure_ticking(started_at.is_some(), cx);
         let quiet = style::quiet_text(cx);
         let text = match started_at {
@@ -283,9 +283,43 @@ impl ThreadPane {
             .items_center()
             .text_size(px(size::WORK))
             .text_color(quiet)
-            .child(div().flex_none().w(px(TITLE_INDENT)).child(icon("pawprint", 15., quiet)))
+            .child(div().flex_none().w(px(TITLE_INDENT)).child(self.working_paw(started_at, quiet, window, cx)))
             .child(div().truncate().child(text));
         h_flex().w_full().px(px(crate::style::SIDE_INSET)).justify_center().child(div().w_full().min_w_0().max_w(px(crate::style::MAX_CONTENT_WIDTH)).child(line)).into_any_element()
+    }
+
+    /// The paw by "Bear with me": every couple of seconds it flips, spins,
+    /// kneads, waves or leaves a few prints, one at random each time
+    /// (core's `juice::paw_pose`; Mike's pick, 13 Nov, in place of the
+    /// Swift app's waving bear). Timed from the turn's start, so it carries on
+    /// where it was when the thread's opened again. Still under Reduce Motion.
+    fn working_paw(&mut self, started_at: Option<f64>, color: Hsla, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        use threadbear_core::juice;
+        const SIDE: f32 = 15.;
+        let paw = || icon("pawprint", SIDE, color);
+        let Some(started) = started_at.filter(|_| !cx.reduce_motion()) else { return paw().into_any_element() };
+        let t = (crate::now_ms() as f64 / 1000. - started).max(0.) as f32;
+        let seed = (started * 1000.) as u64;
+        let pose = juice::paw_pose(seed, t);
+        // A frame at a time while it moves; the once-a-second tick wakes it
+        // for the next.
+        if juice::paw_now(seed, t).is_some() {
+            window.request_animation_frame();
+        }
+        let side = style::zoomed(SIDE);
+        let turned = Transformation::rotate(gpui_kit::radians(pose.angle.to_radians()))
+            .with_scaling(size(pose.scale.0, pose.scale.1))
+            .with_translation(point(gpui_kit::px(pose.shift.0 * side), gpui_kit::px(pose.shift.1 * side)));
+        let mut slot = div().relative().size(px(SIDE)).child(paw().text_color(color.opacity(color.a * pose.opacity)).transform(turned));
+        if let Some(prints) = pose.prints {
+            // Three small prints stepping up and to the right, toes forward.
+            const AT: [(f32, f32); 3] = [(0., 8.), (6., 5.), (12., -2.)];
+            for ((x, y), (shown, scale)) in AT.into_iter().zip(prints) {
+                let print = icon("pawprint", 9., color.opacity(color.a * shown)).transform(Transformation::rotate(gpui_kit::radians(30f32.to_radians())).with_scaling(size(scale, scale)));
+                slot = slot.child(div().absolute().left(px(x)).top(px(y)).child(print));
+            }
+        }
+        slot.into_any_element()
     }
 
     /// `BackgroundWork.lineWithDetail`: the bear sits, nothing ticks, and the
@@ -341,11 +375,13 @@ impl ThreadPane {
 /// for the first.
 fn gap_tip(gap: &TurnGap) -> String {
     let names: Vec<String> = gap.woke_by.iter().map(|t| t.description.clone()).filter(|n| !n.is_empty()).collect();
-    if names.is_empty() {
-        "Waited between these turns".to_owned()
-    } else {
-        format!("Finished: {}", names.join(", "))
+    use threadbear_core::chrono::{Local, TimeZone as _};
+    let time = |seconds: f64| Local.timestamp_opt(seconds as i64, 0).single().map(|d| d.format(if style::uses_24_hour_clock() { "%H:%M" } else { "%-I:%M %P" }).to_string()).unwrap_or_else(|| "unknown time".into());
+    let mut tip = format!("Waited from {} to {}", time(gap.from), time(gap.to));
+    if !names.is_empty() {
+        tip.push_str(&format!("\nFinished: {}", names.join(", ")));
     }
+    tip
 }
 
 /// `statsText`: "+12 −3" in the stats font, for a diff row and a changes card.
@@ -423,7 +459,7 @@ fn tool_body(ix: usize, tool: &ToolItem, remote: bool, cx: &App) -> AnyElement {
                 let origin = if remote { crate::open_gate::Origin::OtherMac } else { crate::open_gate::Origin::ThisMac };
                 note.child(
                     h_flex().child("Output shortened · ").child(
-                        div().id(("show-all", ix)).cursor_pointer().text_color(style::link_text(cx)).tip("The whole output, in a file").on_click(move |_, _, cx| crate::open_gate::open_file(&path, origin, cx)).child("Show all"),
+                        div().id(("show-all", ix)).role(Role::Button).cursor_pointer().text_color(style::link_text(cx)).tip("The whole output, in a file").on_click(move |_, _, cx| crate::open_gate::open_file(&path, origin, cx)).child("Show all"),
                     ),
                 )
             }
@@ -511,3 +547,16 @@ fn clamp_lines(text: &str, count: usize) -> String {
     }
 }
 
+
+#[cfg(test)]
+mod gap_tip_tests {
+    #[test]
+    fn wait_tip_includes_both_local_times_even_without_finished_jobs() {
+        use threadbear_core::chrono::{Local, TimeZone as _};
+        let from = Local.with_ymd_and_hms(2026, 11, 14, 14, 29, 0).unwrap().timestamp() as f64;
+        let to = Local.with_ymd_and_hms(2026, 11, 14, 14, 33, 0).unwrap().timestamp() as f64;
+        let gap = threadbear_core::reducer::TurnGap { from, to, woke_by: vec![] };
+        let expected = if crate::style::uses_24_hour_clock() { "Waited from 14:29 to 14:33" } else { "Waited from 2:29 pm to 2:33 pm" };
+        assert_eq!(super::gap_tip(&gap), expected);
+    }
+}

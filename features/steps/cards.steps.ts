@@ -1,4 +1,4 @@
-import { Given, Then, When } from '@cucumber/cucumber';
+import { Then, When } from '@cucumber/cucumber';
 import assert from 'node:assert/strict';
 import type { ThreadbearWorld } from '../support/world.ts';
 
@@ -62,28 +62,3 @@ Then('a review card says {string}', async function (this: ThreadbearWorld, words
   await this.until(`a review card "${words}"`, (d) => d.transcript.rows.some((r) => r.kind === 'review' && r.text.includes(words)));
 });
 
-// Run on the card (`cards.run`): the mock's card of one ask carrying a
-// command (mock.terminal's `run`), and what its Run button says in the
-// dump's `composer.cardRuns` ("▶ Run: <command>", "Running…: ...", "✓ Ran: ...").
-Given('the agent in {string} asks me to run {string}', async function (this: ThreadbearWorld, title: string, command: string) {
-  const thread = await this.until(`a thread called "${title}"`, (d) => this.thread(d, title));
-  await this.app.do({ cmd: 'mock', method: 'terminal', params: { threadId: thread.id, run: command } });
-});
-
-Then('the card shows the command {string} ready to run', async function (this: ThreadbearWorld, command: string) {
-  await this.until(`"${command}" whole on the card, with Run`, (d) => d.composer.card?.includes(`    $ ${command}`) && d.composer.cardRuns?.includes(`▶ Run: ${command}`));
-});
-
-When('I press Run on the card', async function (this: ThreadbearWorld) {
-  const row = await this.until('a card of asks', (d) => d.transcript.rows.find((r) => r.kind === 'asks'));
-  await this.app.do({ cmd: 'ask', row: row.id, action: 'run:0:0' });
-});
-
-Then("the card's Run for {string} says it's running", async function (this: ThreadbearWorld, command: string) {
-  // Straight away, and with nothing to press while it is.
-  await this.until(`"${command}" running`, (d) => d.composer.cardRuns?.includes(`Running…: ${command}`));
-});
-
-Then('then that it ran', async function (this: ThreadbearWorld) {
-  await this.until('the command run', (d) => d.composer.cardRuns?.some((l) => l.startsWith('✓ Ran: ')));
-});

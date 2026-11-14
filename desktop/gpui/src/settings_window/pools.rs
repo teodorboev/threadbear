@@ -85,7 +85,7 @@ impl SettingsWindow {
 
         if let Some(pool) = current {
             // Its name, icon and logins.
-            let mut rows = vec![row_with(div().child("Name").into_any_element(), div().w(px(220.)).child(Input::new(&name).small()).into_any_element(), cx)];
+            let mut rows = vec![row_with(div().child("Name").into_any_element(), crate::highlights::tipped(div().id("pool-name-holder").w(px(220.)), "Rename this pool. It saves when you press Return or click away.").child(Input::new(&name).small()).into_any_element(), cx)];
             rows.push(row_with(div().child("Icon").into_any_element(), self.icon_picker(&pool, &accounts, cx), cx));
             for (account, included) in pools::login_list(&pool, &accounts) {
                 rows.push(self.login_row(&pool, account, included, &accounts, cx));
@@ -142,7 +142,7 @@ impl SettingsWindow {
         let name = cx.new(|cx| InputState::new(window, cx).placeholder("Pool name").default_value(title));
         // A new name typed and not yet taken: an update's restart waits for
         // it. What it's filled with from the pool is saved (`fill_name`).
-        crate::unsent::watch(&name, cx);
+        crate::unsent::watch(&name, "a pool's name in Settings", cx);
         let sub = cx.subscribe_in(&name, window, |this, _, ev: &InputEvent, window, cx| {
             if matches!(ev, InputEvent::PressEnter { .. } | InputEvent::Blur) {
                 this.commit_pool_name(window, cx);
@@ -379,7 +379,8 @@ impl SettingsWindow {
         // adds the note, or the id with none, and the note isn't said twice.
         let twin = twin_label(account, accounts);
         let note = account.note.clone().filter(|_| twin.is_none());
-        let detail: Vec<String> = [Some(provider_title(account.provider_id())), note].into_iter().flatten().filter(|s| !s.is_empty()).collect();
+        let provider = self.app.upgrade().map_or_else(|| provider_title(account.provider_id()), |app| app.read(cx).logins.provider_title(account.provider_id()));
+        let detail: Vec<String> = [Some(provider), note].into_iter().flatten().filter(|s| !s.is_empty()).collect();
         let (pool_id, login) = (pool.id.clone(), account.id.clone());
         let me = cx.entity().downgrade();
         let title = match twin {
@@ -412,7 +413,7 @@ impl SettingsWindow {
             }
         }
         row_with(
-            crate::highlights::tipped(h_flex().id(SharedString::from(format!("settings-pool-login-row-{}", account.id))).gap(px(8.)).min_w_0().child(toggle).child(label), if included { format!("{title} is in this pool") } else { format!("Add {title} to this pool") }).into_any_element(),
+            crate::highlights::tipped_as(h_flex().id(SharedString::from(format!("settings-pool-login-row-{}", account.id))).gap(px(8.)).min_w_0().child(toggle).child(label), if included { format!("{title} is in this pool") } else { format!("Add {title} to this pool") }, gpui_kit::Role::GenericContainer).into_any_element(),
             controls.into_any_element(),
             cx,
         )

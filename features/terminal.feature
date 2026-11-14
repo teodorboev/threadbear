@@ -14,6 +14,38 @@ Feature: The Terminal
   Background:
     Given the app is connected to a runner with the demo threads
 
+  # GPUI's scripted command clicks the actual grid cell; the frozen Swift
+  # driver has no matching command (its view already follows links).
+  @terminal.panel @windows-pending @swift-pending
+  Scenario: A printed Terminal link opens through the app's gate
+    Given the thread "Rename the Settings tabs" works in a folder of its own
+    When I open the thread "Rename the Settings tabs"
+    And I press ⌘J
+    And I type "printf 'https://example.com/terminal\n'" and press Return in the Terminal
+    Then the Terminal shows the line "https://example.com/terminal"
+    When I follow the Terminal link "https://example.com/terminal"
+    Then "https://example.com/terminal" was opened through the app
+
+  @terminal.panel @windows-pending @swift-pending
+  Scenario: A labelled Terminal hyperlink follows its address
+    Given the thread "Rename the Settings tabs" works in a folder of its own
+    When I open the thread "Rename the Settings tabs"
+    And I press ⌘J
+    And I type "printf '\033]8;;https://example.com/labelled\033\\Open the page\033]8;;\033\\\n'" and press Return in the Terminal
+    Then the Terminal shows the line "Open the page"
+    When I follow the Terminal link "Open the page"
+    Then "https://example.com/labelled" was opened through the app
+
+  @terminal.panel @windows-pending @swift-pending
+  Scenario: A Terminal hyperlink cannot run a program without asking
+    Given the thread "Rename the Settings tabs" works in a folder of its own
+    When I open the thread "Rename the Settings tabs"
+    And I press ⌘J
+    And the Terminal prints a link to a program in its folder
+    And I follow the Terminal link "Run the program"
+    Then nothing was opened in another app
+    And the Terminal link's program did not run
+
   @terminal.panel
   Scenario: ⌘J brings up a shell in the thread's folder, with the keyboard
     Given the thread "Rename the Settings tabs" works in a folder of its own

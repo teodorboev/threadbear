@@ -12,7 +12,7 @@ import { okValue, type Dump } from '../support/driver.ts';
 import { pane } from '../support/pane.ts';
 import { sites } from '../support/web-runtime.ts';
 
-type PageInfo = { key: string; url?: string; title?: string; address?: string; loading?: boolean; loads?: number; canGoBack?: boolean; hidden?: boolean; muted?: boolean };
+type PageInfo = { key: string; url?: string; title?: string; address?: string; loading?: boolean; loads?: number; canGoBack?: boolean; hidden?: boolean; muted?: boolean; slot?: [number, number, number, number] };
 type ConvexInfo = { project?: string | null; label?: string; deployment?: string; choices?: string[]; note?: string | null; failure?: string | null; code?: string | null; signInFailure?: string | null };
 type WebPane = { url?: string; shows: string; note?: string; buttons: string[]; page?: PageInfo; convex?: ConvexInfo };
 
@@ -61,6 +61,20 @@ Then("the panel's page is out of sight and its sound is off", async function (th
   await this.until('the page hidden and muted', (d) => pages(d).some((p) => p.key === url && p.hidden === true && p.muted === true));
   const d = await this.app.dump();
   loadsBefore = pages(d).find((p) => p.key === url)?.loads ?? 0;
+});
+
+When("I right-click the panel's tab bar", async function (this: ThreadbearWorld) {
+  // Just above the page, where its tab and bar are: the dock's own menu,
+  // as a real right-click there opens it.
+  const d = await this.app.dump();
+  const shown = pages(d).find((p) => p.hidden === false);
+  assert.ok(shown?.slot, 'a page showing');
+  const [x, y] = shown.slot;
+  await this.app.do({ cmd: 'click-at', x: x + 30, y: y - 14, right: true });
+});
+
+Then("the panel's page is out of sight under the menu", async function (this: ThreadbearWorld) {
+  await this.until('the page hidden under the menu', (d) => (d as { webPanels?: { covered?: boolean } }).webPanels?.covered === true && pages(d).some((p) => p.key === sites().home && p.hidden === true));
 });
 
 Then('the panel shows the page {string} without loading it again', async function (this: ThreadbearWorld, title: string) {

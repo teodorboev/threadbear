@@ -8,64 +8,91 @@ use serde::Deserialize;
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", default)]
 pub struct ReplyButton {
+    #[serde(default, deserialize_with = "crate::wire::id")]
     pub id: String,
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub title: String,
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub created_at: String,
+    // Actions must stay strict: losing a run payload would turn a command
+    // into an ordinary reply pill while its id still runs the real command.
+    #[serde(default)]
     pub start: Option<Start>,
+    #[serde(default)]
     pub send: Option<Send>,
+    #[serde(default)]
     pub run: Option<Run>,
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub running: Option<At>,
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub pressed: Option<Pressed>,
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub failed: Option<Failed>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase", default)]
+#[serde(rename_all = "camelCase")]
+// Relay snapshots intentionally redact these strings. Keep their types
+// required, but accept empty values; presses route by thread/button ids.
 pub struct Start {
     pub text: String,
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub title: Option<String>,
     pub cwd: String,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase", default)]
+#[serde(rename_all = "camelCase")]
 pub struct Send {
     pub thread_id: String,
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub thread_title: String,
     pub text: String,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase", default)]
+#[serde(rename_all = "camelCase")]
 pub struct Run {
+    #[serde(deserialize_with = "crate::wire::id")]
     pub command: String,
+    #[serde(deserialize_with = "crate::wire::id")]
     pub cwd: String,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", default)]
 pub struct At {
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub at: String,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Pressed {
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub at: String,
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub thread_id: String,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Failed {
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub at: String,
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub error: String,
 }
 
 impl ReplyButton {
     pub fn decode(v: &serde_json::Value) -> Option<ReplyButton> {
-        let button: ReplyButton = serde_json::from_value(v.clone()).ok()?;
-        (!button.id.is_empty()).then_some(button)
+        let button: ReplyButton = crate::wire::read(v.clone())?;
+        let actions = usize::from(button.start.is_some()) + usize::from(button.send.is_some()) + usize::from(button.run.is_some());
+        if button.id.is_empty() || actions != 1 {
+            crate::wire::dropped::<ReplyButton>("button action or identity");
+            return None;
+        }
+        Some(button)
     }
 
     /// Whether this snapshot is newer than `old`. A button only moves
@@ -223,9 +250,9 @@ mod tests {
 
     #[test]
     fn a_newer_snapshot_wins_and_a_pressed_one_stays() {
-        let made = button(json!({ "id": "x", "title": "Go" }));
-        let failed = button(json!({ "id": "x", "title": "Go", "failed": { "at": "2026-11-11T10:00:00Z", "error": "e" } }));
-        let pressed = button(json!({ "id": "x", "title": "Go", "pressed": { "at": "2026-11-11T11:00:00Z", "threadId": "t" } }));
+        let made = button(json!({ "id": "x", "title": "Go", "start": {"text":"Brief","cwd":"/work"} }));
+        let failed = button(json!({ "id": "x", "title": "Go", "start": {"text":"Brief","cwd":"/work"}, "failed": { "at": "2026-11-11T10:00:00Z", "error": "e" } }));
+        let pressed = button(json!({ "id": "x", "title": "Go", "start": {"text":"Brief","cwd":"/work"}, "pressed": { "at": "2026-11-11T11:00:00Z", "threadId": "t" } }));
         assert!(failed.supersedes(&made));
         assert!(!made.supersedes(&failed));
         assert!(pressed.supersedes(&failed));

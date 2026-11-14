@@ -53,7 +53,8 @@ jobs:
   build:
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 45
+    # Windows needs time for its release build after the behaviour specs.
+    timeout-minutes: ${{ matrix.os == 'windows-latest' && 60 || 45 }}
     strategy:
       fail-fast: false
       matrix:
@@ -86,6 +87,23 @@ jobs:
         run: node verify-pairing.mjs
       - name: Rust tests (with the mock runner)
         run: cargo test --manifest-path desktop/Cargo.toml
+      - name: Native text bridge contract
+        if: runner.os == 'macOS'
+        run: bash desktop/scripts/test-native-text.sh
+      - name: File-drop regression tests
+        run: cargo test --locked --manifest-path desktop/Cargo.toml -p threadbear-gpui --features automation --test file_drop
+      - name: Loader repaint and lifetime regressions
+        run: |
+          cargo test --locked --manifest-path desktop/Cargo.toml -p threadbear-gpui --features automation,frame-stats --bin threadbear-gpui spinner:: -- --list > loader-tests.txt
+          cat loader-tests.txt
+          count=$(awk '/^spinner::.*: test$/ { n++ } END { print n+0 }' loader-tests.txt)
+          test "$count" -ge 10
+          cargo test --locked --manifest-path desktop/Cargo.toml -p threadbear-gpui --features automation,frame-stats --bin threadbear-gpui spinner::
+          cargo test --locked --manifest-path desktop/Cargo.toml -p threadbear-gpui --features automation,frame-stats --bin threadbear-gpui frame_stats::loader_probe_tests:: -- --list > loader-probe-tests.txt
+          cat loader-probe-tests.txt
+          count=$(awk '/^frame_stats::loader_probe_tests::.*: test$/ { n++ } END { print n+0 }' loader-probe-tests.txt)
+          test "$count" -ge 1
+          cargo test --locked --manifest-path desktop/Cargo.toml -p threadbear-gpui --features automation,frame-stats --bin threadbear-gpui frame_stats::loader_probe_tests::
       - name: Behaviour specs
         run: |
           cargo build --manifest-path desktop/Cargo.toml -p threadbear-gpui --features automation

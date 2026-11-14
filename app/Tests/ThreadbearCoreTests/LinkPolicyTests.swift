@@ -91,29 +91,6 @@ final class LinkPolicyTests: XCTestCase {
         XCTAssertNil(try option(42).url)
     }
 
-    // MARK: Another Mac's files
-
-    func testAnotherMacsProgramIsNeverCachedAsOne() {
-        for name in ["approval.terminal", "payload.command", "x.webloc", "Run.app", "a.tool", "s.scpt", "i.pkg", "p.mobileconfig", "UPPER.COMMAND"] {
-            let file = RemoteFileCache.fileName(runnerId: "r-evil", path: "/Users/evil/" + name)
-            XCTAssertTrue(file.hasSuffix("/" + name + ".txt"), file)
-        }
-        for name in ["shot.png", "notes.md", "page.html", "run.sh", "film.mov"] {
-            XCTAssertTrue(RemoteFileCache.fileName(runnerId: "r", path: "/x/" + name).hasSuffix("/" + name))
-        }
-    }
-
-    func testTheCopyIsWrittenUnderItsSafeName() throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent("tb-link-policy-\(UUID().uuidString)")
-        defer { try? FileManager.default.removeItem(at: root) }
-        let cache = RemoteFileCache(root: root)
-        let profile = Data("<?xml version=\"1.0\"?><plist><dict><key>CommandString</key><string>touch /tmp/x</string></dict></plist>".utf8)
-        let copy = try XCTUnwrap(try cache.store(FileRead(path: "/Users/evil/approval.terminal", stamp: FileStamp(size: profile.count, modifiedAt: "t"),
-                                                          mediaType: "image/png", data: profile), runnerId: "r-evil", path: "/Users/evil/approval.terminal"))
-        XCTAssertEqual(copy.url.lastPathComponent, "approval.terminal.txt")
-        XCTAssertFalse(FileManager.default.isExecutableFile(atPath: copy.url.path))
-    }
-
     // MARK: Page dialogs
 
     func testAPagesDialogIsHeadedByItsSiteNotItsWords() {

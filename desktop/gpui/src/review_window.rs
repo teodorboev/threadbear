@@ -18,7 +18,7 @@ use crate::style::{self, px};
 use crate::call;
 use gpui_kit::assets::IconName;
 use gpui_kit::component::input::{Enter, InputEvent, Paste, TextareaState};
-use gpui_kit::component::spinner::Spinner;
+use crate::spinner::Spinner;
 use gpui_kit::component::{h_flex, v_flex, ActiveTheme as _, Icon, Sizable as _};
 use gpui_kit::prelude::*;
 use gpui_kit::*;
@@ -196,7 +196,7 @@ impl Threadbear {
             main: window.window_handle(),
             client: self.client.clone(),
             thread_id: thread_id.to_owned(),
-            cwd: thread.map(|t| t.cwd).unwrap_or_default(),
+            cwd: thread.map(|t| t.cwd.clone()).unwrap_or_default(),
             cache: reviews(cx).drafts.clone(),
         };
         let title: SharedString = review.title.clone().into();
@@ -986,6 +986,11 @@ impl Render for ReviewWindow {
         // (media_view.rs); they hide while the title bar's menu is up.
         let clips = crate::media_view::sweeper(window, crate::media_view::Cover { everything: self.more_open, menus: Vec::new() });
         self.sync_reply_box(window, cx);
+        // A page's view goes once its shot isn't the one on show.
+        let page_shown = self.session.mode == ReviewMode::Single && self.session.shown_shot().is_some_and(|s| s.page().is_some());
+        if !page_shown {
+            self.stage.page = None;
+        }
         // The rail keeps the option on show in view as the stage moves.
         if self.session.mode == ReviewMode::Single && self.rail_follows != Some(self.session.focused()) {
             self.rail_follows = Some(self.session.focused());
@@ -1339,9 +1344,12 @@ impl ReviewWindow {
             "stage": match (s.mode, s.shown_shot()) {
                 (ReviewMode::All, _) => "all",
                 (_, Some(shot)) if shot.video().is_some_and(|v| crate::media_view::state_of(&stage::stage_key(v)).is_some()) => "player",
+                (_, Some(shot)) if shot.page().is_some_and(|p| self.stage.page.as_ref().is_some_and(|(shown, _)| shown == p)) => "page",
                 (_, Some(shot)) if shot.media.is_some() => "still",
                 _ => "picture",
             },
+            // Why a page shot on show isn't in place (GPUI's own).
+            "pageFailed": self.stage.page_failed_reason(),
             // What Open live would open, for the option on show.
             "live": s.shown_option().filter(|_| s.mode == ReviewMode::Single).and_then(|o| o.url.clone()).unwrap_or_default(),
         })

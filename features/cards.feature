@@ -70,14 +70,3 @@ Feature: Answering the agent
   Scenario: A review card says what it's comparing
     When I open the thread "Compare account picker designs"
     Then a review card says "images · pending"
-
-  # The runner runs it and tells the agent (docs/protocol.md, "Run on the
-  # card"); the mock only plays the button going from running to ran.
-  @cards.run
-  Scenario: A command on the card shows whole, and Run runs it once
-    Given the agent in "Rename the Settings tabs" asks me to run "npm run migrate -- --env dev"
-    When I open the thread "Rename the Settings tabs"
-    Then the card shows the command "npm run migrate -- --env dev" ready to run
-    When I press Run on the card
-    Then the card's Run for "npm run migrate -- --env dev" says it's running
-    And then that it ran

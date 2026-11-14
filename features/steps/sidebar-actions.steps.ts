@@ -12,6 +12,22 @@ function listIn(result: string): string[] {
 // Menu titles can have commas ("Tomorrow, 9 am"), so lists use " | ".
 const wanted = (list: string) => list.split(' | ').map((s) => s.trim());
 
+Then('the Hibernate dialog shows a month calendar and a separate time field', function () {
+  return 'pending';
+});
+
+When('I choose an earlier time today and press Hibernate', function () {
+  return 'pending';
+});
+
+Then('the Hibernate dialog says {string}', function (_words: string) {
+  return 'pending';
+});
+
+Then('its chosen day and time remain available to edit', function () {
+  return 'pending';
+});
+
 Given('the {string} section is unfolded', async function (this: ThreadbearWorld, key: string) {
   await this.app.do({ cmd: 'expand', section: key });
   await this.until(`${key} open`, (d) => d.sidebar.sections.find((s) => s.name.toLowerCase() === key)?.collapsed === false);

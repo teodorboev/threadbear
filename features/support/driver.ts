@@ -69,7 +69,7 @@ export type Dump = {
   };
   /** The line under the bar when the thread can't go on where it is (LimitBanner). */
   limit?: { text: string; button?: string | null; carryOn?: string | null } | null;
-  composer: { draft: string; text: string; images?: number; editing?: number | null; chip?: string; chipBadge?: string | null; mode?: string; card?: string[] | null; cardRuns?: string[] | null; cwd?: string; runner?: string | null; creating?: boolean };
+  composer: { draft: string; text: string; images?: number; editing?: number | null; chip?: string; chipBadge?: string | null; mode?: string; card?: string[] | null; cwd?: string; runner?: string | null; creating?: boolean };
   /** The new-thread page while it's showing. */
   newThread?: { heading: string; note: string; project?: string | null; rooms: { label: string; line: string; selected: boolean; note?: string | null }[] } | null;
   /** The slash palette over the composer while it's open. */
@@ -82,12 +82,17 @@ export type Dump = {
     detail?: { title: string; usage: string; description?: string | null; now?: string | null; also?: string | null; origin: string; path?: string | null; buttons: string[] } | null;
     note?: string | null;
   } | null;
+  /** ⌘K's box while it's up: what's typed, each group's entries as their
+   *  lines read ("Inbox | ⌘1"), and the pick's title. */
+  anything?: { query: string; groups: { title: string; items: string[] }[]; picked?: string | null; recent: string[] } | null;
   /** The Move sheet while it's up. */
   moveSheet?: { title: string; subtitle: string; folder: string; login: string; problems: string[]; leftBehind: string[]; clone?: string | null; asking: boolean; canMove: boolean } | null;
   decisions?: string[] | null;
   transcript: {
     threadId?: string;
     state?: string;
+    /** The selected thread's error line (separate from the app's error bar). */
+    error?: string | null;
     atBottom?: boolean;
     hasMoreAbove?: boolean;
     /** The spinner in the middle while it's read (the GPUI app's; the Swift dump has only `state`). */
@@ -121,6 +126,13 @@ export type Dump = {
   flight?: Flight | null;
   /** Whether motion is reduced, so flights and glides don't play (GPUI only). */
   reduceMotion?: boolean;
+  /** How the last thread opened ("click", "down", "up", "newPage" or
+   * "still", under the archive flight), and from the new-thread page, how
+   * far its box dropped, negative for down (GPUI only: open_motion.rs). */
+  opening?: { thread: string; how: string; boxDrop: number | null } | null;
+  /** The small motions as last seen (GPUI only): the row a click last slid
+   * off, and the card that last arrived while its thread was on screen. */
+  juice?: { slidOff: string | null; cardArrived: number | null } | null;
   /** The last time the panels moved with their glide: where each panel was
    * drawn and where it is (or, in the GPUI app, is going), by panel
    * ("thread", "terminal"), and whether it's still moving (GPUI only). */
@@ -172,7 +184,7 @@ export interface Driver {
   /** Saves a picture of the window, for a failed scenario. */
   shot(file: string): Promise<void>;
   /** Quits the app and opens it again, keeping its data and its settings. */
-  relaunch(): Promise<void>;
+  relaunch(between?: () => void): Promise<void>;
   /** The app's own log so far (the connection, failed requests, notices),
    * as `dev-app.sh log` shows the Swift app's. */
   appLog(): Promise<string>;

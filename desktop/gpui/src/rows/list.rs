@@ -79,6 +79,16 @@ impl TranscriptList {
         cx.notify();
     }
 
+    /// Moves the view up by `distance`, so a row just put at the top sits
+    /// that far down (a work link's step, a third of the way down, as the
+    /// Swift `scroll(toRow:offset:)` puts it). Only rows that have been laid
+    /// out have heights, so call it a frame after the row's been scrolled to:
+    /// the list's overdraw has measured the rows just above it by then.
+    pub fn back_up(&mut self, distance: Pixels, cx: &mut Context<Self>) {
+        self.list.scroll_by(-distance);
+        cx.notify();
+    }
+
     /// While the mouse button's down on a selection: stop following new
     /// lines, so the words don't move under the pointer. Whether it was
     /// following, for `resume_after_selection`.

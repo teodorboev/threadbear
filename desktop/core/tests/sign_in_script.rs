@@ -14,7 +14,9 @@ fn zsh_prints_the_name_as_data() {
     let dir = std::env::temp_dir().join(format!("tb-sign-in-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let title = "claude$(touch injected) `touch injected` \"q\" 'q' \\ $HOME\nsecond line; touch injected";
-    let account = SignInAccount { id: "x".into(), provider: "claude".into(), title: title.into(), config_dir: String::new() };
+    // The main login needs no folder. Secondary logins without one now fail
+    // closed before a script can run, so use a valid login to test quoting.
+    let account = SignInAccount { id: "claude-main".into(), provider: "claude".into(), title: title.into(), config_dir: String::new() };
     let s = script(&account, "/usr/bin/true");
     let out = std::process::Command::new(zsh).args(["-f", "-c", &s]).current_dir(&dir).output().unwrap();
     let printed = String::from_utf8_lossy(&out.stdout);

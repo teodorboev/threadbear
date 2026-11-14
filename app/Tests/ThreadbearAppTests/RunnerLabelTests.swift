@@ -6,7 +6,7 @@ import XCTest
 /// The runner's name after the project on a sidebar row ("Threadbear • M5").
 @MainActor
 final class RunnerLabelTests: XCTestCase {
-    private let bruce = RemoteRunner(id: "r-bruce", name: "bruce", online: true, rpcUrl: nil, tokenFile: nil)
+    private let bruce = RemoteRunner(id: "r-bruce", name: "bruce", online: true)
     private let m5 = RunnerInfo(id: "r-m5", name: "M5", isSelf: true)
 
     override func setUp() {

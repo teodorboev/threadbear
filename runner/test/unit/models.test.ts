@@ -222,6 +222,19 @@ test('settings: keeping the Mac awake is on until turned off, and only a Mac sho
   assert.equal(s.cfg.keepAwake, false, 'a refused update changed nothing');
 });
 
+test('settings: full sync is off until answered, and either answer is saved in runner.json', () => {
+  const s = settingsSetup();
+  const file = path.join(s.home, 'runner.json');
+  fs.writeFileSync(file, JSON.stringify({ sync: { url: 'https://x.convex.cloud', name: 'Mac' } }));
+  assert.equal(s.svc.get().fullSync, false);
+  for (const v of [true, false]) {
+    const r = s.methods['settings.update']({ fullSync: v }) as { settings: any };
+    assert.equal(r.settings.fullSync, v);
+    assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')).sync, { url: 'https://x.convex.cloud', name: 'Mac', full: v });
+  }
+  assert.throws(() => s.methods['settings.update']({ fullSync: 'yes' }), (e: RpcError) => e.code === ErrorCode.badParams);
+});
+
 test("settings: bringIn is every 5 days until changed, and keeps the rest of runner.json's releases", () => {
   const s = settingsSetup();
   assert.equal(s.svc.get().bringIn, 5);

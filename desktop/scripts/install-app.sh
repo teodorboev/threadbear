@@ -1,8 +1,7 @@
 #!/bin/bash
 # Installs the GPUI app as ~/Applications/Threadbear GPUI.app, beside the Swift
-# app, talking to the same runner. Mac only for now. It's an experiment
-# (runner/src/experiments/gpuiApp.md): this refuses unless runner.json says
-# "experiments": { "gpuiApp": true }.
+# app, talking to the same runner. Mac only for now. The Swift app's "Start
+# using the new app" uses switch-from-swift.sh instead, which builds main.
 #
 #   desktop/scripts/install-app.sh [--build-on <ssh host>] [--keep-links]
 #
@@ -28,12 +27,6 @@ while [ $# -gt 0 ]; do
 done
 
 [ "$(uname -s)" = Darwin ] || { echo "Only for a Mac so far: on Linux, run target/release/threadbear-gpui." >&2; exit 2; }
-
-config="${THREADBEAR_HOME:-$HOME/Library/Application Support/Threadbear}/runner.json"
-if ! /usr/bin/python3 -I -c 'import json,sys; sys.exit(0 if json.load(open(sys.argv[1])).get("experiments",{}).get("gpuiApp") else 1)' "$config" 2>/dev/null; then
-  echo "The GPUI app is an experiment: add \"experiments\": { \"gpuiApp\": true } to $config first." >&2
-  exit 1
-fi
 
 # View > Show Frame Rate (desktop/gpui/src/frame_stats.rs), for seeing how
 # smoothly it draws on this Mac.
@@ -69,10 +62,16 @@ fi
 bundle="$work/Threadbear GPUI.app"
 # The bundle, its icon, signature and build.json (make-bundle.sh), from this
 # checkout, which the installed app then follows.
-"$root/desktop/scripts/make-bundle.sh" "$work" "$bundle" "$root"
+THREADBEAR_BUILT_ON="$build_on" "$root/desktop/scripts/make-bundle.sh" "$work" "$bundle" "$root"
 
 mkdir -p "$HOME/Applications"
 target="$HOME/Applications/Threadbear GPUI.app"
+# An update staged by the app that's there now goes too: an older app,
+# still running, would swap it over this one when it quits, and one from
+# before 12 Nov 2026 may have had it built by a check host (Daybreak 108).
+# Stopped if it can't go, rather than installed under it.
+rm -rf "$HOME/Applications/.Threadbear GPUI.app.next" "$HOME/Applications/.Threadbear GPUI.app.next.making" "$HOME/Applications/.Threadbear GPUI.app.swapping"
+[ ! -e "$HOME/Applications/.Threadbear GPUI.app.next" ] || { echo "Couldn't remove the staged update at $HOME/Applications/.Threadbear GPUI.app.next; remove it and run this again." >&2; exit 1; }
 rm -rf "$target"
 ditto "$bundle" "$target"
 echo "Installed $target"

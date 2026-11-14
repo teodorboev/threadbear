@@ -8,9 +8,13 @@ use crate::shell::{self, SidebarMode};
 use crate::style::px;
 use crate::{icons, style};
 use gpui_kit::base::TestSupportExt as _;
-use gpui_kit::component::{v_flex, ActiveTheme as _, Sizable as _};
+use gpui_kit::component::{v_flex, ActiveTheme as _, Icon, Sizable as _};
 use gpui_kit::prelude::*;
 use gpui_kit::*;
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::time::Instant;
+use threadbear_core::juice;
 use threadbear_core::shortcuts::ShortcutCommand;
 use crate::tips::Tip as _;
 
@@ -31,12 +35,108 @@ pub(crate) struct RailButton {
     pub(crate) active: bool,
     /// Its key, shown beside it while ⌘ is held (key_hints.rs).
     pub(crate) hint: Option<String>,
+    /// One of the views (Threads, Scheduled, Projects, Librarian), whose lit
+    /// square slides between them; and whether it's sliding this frame.
+    pub(crate) view: bool,
+    pub(crate) lit_sliding: bool,
 }
 
 impl RailButton {
     fn new(id: impl Into<SharedString>, symbol: &'static str, title: impl Into<String>, active: bool) -> Self {
-        Self { id: id.into(), symbol, face: None, tip: title.into(), badge: None, dot: false, quiet_dot: false, active, hint: None }
+        Self { id: id.into(), symbol, face: None, tip: title.into(), badge: None, dot: false, quiet_dot: false, active, hint: None, view: false, lit_sliding: false }
     }
+}
+
+thread_local! {
+    /// When each button was last clicked, for its bounce. The window draws
+    /// on one thread.
+    static TAPS: RefCell<HashMap<SharedString, Instant>> = RefCell::new(HashMap::new());
+    /// Whether each button's count and dot showed last time it was drawn,
+    /// and when the one showing turned up, to pop it in.
+    static SHOWN: RefCell<HashMap<String, (bool, Option<Instant>)>> = RefCell::new(HashMap::new());
+    /// The view buttons' lit square: where each button was laid out this
+    /// frame, the one lit, and the square on its way from the last one.
+    static LIT: RefCell<Lit> = RefCell::new(Lit::default());
+}
+
+#[derive(Default)]
+struct Lit {
+    bounds: HashMap<SharedString, Bounds<Pixels>>,
+    key: Option<SharedString>,
+    slide: Option<(SharedString, Instant)>,
+}
+
+/// Says which view's button is lit, before they're drawn, and whether its
+/// square is sliding there from the last one (`Juice.selection` over the
+/// square matched across the bar; Mike picked it, 13 Nov). Not under Reduce
+/// Motion, where it jumps.
+fn lit(key: Option<SharedString>, reduce: bool) -> bool {
+    LIT.with(|lit| {
+        let mut lit = lit.borrow_mut();
+        if lit.key != key {
+            let from = lit.key.take().filter(|from| !reduce && key.is_some() && lit.bounds.contains_key(from));
+            lit.slide = from.map(|from| (from, Instant::now()));
+            lit.key = key;
+        }
+        if lit.slide.as_ref().is_some_and(|(_, at)| at.elapsed() >= juice::LIT_SLIDE) {
+            lit.slide = None;
+        }
+        lit.slide.is_some()
+    })
+}
+
+/// The lit square on its way, under the view buttons: their column's first
+/// child, so it paints before them, once they've all been placed.
+fn lit_marker(color: Hsla) -> impl IntoElement {
+    canvas(
+        |_, _, _| {},
+        move |_, _, window, _| {
+            LIT.with(|lit| {
+                let lit = lit.borrow();
+                let (Some(to), Some((from, at))) = (lit.key.as_ref(), lit.slide.as_ref()) else { return };
+                let (Some(a), Some(b)) = (lit.bounds.get(from), lit.bounds.get(to)) else { return };
+                let t = juice::snappy(at.elapsed().as_secs_f32(), juice::LIT_RESPONSE);
+                let mix = |x: Pixels, y: Pixels| x + (y - x) * t;
+                let bounds = Bounds::new(point(mix(a.origin.x, b.origin.x), mix(a.origin.y, b.origin.y)), b.size);
+                window.paint_quad(fill(bounds, color).corner_radii(px(style::RAIL_CORNER)));
+                window.request_animation_frame();
+            })
+        },
+    )
+    .absolute()
+    .top_0()
+    .left_0()
+    .size_full()
+}
+
+/// The icon, pressing in and bouncing back after a click (`ActivityButton`'s
+/// taps): to 0.82 in 0.08 s, then a bouncy spring home.
+fn bouncing(id: &SharedString, icon: Icon) -> AnyElement {
+    let Some(at) = TAPS.with(|t| t.borrow().get(id).copied()).filter(|at| at.elapsed() < juice::RAIL_BOUNCE) else { return icon.into_any_element() };
+    let length = juice::RAIL_BOUNCE;
+    icon.with_animation(SharedString::from(format!("rail-bounce-{id}-{at:?}")), Animation::new(length), move |icon, t| {
+        let scale = juice::rail_bounce(t * length.as_secs_f32());
+        icon.transform(Transformation::scale(size(scale, scale)))
+    })
+    .into_any_element()
+}
+
+/// When the count or dot at `key` turned up, while it's still popping in
+/// (`Juice.popIn`): it pops only on turning up, not when the app first draws
+/// it, nor when it changes number (that rolls).
+fn turned_up(key: String, shown: bool) -> Option<Instant> {
+    SHOWN.with(|m| {
+        let mut m = m.borrow_mut();
+        let entry = m.entry(key).or_insert((shown, None));
+        if shown && !entry.0 {
+            entry.1 = Some(Instant::now());
+        }
+        entry.0 = shown;
+        if !shown {
+            entry.1 = None;
+        }
+        entry.1.filter(|at| at.elapsed() < juice::POP)
+    })
 }
 
 /// `ActivityButton`: an icon, the hover square, a lit square for the view on
@@ -52,6 +152,14 @@ fn rail_button(button: RailButton, on_click: impl Fn(&mut Threadbear, &mut Windo
     let (tip_text, label): (SharedString, SharedString) = (button.tip.clone().into(), button.tip.into());
     let tip_for_tooltip = tip_text.clone();
     let badge_key = button.id.clone();
+    let tapped = button.id.clone();
+    let face = match button.face {
+        Some(face) => face,
+        None => bouncing(&button.id, icons::symbol(button.symbol).with_size(px(15.))),
+    };
+    // A view button notes where it is for the lit square to slide between.
+    let placed = button.id.clone();
+    let marker = canvas(move |bounds, _, _| LIT.with(|lit| lit.borrow_mut().bounds.insert(placed.clone(), bounds)), |_, _, _, _| {}).absolute().top_0().left_0().size_full();
     let mut el = div()
         .id(button.id)
         .relative()
@@ -62,42 +170,67 @@ fn rail_button(button: RailButton, on_click: impl Fn(&mut Threadbear, &mut Windo
         .justify_center()
         .rounded(px(style::RAIL_CORNER))
         .text_color(color)
-        .when(button.active, |s| s.bg(active_fill))
+        // Not while its lit square slides here: `lit_marker` draws it then.
+        .when(button.active && !button.lit_sliding, |s| s.bg(active_fill))
         .when(!button.active, |s| s.hover(move |h| h.bg(hover_fill).text_color(fg)))
         .test_support()
-        .aria_label(label)
+        .role(Role::Button).aria_toggled(if button.active { Toggled::True } else { Toggled::False }).aria_label(label)
         .tip(tip_for_tooltip.clone())
-        .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| on_click(this, window, cx)))
-        .child(match button.face {
-            Some(face) => face,
-            None => icons::symbol(button.symbol).with_size(px(15.)).into_any_element(),
-        });
+        .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
+            if !cx.reduce_motion() {
+                TAPS.with(|t| t.borrow_mut().insert(tapped.clone(), Instant::now()));
+            }
+            on_click(this, window, cx)
+        }))
+        .when(button.view, |s| s.child(marker))
+        .child(face);
+    let reduce = cx.reduce_motion();
+    let pop_length = if reduce { juice::POP_REDUCED } else { juice::POP };
+    let badge_shown = button.badge.is_some_and(|b| b > 0);
+    let badge_pop = turned_up(format!("badge-{badge_key}"), badge_shown);
+    let dot_pop = turned_up(format!("dot-{badge_key}"), !badge_shown && (button.dot || button.quiet_dot));
     if let Some(badge) = button.badge.filter(|b| *b > 0) {
         // Grey, not accent: a count of what's there, not an alarm. It rolls
         // to a new number (row_motion.rs), as the Swift badge does.
         let text = crate::row_motion::rolling(&format!("rail-{}", badge_key), badge, 12., cx.reduce_motion(), |n| div().child(if n > 99 { "99+".to_string() } else { n.to_string() }).into_any_element());
-        el = el.child(
-            div()
-                .absolute()
-                .top(px(-2.))
-                .right(px(-3.))
-                .min_w(px(14.))
-                .h(px(14.))
-                .px(px(3.5))
-                .flex()
-                .items_center()
-                .justify_center()
-                .rounded_full()
-                .bg(background)
-                .border_1()
-                .border_color(separator)
-                .text_size(px(9.))
-                .font_weight(FontWeight::SEMIBOLD)
-                .text_color(secondary)
-                .child(text),
-        );
+        let pill = div()
+            .absolute()
+            .top(px(-2.))
+            .right(px(-3.))
+            .min_w(px(14.))
+            .h(px(14.))
+            .px(px(3.5))
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded_full()
+            .bg(background)
+            .border_1()
+            .border_color(separator)
+            .text_size(px(9.))
+            .font_weight(FontWeight::SEMIBOLD)
+            .text_color(secondary)
+            .child(text);
+        el = match badge_pop {
+            // Turning up: it grows from a fifth of its size about its middle,
+            // drawn smaller rather than scaled (GPUI can't scale a box).
+            Some(at) => el.child(pill.with_animation(SharedString::from(format!("rail-badge-pop-{badge_key}-{at:?}")), Animation::new(pop_length), move |pill, t| {
+                let (scale, opacity) = juice::pop_in(pop_length.mul_f32(t), reduce);
+                let grow = 14. * (1. - scale) / 2.;
+                pill.top(px(-2. + grow)).right(px(-3. + grow)).min_w(px(14. * scale)).h(px(14. * scale)).px(px(3.5 * scale)).text_size(px(9. * scale)).opacity(opacity)
+            })),
+            None => el.child(pill),
+        };
     } else if button.dot || button.quiet_dot {
-        el = el.child(div().absolute().top(px(1.)).right(px(1.)).size(px(7.)).rounded_full().bg(dot_color).border_1().border_color(background));
+        let dot = div().absolute().top(px(1.)).right(px(1.)).size(px(7.)).rounded_full().bg(dot_color).border_1().border_color(background);
+        el = match dot_pop {
+            Some(at) => el.child(dot.with_animation(SharedString::from(format!("rail-dot-pop-{badge_key}-{at:?}")), Animation::new(pop_length), move |dot, t| {
+                let (scale, opacity) = juice::pop_in(pop_length.mul_f32(t), reduce);
+                let grow = 7. * (1. - scale) / 2.;
+                dot.top(px(1. + grow)).right(px(1. + grow)).size(px(7. * scale)).opacity(opacity)
+            })),
+            None => el.child(dot),
+        };
     }
     // Its key to the right while ⌘ is held (`shortcutHint(_, .after)`).
     el.children(crate::key_hints::hint(button.hint, crate::key_hints::Placement::After)).into_any_element()
@@ -144,7 +277,21 @@ impl Threadbear {
         let inbox_count = self.inbox_count(cx);
         let mut views = vec![];
         let mode = self.mode;
-        let mut button = RailButton::new("rail-threads", "bubble.left.and.bubble.right", "Threads", mode == SidebarMode::Inbox);
+        // The view on show; its button's square slides to it from the last.
+        let lit_id: SharedString = match mode {
+            SidebarMode::Inbox => "rail-threads",
+            SidebarMode::Scheduled => "rail-scheduled",
+            SidebarMode::Projects => "rail-projects",
+            SidebarMode::Librarian => "rail-librarian",
+        }
+        .into();
+        let sliding = lit(Some(lit_id.clone()), cx.reduce_motion());
+        let view_button = |mut button: RailButton| {
+            button.view = true;
+            button.lit_sliding = sliding && button.id == lit_id;
+            button
+        };
+        let mut button = view_button(RailButton::new("rail-threads", "bubble.left.and.bubble.right", "Threads", mode == SidebarMode::Inbox));
         button.tip = self.shortcut_tip("Threads", ShortcutCommand::ShowInbox);
         button.hint = self.shortcut_display(ShortcutCommand::ShowInbox);
         button.badge = Some(inbox_count);
@@ -153,7 +300,7 @@ impl Threadbear {
             this.set_mode(SidebarMode::Inbox, cx)
         }, cx));
         if self.schedules_supported {
-            let mut button = RailButton::new("rail-scheduled", "clock", "Scheduled", mode == SidebarMode::Scheduled);
+            let mut button = view_button(RailButton::new("rail-scheduled", "clock", "Scheduled", mode == SidebarMode::Scheduled));
             button.tip = self.shortcut_tip("Scheduled", ShortcutCommand::ShowScheduled);
             button.hint = self.shortcut_display(ShortcutCommand::ShowScheduled);
             button.badge = Some(self.scheduled.active_count());
@@ -167,7 +314,7 @@ impl Threadbear {
             }, cx));
         }
         if self.projects_supported {
-            let mut button = RailButton::new("rail-projects", "square.stack.3d.up", "Projects", mode == SidebarMode::Projects);
+            let mut button = view_button(RailButton::new("rail-projects", "square.stack.3d.up", "Projects", mode == SidebarMode::Projects));
             button.tip = self.shortcut_tip("Projects", ShortcutCommand::ShowProjects);
             button.hint = self.shortcut_display(ShortcutCommand::ShowProjects);
             views.push(rail_button(button, |this, window, cx| {
@@ -178,7 +325,7 @@ impl Threadbear {
                 window.focus(&this.sidebar.focus, cx);
                 crate::web_panels::keyboard_to_app(window);
             }, cx));
-            let mut button = RailButton::new("rail-librarian", "books.vertical", "Librarian", mode == SidebarMode::Librarian);
+            let mut button = view_button(RailButton::new("rail-librarian", "books.vertical", "Librarian", mode == SidebarMode::Librarian));
             button.tip = self.shortcut_tip("Librarian", ShortcutCommand::ShowLibrarian);
             button.hint = self.shortcut_display(ShortcutCommand::ShowLibrarian);
             // The look under way and the ones waiting (`pendingCount`).
@@ -196,6 +343,13 @@ impl Threadbear {
         // each with its dot: the accent when only Mike can do something, grey
         // while something sorts itself out.
         let mut foot = vec![];
+        // Finish setting up, with how many are left: only while something's
+        // left and it isn't hidden (setup_panel.rs).
+        if self.setup_shows_icon() {
+            let mut button = RailButton::new("rail-setup", "checklist", "Finish setting up", self.activity_panel_showing(shell::SETUP, cx));
+            button.badge = Some(self.setup_checklist().left());
+            foot.push(rail_button(button, |this, _, cx| this.toggle_under_threads(shell::SETUP, cx), cx));
+        }
         if self.connectors_on() {
             let status = self.connectors_panel.status.as_ref();
             let mut button = RailButton::new("rail-connectors", "powerplug", threadbear_core::connectors::tooltip(status), self.activity_panel_showing(shell::CONNECTORS, cx));
@@ -248,7 +402,9 @@ impl Threadbear {
                     .pb(px(10.))
                     .gap(px(4.))
                     .child(self.window_grip())
-                    .child(v_flex().items_center().gap(px(4.)).children(views))
+                    // The views together, for the tour to light up (not the
+                    // icons at the foot), over the lit square on its way.
+                    .child(v_flex().relative().items_center().gap(px(4.)).child(lit_marker(style::primary_opacity(cx, 0.08))).children(views).children(crate::tour::mark(threadbear_core::tour::Target::ActivityBar)))
                     .child(div().flex_1().min_h(px(8.)))
                     .children(foot)
                     .child(usage)
@@ -270,10 +426,12 @@ impl Threadbear {
         let highlights_shown = showing(shell::HIGHLIGHTS);
         let files_shown = showing(shell::FILES);
         let patches_shown = showing(shell::PATCHES);
+        let browser_shown = showing(shell::BROWSER);
         // The accent dot while the last turn's asks aren't all ticked.
         let open_ask = thread.asks.iter().flatten().any(|a| !a.ticked.unwrap_or(false)) && thread.asks_seq.is_some();
         let panels: Vec<(threadbear_core::highlights::Panel, bool)> = thread.panels().into_iter().map(|p| {
-            let shown = dock.controller.is_showing(&p.id);
+            // Or the thread's pinned copy of it (pinned_panels.rs).
+            let shown = dock.controller.is_showing(&p.id) || dock.controller.is_showing(&crate::pinned_panels::pinned_panel(&thread.id, &p.id));
             (p, shown)
         }).collect();
         let _ = dock;
@@ -281,7 +439,9 @@ impl Threadbear {
         let mut highlights = RailButton::new("rail-highlights", "pin", "Highlights", highlights_shown);
         highlights.dot = open_ask;
         if !project_page {
-            column.push(rail_button(highlights, |this, _, cx| this.click_rail(shell::HIGHLIGHTS, cx), cx));
+            let button = rail_button(highlights, |this, _, cx| this.click_rail(shell::HIGHLIGHTS, cx), cx);
+            // The tour's Highlights step lights this when the panel's closed.
+            column.push(div().relative().child(button).children(crate::tour::mark(threadbear_core::tour::Target::HighlightsRail)).into_any_element());
         }
         for (panel, shown) in panels {
             // Its own icon, with where it came from in the corner and in the
@@ -291,6 +451,14 @@ impl Threadbear {
             b.badge = panel.badge.map(|n| n.max(0) as usize);
             let id = panel.id.clone();
             column.push(rail_button(b, move |this, _, cx| this.click_rail(&id, cx), cx));
+        }
+        // BrowserBear's pages for this thread, while it's on this Mac: their
+        // count, and the accent dot while one's handed to Mike.
+        if let Some((pages, yours)) = self.browser_rail(&thread.id, cx).filter(|_| !project_page) {
+            let mut b = RailButton::new("rail-browser", "globe", "This thread's browser", browser_shown);
+            b.badge = Some(pages);
+            b.dot = yours;
+            column.push(rail_button(b, |this, _, cx| this.click_rail(shell::BROWSER, cx), cx));
         }
         if !project_page {
             column.push(rail_button(RailButton::new("rail-files", "folder", "Files", files_shown), |this, _, cx| this.click_rail(shell::FILES, cx), cx));
@@ -342,6 +510,9 @@ impl Threadbear {
                 if let (Some(id), Some(title)) = (p["id"].as_str(), p["title"].as_str()) {
                     right.push(json!({ "title": title, "badge": p["badge"], "active": showing(id) }));
                 }
+            }
+            if let Some((pages, yours)) = self.browser_rail(&thread.id, cx).filter(|_| !project_page) {
+                right.push(json!({ "title": "Browser", "badge": pages, "dot": yours, "active": showing(shell::BROWSER) }));
             }
             if !project_page {
                 right.push(json!({ "title": "Files", "active": showing(shell::FILES) }));

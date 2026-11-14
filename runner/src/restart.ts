@@ -70,6 +70,7 @@ export type Notice = { level: 'info' | 'warning' | 'error'; message: string };
 
 // runner.status's result (docs/protocol.md).
 export type RunnerStatus = {
+  webRuntimeProblem?: string;
   version: string;
   release?: string;
   pid: number;
@@ -80,6 +81,11 @@ export type RunnerStatus = {
   liveClis: number;
   running: string[]; // starting, running or waiting on an approval or a question
   background?: Background[]; // background shells and subagents still going
+  // Every thread a reinstall waits for: running, background work, a
+  // turn-end hook, between turns, or running an action (busyThreads below).
+  // For deploy.mjs's --check-idle, which install-runner.sh asks again right
+  // before it stops the runner; running and background alone missed hooks.
+  busy?: string[];
   pendingRestart?: { when: RestartWhen; reason?: string; release?: string; resumeThreadId?: string; requestedAt: string; backgroundUntil?: string; waitingFor: string[] };
   // This release is running because launch.mjs went back to it from `from`,
   // which kept crashing at startup. A deploy's health check can pass before
@@ -161,7 +167,7 @@ export function threadEnv(threadId: string, home: string, basePath = process.env
 }
 
 export type RestarterDeps = {
-  runner: Pick<Runner, 'list' | 'get' | 'send' | 'note' | 'notice' | 'onNotification' | 'events' | 'backgroundWork' | 'threadsWithHooksRunning' | 'refuseNewTurns'>;
+  runner: Pick<Runner, 'list' | 'get' | 'send' | 'note' | 'notice' | 'onNotification' | 'events' | 'backgroundWork' | 'threadsWithHooksRunning' | 'threadsBetweenTurns' | 'refuseNewTurns'> & Partial<Pick<Runner, 'threadsRunningActions'>>;
   home: string;
   clock: Clock;
   log: Logger;
@@ -320,6 +326,7 @@ export class Restarter {
       liveClis: all.filter((t) => t.live).length,
       running,
       background: this.deps.runner.backgroundWork(),
+      busy: this.busyThreads(),
     };
     if (this.deps.release) out.release = this.deps.release;
     if (this.deps.branch) out.branch = this.deps.branch;
@@ -377,6 +384,13 @@ export class Restarter {
   // too, and an agent waiting on a 40-minute test run would never hear back.
   // Background work only holds it until backgroundUntil, though: a dev
   // server or a watcher never finishes.
+  // For the LaunchAgent reinstall (reinstall.ts), which stops every runner
+  // at once, handovers and all: what a restart waits for, and Run commands
+  // and patch actions too.
+  busyThreads(): string[] {
+    return [...new Set([...this.busy(), ...(this.deps.runner.threadsRunningActions?.() ?? [])])];
+  }
+
   private busy(): string[] {
     const ids = new Set(
       this.deps.runner
@@ -390,6 +404,8 @@ export class Restarter {
     // for it would wait for the next runner. Hooks end by themselves (runCommand's
     // timeout), so no limit like background work's.
     for (const id of this.deps.runner.threadsWithHooksRunning()) ids.add(id);
+    // An edit cutting the session back, or a worktree being set up.
+    for (const id of this.deps.runner.threadsBetweenTurns()) ids.add(id);
     return [...ids];
   }
 

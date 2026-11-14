@@ -34,7 +34,6 @@ export type Asker = (req: AskRequest) => Promise<CliResponse>;
 export type AcpAskerDeps = {
   agent: AcpAgent;
   binary: () => string | undefined;
-  on: () => boolean;
   registry: ProcessRegistry;
   log: Logger;
   env?: NodeJS.ProcessEnv;
@@ -63,7 +62,6 @@ export function acpAsker(deps: AcpAskerDeps): Asker {
     // smallJobs): Cursor's read tools work in any mode, so it never gets the
     // text, however an asker for it came to be made (Daybreak, 10 Nov).
     if (!providerInfo(deps.agent.provider).smallJobs) return fail(`${name} can't take small jobs: its tools can't all be turned off.`);
-    if (!deps.on()) return fail(`${name} is off: the acpAgents experiment isn't on.`);
     const binary = deps.binary();
     if (!binary) return fail(`Threadbear can't find ${name} on this Mac.`);
     const env = cliEnv(req.account, deps.env ?? process.env);

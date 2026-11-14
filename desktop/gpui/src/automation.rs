@@ -75,10 +75,14 @@ async fn listen(file: String, tx: mpsc::UnboundedSender<Request>) {
                 let cmd: Value = serde_json::from_str(&line).unwrap_or(Value::Null);
                 let reply = if cmd["token"].as_str() == Some(token.as_str()) {
                     let (back, answer) = oneshot::channel();
+                    let name = cmd["cmd"].as_str().unwrap_or("").to_owned();
                     if tx.send((cmd, back)).is_err() {
+                        // The app's command loop is gone for good: say so
+                        // rather than close the connection with nothing.
+                        let _ = write.write_all(format!("{}\n", unanswered(&name, false)).as_bytes()).await;
                         break;
                     }
-                    answer.await.unwrap_or_else(|_| json!({ "error": "the app stopped" }))
+                    answer.await.unwrap_or_else(|_| unanswered(&name, true))
                 } else {
                     json!({ "error": "wrong token" })
                 };
@@ -88,6 +92,23 @@ async fn listen(file: String, tx: mpsc::UnboundedSender<Request>) {
             }
         });
     }
+}
+
+/// A command the app took and never answered. All the socket's side knows
+/// is that the app's thread let go of it: a panic there, or the app quitting,
+/// with the process perhaps still running. It used to say "the app stopped",
+/// which read as the process ending and hid the panic a spec on the cloud box
+/// needed (13 Nov). `unanswered` tells the spec driver (features/support/gpui.ts)
+/// to gather the process's state, kept panics and log, and the line goes in
+/// the app's log too, as its name only (never its words).
+fn unanswered(name: &str, taken: bool) -> Value {
+    let error = if taken {
+        format!("the app dropped `{name}` without answering: its command loop let go of it (a panic on the app's thread, or the app quitting); the process may still be running")
+    } else {
+        format!("the app's command loop has ended, so `{name}` never ran; the process may still be running")
+    };
+    threadbear_client::log::write("automation", &format!("{name} unanswered: {}", if taken { "dropped" } else { "loop ended" }));
+    json!({ "error": error, "unanswered": if taken { "dropped" } else { "loop ended" } })
 }
 
 // The port and token, written whole and readable only by this user: a spec
@@ -108,10 +129,10 @@ async fn run(app: &WeakEntity<Threadbear>, window: AnyWindowHandle, cmd: &Value,
     if cmd["cmd"] == "updates" && cmd["restartCheck"].as_bool() == Some(true) {
         let main = app.read_with(cx, |t, _| t.main_window).map_err(|e| e.to_string())?;
         let windows = cx.update(|cx| crate::app_update::windows_now(main, cx));
-        let m = app.read_with(cx, |t, cx| t.restart_moment(windows, cx)).map_err(|e| e.to_string())?;
+        let (m, line) = app.read_with(cx, |t, cx| (t.restart_moment(windows, cx), threadbear_core::updates::app_line(&t.app_update_side()))).map_err(|e| e.to_string())?;
         return Ok(json!({
             "staged": m.staged, "loaded": m.loaded, "hasDrafts": m.has_drafts, "held": m.held,
-            "otherWindowInput": m.other_window_input, "active": m.active, "idleFor": m.idle_for,
+            "otherWindowInput": m.other_window_input, "active": m.active, "idleFor": m.idle_for, "line": line,
         }));
     }
     // The runners' figures, asked for and waited on, as the Swift command does.
@@ -160,6 +181,7 @@ async fn run(app: &WeakEntity<Threadbear>, window: AnyWindowHandle, cmd: &Value,
     }
     // The web runtime (web_runtime.rs): its install, Not now, and a check
     // that it draws, each waited on as asked.
+    if cmd["cmd"] == "native-text" { return crate::native_text::automation(window, cmd, cx).await; }
     if cmd["cmd"] == "webRuntime" {
         return crate::web_runtime::automation(cmd, cx).await;
     }
@@ -167,6 +189,9 @@ async fn run(app: &WeakEntity<Threadbear>, window: AnyWindowHandle, cmd: &Value,
     // a person would, or wait for it to load.
     if cmd["cmd"] == "webPanel" {
         return crate::web_panels::automation(cmd, cx).await;
+    }
+    if cmd["cmd"] == "convex" {
+        return crate::web_panels::convex_command(app, cmd, cx).await;
     }
     // `text` typed as a person's keys are, through AppKit, to whoever has the
     // window's keyboard (`keyboard` in the dump): a page's view takes them
@@ -228,11 +253,71 @@ async fn run(app: &WeakEntity<Threadbear>, window: AnyWindowHandle, cmd: &Value,
         cx.update(crate::about_window::handle).ok_or("the About window isn't open")?
     } else if cmd["settings"].as_bool() == Some(true) && cmd["cmd"] != "settings" {
         app.read_with(cx, |t, _| t.settings_window.as_ref().map(|(handle, _)| *handle)).ok_or("the Settings window isn't open")?
+    } else if let Some(panel) = cmd["panel"].as_str().filter(|_| matches!(cmd["cmd"].as_str(), Some("window" | "point" | "size" | "resize" | "screenshot" | "click-at"))) {
+        app.read_with(cx, |t, cx| t.dock_view.read(cx).floating_window(panel)).ok_or("that panel has no window of its own")?
     } else {
         window
     };
+    if cmd["cmd"] == "screenshot" {
+        let path = std::path::PathBuf::from(text(cmd, "path"));
+        let image = cx.update_window(window, |_, window, cx| {
+            // A covered window gets no system frames. Draw its latest state
+            // before reading the pixels, including pictures just loaded.
+            window.render_frame(cx);
+            window.render_to_image().map_err(|e| e.to_string())
+        }).map_err(|e| e.to_string())??;
+        // Encoding and disk writes must not stall the app's thread. Await
+        // the save so the socket replies only when this shot is complete.
+        cx.background_executor().spawn(async move { crate::automation_screenshot::save(&image, &path) }).await?;
+        return Ok(json!("ok"));
+    }
+    // The first-run tour (tour.rs): {"do": "start"|"next"|"back"|"end"|"pools"},
+    // or nothing to read where it's at. Says the step, its title and what it
+    // lights up, once the card and the spotlight have had their move.
+    if cmd["cmd"] == "tour" {
+        cx.update_window(window, |_, window, cx| crate::thread::scripted_input(|| app.update(cx, |t, cx| t.tour_command(cmd, window, cx)))).map_err(|e| e.to_string())??;
+        cx.background_executor().timer(std::time::Duration::from_millis(400)).await;
+        // Drawn twice: the marks are measured in one frame, the overlay
+        // placed by them in the next.
+        cx.update_window(window, |_, window, cx| {
+            window.render_frame(cx);
+            window.render_frame(cx);
+        })
+        .ok();
+        return Ok(json!(cx.update(|cx| app.read(cx).tour_line(cx))));
+    }
+    // Until what the window shows holds every condition given (or with
+    // "not", none), as the Swift command: read from the same `dump` a
+    // script reads next (threadbear_core::wait_for), every 50 ms.
+    if cmd["cmd"] == "waitFor" {
+        let wait = threadbear_core::wait_for::WaitFor::from_command(cmd)?;
+        let started = std::time::Instant::now();
+        let dump = json!({ "cmd": "dump" });
+        loop {
+            let shown = cx.update_window(window, |_, window, cx| step(&app, &dump, window, cx)).map_err(|e| e.to_string())??;
+            if wait.holds(&shown) {
+                return Ok(json!(format!("ok {} ms", started.elapsed().as_millis())));
+            }
+            if started.elapsed().as_secs_f64() >= wait.timeout_seconds {
+                return Err(format!("timed out after {} s waiting for {}", wait.timeout_seconds, wait.describe()));
+            }
+            cx.background_executor().timer(std::time::Duration::from_millis(50)).await;
+        }
+    }
     // Its clicks and keys are the script's, not Mike being at the window.
     let out = cx.update_window(window, |_, window, cx| crate::thread::scripted_input(|| step(&app, cmd, window, cx))).map_err(|e| e.to_string())??;
+    if cmd["cmd"] == "point" && cmd.get("scrollX").is_none() && cmd.get("scrollY").is_none() {
+        let hold = cmd["holdMs"].as_f64().filter(|h| h.is_finite() && *h > 0.).unwrap_or(0.).min(30_000.);
+        if hold > 0. {
+            cx.background_executor().timer(std::time::Duration::from_secs_f64(hold / 1000.)).await;
+            cx.update_window(window, |_, window, cx| crate::thread::scripted_input(|| {
+                let x = cmd["toX"].as_f64().or(cmd["x"].as_f64()).unwrap_or(0.);
+                let y = cmd["toY"].as_f64().or(cmd["y"].as_f64()).unwrap_or(0.);
+                window.pointer_up(point(px(x as f32), px(y as f32)), MouseButton::Left, cx);
+                window.render_frame(cx);
+            })).map_err(|e| e.to_string())?;
+        }
+    }
     if !from_new {
         return Ok(out);
     }
@@ -253,6 +338,27 @@ async fn run(app: &WeakEntity<Threadbear>, window: AnyWindowHandle, cmd: &Value,
     }
 }
 
+/// Where a scripted click lands on the last visible control labelled so
+/// (`prefix`: whose label starts so): the middle of what's drawn of it,
+/// inside every clip around it, never the middle of its whole bounds.
+fn label_point(window: &Window, label: &str, prefix: bool) -> Result<(i32, i32), String> {
+    let found = window.elements().into_iter().filter(|e| e.visible() && e.label().is_some_and(|l| if prefix { l.starts_with(label) } else { l == label })).last();
+    found.and_then(|e| whole_point(e.visible_bounds())).ok_or_else(|| format!("nothing labelled {label:?} on screen"))
+}
+
+/// The middle of `drawn` in whole points, as the specs' tools read them,
+/// kept inside it: a sliver 299.6 to 300 wide has its middle at 299.8,
+/// which rounds to 300, just past it. `None` when no whole point is in it.
+pub(crate) fn whole_point(drawn: Bounds<Pixels>) -> Option<(i32, i32)> {
+    let axis = |start: Pixels, end: Pixels| {
+        let (start, end) = (f32::from(start), f32::from(end));
+        let (low, high) = (start.ceil(), (end - 1.).floor().max(start.ceil()));
+        // An end is outside, as GPUI's hit testing has it.
+        (low < end).then(|| ((start + end) / 2.).round().clamp(low, high) as i32)
+    };
+    Some((axis(drawn.left(), drawn.right())?, axis(drawn.top(), drawn.bottom())?))
+}
+
 fn text<'a>(cmd: &'a Value, key: &str) -> &'a str {
     cmd[key].as_str().unwrap_or("")
 }
@@ -261,6 +367,8 @@ fn text<'a>(cmd: &'a Value, key: &str) -> &'a str {
 /// is what's on screen now.
 fn step(app: &Entity<Threadbear>, cmd: &Value, window: &mut Window, cx: &mut App) -> Result<Value, String> {
     match text(cmd, "cmd") {
+        "point" | "window" | "room" | "account-ids" | "streaming" | "debug-info" | "runners-front" => crate::automation_compat::step(app, cmd, window, cx),
+        "size" => shell_step(app, cmd, window, cx),
         // Whether anything's on its way across the window (the panels
         // gliding, an archive flight), which the spec driver asks before
         // every click so it never reads a control's spot mid-move
@@ -297,7 +405,21 @@ fn step(app: &Entity<Threadbear>, cmd: &Value, window: &mut Window, cx: &mut App
             }
             Ok(dump)
         }
+        // The actual menus drawn in this window, including a dock menu
+        // that accidentally opened behind a row's. No menu handlers called.
+        "context-menus" => {
+            window.render_frame(cx);
+            let mut menus = Vec::new();
+            for index in 0..16 {
+                let items: Vec<String> = crate::reply_links::open_menu_items(window, index).into_iter().map(|(title, _)| title).collect();
+                if items.is_empty() { break; }
+                menus.push(items);
+            }
+            Ok(json!(format!("ok {}", serde_json::to_string(&menus).unwrap_or_default())))
+        }
         "status" => Ok(json!("ok")),
+        // Finish setting up (setup_panel.rs), as the Swift command.
+        "setup" => Ok(json!(app.update(cx, |t, cx| t.setup_command(cmd, cx)))),
         // Threadbear > About Threadbear, through the menu item, as the Swift
         // command. The window opens just after, so the next ask says what it
         // shows: its lines, " | " between them.
@@ -340,6 +462,20 @@ fn step(app: &Entity<Threadbear>, cmd: &Value, window: &mut Window, cx: &mut App
         "open-url" => crate::deep_links::automation(app, cmd, window.window_handle(), cx),
         // A thread in a panel of its own, and back (thread_panels.rs).
         "open-panel" | "move-to-main" => crate::thread_panels::automation(app, cmd, window, cx),
+        // A panel's right-click menu's own items (Pin, Unpin): what it offers,
+        // and with `click`, chosen (pinned_panels.rs).
+        "panel-menu" => {
+            let panel = cmd["panel"].as_str().ok_or("panel is a panel's id")?.to_owned();
+            let offers: Vec<&str> = app.read(cx).pin_menu_label(&panel).into_iter().collect();
+            if let Some(click) = cmd["click"].as_str() {
+                if !offers.contains(&click) {
+                    return Err(format!("{panel}'s menu has no {click}: it offers {offers:?}"));
+                }
+                app.update(cx, |t, cx| t.choose_pin_menu(&panel, cx));
+                window.render_frame(cx);
+            }
+            Ok(json!(offers))
+        }
         // The keys beside the buttons as if ⌘ were held (key_hints.rs).
         "hints" => {
             let on = cmd["on"].as_bool().unwrap_or(true);
@@ -352,6 +488,7 @@ fn step(app: &Entity<Threadbear>, cmd: &Value, window: &mut Window, cx: &mut App
         "connectors" => crate::connectors_panel::automation(app, cmd, cx),
         "usage" => crate::usage::automation(app, cmd, cx),
         "move" => crate::move_sheet::automation(app, cmd, window, cx),
+        "anything" => crate::open_anything::automation(app, cmd, window, cx),
         "terminal" => crate::terminal::automation(app, cmd, window, cx),
         // As the Swift app's: the window in front and key, for pictures on a
         // desktop of what only draws there (its Terminal's text).
@@ -366,6 +503,7 @@ fn step(app: &Entity<Threadbear>, cmd: &Value, window: &mut Window, cx: &mut App
         // page's search, and the sidebar's folded project rows.
         "project" | "projectParent" => crate::projects::automation(app, cmd, window, cx),
         "decision" => crate::project_decisions::automation(app, cmd, window, cx),
+        "projectTab" => crate::project_decisions::tab_automation(app, cmd, cx),
         "search" if cmd["projects"].as_bool() == Some(true) => crate::projects::automation(app, cmd, window, cx),
         "expand" | "collapse" if cmd.get("projectRow").is_some() => crate::projects_list::fold_automation(app, cmd, cx),
         "schedule" | "close-schedule" => crate::scheduled::editor_automation(app, cmd, window, cx),
@@ -389,14 +527,31 @@ fn step(app: &Entity<Threadbear>, cmd: &Value, window: &mut Window, cx: &mut App
         "row-swipe" => Ok(json!(format!("ok {}", app.read(cx).sidebar.gestures.along()))),
         // Where a control is on screen by its label (a Highlights row's is
         // its title): "ok x y". `prefix`: a label that starts so (a sidebar
-        // row's is its title, then a newline).
+        // row's is its title, then a newline). The point is the middle of
+        // what's drawn of it, not of its whole bounds: a Highlights card
+        // scrolled half out of its row had its middle over the transcript,
+        // and a right click there opened the transcript's menu (13 Nov).
         "label-point" => {
             window.render_frame(cx);
             let label = text(cmd, "label");
             let prefix = cmd["prefix"].as_bool() == Some(true);
+            let (x, y) = label_point(window, label, prefix)?;
+            Ok(json!(format!("ok {x} {y}")))
+        }
+        // What a screen reader is told of the control labelled so (`prefix`
+        // as `label-point`): AccessKit's role and its states, or null.
+        "a11y" => {
+            window.render_frame(cx);
+            let label = text(cmd, "label");
+            let prefix = cmd["prefix"].as_bool() == Some(true);
             let found = window.elements().into_iter().filter(|e| e.visible() && e.label().is_some_and(|l| if prefix { l.starts_with(label) } else { l == label })).last().ok_or_else(|| format!("nothing labelled {label:?} on screen"))?;
-            let at = found.bounds().center();
-            Ok(json!(format!("ok {} {}", f32::from(at.x).round(), f32::from(at.y).round())))
+            let node = json!({
+                "role": found.role().map(|r| format!("{r:?}")),
+                "selected": found.selected(),
+                "checked": found.checked(),
+                "disabled": found.disabled(),
+            });
+            Ok(json!(format!("ok {node}")))
         }
         "tile-point" => crate::remote_pictures::tile_point_command(app, cmd, window, cx),
         // A picture tile of the transcript, as a click on it (`viewer` says what opened).
@@ -440,7 +595,16 @@ fn step(app: &Entity<Threadbear>, cmd: &Value, window: &mut Window, cx: &mut App
             Ok(json!("ok"))
         }
         "return" => {
-            window.press(if cmd["shift"].as_bool().unwrap_or(false) { "shift-enter" } else { "enter" }, cx);
+            window.press(
+                if cmd["shift"].as_bool().unwrap_or(false) {
+                    "shift-enter"
+                } else if cmd["option"].as_bool().unwrap_or(false) {
+                    "alt-enter"
+                } else {
+                    "enter"
+                },
+                cx,
+            );
             Ok(json!("ok"))
         }
         // The keys the composer's slash palette takes, where the cursor is
@@ -461,6 +625,40 @@ fn step(app: &Entity<Threadbear>, cmd: &Value, window: &mut Window, cx: &mut App
         }
         // The Swift app's `paste-image` and `drop`: a file through the same
         // route a paste or a drop takes.
+        #[cfg(target_os = "macos")]
+        "picture-input" => {
+            let Some(composer) = app.read(cx).composer(cx) else { return Err("no thread open".into()) };
+            let path = std::path::PathBuf::from(text(cmd, "path"));
+            crate::composer_media::fixture_begin(text(cmd, "kind"), &path)?;
+            let result = (|| {
+                if cmd["drop"].as_bool().unwrap_or(false) {
+                    cx.activate(true);
+                    window.activate_window();
+                    window.render_frame(cx);
+                    let vanish = cmd["vanish"].as_bool().unwrap_or(false).then_some(path.as_path());
+                    crate::composer_media::fixture_drag(window, 0, vanish)?;
+                } else {
+                    let input = composer.read(cx).input.clone();
+                    if !cmd["keepFocus"].as_bool().unwrap_or(false) {
+                        window.focus(&input.read(cx).focus_handle(cx), cx);
+                        crate::web_panels::keyboard_to_app(window);
+                    }
+                    window.render_frame(cx);
+                    window.press("secondary-v", cx);
+                }
+                Ok::<_, String>(())
+            })();
+            if !cmd["drop"].as_bool().unwrap_or(false) || result.is_err() { crate::composer_media::fixture_end(); }
+            result?;
+            Ok(json!("ok"))
+        }
+        #[cfg(target_os = "macos")]
+        "picture-drop" => {
+            let path = std::path::PathBuf::from(text(cmd, "vanish"));
+            let vanish = (!path.as_os_str().is_empty()).then_some(path.as_path());
+            crate::composer_media::fixture_drag(window, cmd["phase"].as_i64().unwrap_or(2) as i32, vanish)?;
+            Ok(json!("ok"))
+        }
         "paste-image" => {
             let Some(composer) = app.read(cx).composer(cx) else { return Err("no thread open".into()) };
             let path = std::path::PathBuf::from(text(cmd, "path"));
@@ -471,7 +669,16 @@ fn step(app: &Entity<Threadbear>, cmd: &Value, window: &mut Window, cx: &mut App
             Ok(json!("ok"))
         }
         "drop" => {
-            let position = point(px(cmd["x"].as_f64().unwrap_or(0.) as f32), px(cmd["y"].as_f64().unwrap_or(0.) as f32));
+            let mut position = point(px(cmd["x"].as_f64().unwrap_or(0.) as f32), px(cmd["y"].as_f64().unwrap_or(0.) as f32));
+            // `boxOffset`: let go just inside the left of that letter of the
+            // message box's words, for a drop that goes where it's let go.
+            if let Some(offset) = cmd["boxOffset"].as_u64() {
+                window.render_frame(cx);
+                let Some(composer) = app.read(cx).composer(cx) else { return Err("no thread open".into()) };
+                let offset = offset as usize;
+                let letter = composer.read(cx).input.read(cx).range_to_bounds(&(offset..offset + 1)).ok_or("that letter isn't on screen")?;
+                position = point(letter.left() + px(1.), letter.center().y);
+            }
             if cmd["leave"].as_bool().unwrap_or(false) {
                 window.dispatch_event(FileDropEvent::Exited.to_platform_input(), cx);
                 return Ok(json!("ok"));
@@ -497,6 +704,17 @@ fn step(app: &Entity<Threadbear>, cmd: &Value, window: &mut Window, cx: &mut App
         // The Swift app's `composer-menu`: a chip's menu as text, or a click
         // on one of its items.
         "composer-menu" => {
+            // Other… under a runner's Folder: its dialog, the path typed in
+            // and Return pressed there.
+            if text(cmd, "menu") == "runner" && text(cmd, "click") == "Other…" {
+                let field = app.update(cx, |t, cx| t.type_remote_folder(window, cx));
+                if let Some(folder) = cmd["folder"].as_str() {
+                    field.update(cx, |f, cx| f.set_value(folder.to_owned(), window, cx));
+                    window.render_frame(cx);
+                    window.press("enter", cx);
+                }
+                return Ok(json!("ok"));
+            }
             if text(cmd, "menu") == "runner" {
                 return crate::new_thread::runner_menu_command(app, cmd, cx);
             }
@@ -506,11 +724,11 @@ fn step(app: &Entity<Threadbear>, cmd: &Value, window: &mut Window, cx: &mut App
                 "permission" => {
                     let summary = data.summary.clone().unwrap_or_default();
                     if let Some(title) = cmd["click"].as_str() {
-                        let Some(mode) = crate::composer_chips::permission_modes(&summary).into_iter().find(|m| threadbear_core::logins::permission_title(m) == title) else { return Err(format!("no item {title}")) };
+                        let Some(mode) = crate::composer_chips::permission_modes(&summary, &data.logins).into_iter().find(|m| threadbear_core::logins::permission_title(m) == title) else { return Err(format!("no item {title}")) };
                         composer.update(cx, |c, cx| c.set_permission(mode, cx));
                         return Ok(json!("ok"));
                     }
-                    Ok(json!(crate::composer_chips::permission_lines(&summary)))
+                    Ok(json!(crate::composer_chips::permission_lines(&summary, &data.logins)))
                 }
                 "context" => match data.summary.as_ref().and_then(|t| threadbear_core::composer::ContextMeter::new(t.context_tokens, t.context_window).map(|m| (t.id.clone(), m))) {
                     // `show`: the ring clicked, as a person does, which opens
@@ -519,7 +737,7 @@ fn step(app: &Entity<Threadbear>, cmd: &Value, window: &mut Window, cx: &mut App
                         window.render_frame(cx);
                         let tip = meter.tip();
                         let Some(ring) = window.find_all_by_label(&tip).into_iter().find(|e| e.visible()) else { return Err("no context ring on screen".into()) };
-                        let at = ring.bounds().center();
+                        let at = ring.visible_bounds().center();
                         window.pointer_move(at, None, cx);
                         window.pointer_down(at, MouseButton::Left, cx);
                         window.pointer_up(at, MouseButton::Left, cx);
@@ -548,12 +766,15 @@ fn step(app: &Entity<Threadbear>, cmd: &Value, window: &mut Window, cx: &mut App
                     let title = crate::composer_chips::chip_title(&data, menu).ok_or("no chip like that here")?;
                     window.render_frame(cx);
                     let Some(chip) = window.find_all_by_label(&title).into_iter().find(|e| e.visible()) else { return Err(format!("no chip {title:?} on screen")) };
-                    let at = chip.bounds().center();
+                    let at = chip.visible_bounds().center();
                     window.pointer_move(at, None, cx);
                     window.pointer_down(at, MouseButton::Left, cx);
                     window.pointer_up(at, MouseButton::Left, cx);
                     Ok(json!("ok window 0"))
                 }
+                // Words typed in the open picker's search, then Return there,
+                // through the search box's own key handling.
+                "model" | "" if cmd["search"].is_string() => crate::composer_chips::search_command(&composer, text(cmd, "search"), window, cx).map(|_| json!("ok")),
                 _ => {
                     if let Some(title) = cmd["click"].as_str() {
                         return crate::composer_chips::picker_click(&composer, title, cx).map(|_| json!("ok"));
@@ -577,6 +798,15 @@ fn step(app: &Entity<Threadbear>, cmd: &Value, window: &mut Window, cx: &mut App
         // A drag of the slash palette's edge or a column's line (slash_resize.rs).
         "palette-drag" => crate::slash_resize::drag_command(cmd, window, cx),
         "composer-chips" => crate::composer_inline::chips_command(app, cx),
+        // The box's spelling marks and its right-click menu (composer_spelling.rs).
+        "composer-spelling" => {
+            let Some(composer) = app.read(cx).composer(cx) else { return Err("no thread open".into()) };
+            Ok(crate::composer_spelling::marks_command(&composer, cx))
+        }
+        "composer-right-click" => {
+            let Some(composer) = app.read(cx).composer(cx) else { return Err("no thread open".into()) };
+            crate::composer_spelling::menu_command(&composer, cmd, window, cx)
+        }
         // How many times it's beeped (Return with nowhere to go on the card).
         "beeps" => Ok(json!(format!("ok {}", crate::composer_answers::beeps()))),
         "composer-peek" => {
@@ -638,6 +868,10 @@ fn step(app: &Entity<Threadbear>, cmd: &Value, window: &mut Window, cx: &mut App
                 Err("this build can't measure frames: build it with --features frame-stats".into())
             }
         }
+        // When hovers and presses were handled and the frame after each
+        // painted (input_probe.rs): `start` records from now, then a bare
+        // one hands it back.
+        "input-probe" => Ok(crate::input_probe::report(cmd["start"].as_bool().unwrap_or(false), cx)),
         "menu-key" => {
             let mut key = String::new();
             for m in cmd["modifiers"].as_array().into_iter().flatten().filter_map(Value::as_str) {
@@ -659,11 +893,35 @@ fn step(app: &Entity<Threadbear>, cmd: &Value, window: &mut Window, cx: &mut App
             window.render_frame(cx);
             let target = window.find_all_by_label(title).into_iter().find(|e| e.visible());
             let Some(target) = target else { return Err(format!("no button called {title:?}")) };
-            let at = target.bounds().center();
+            let at = target.visible_bounds().center();
             window.pointer_move(at, None, cx);
             window.pointer_down(at, MouseButton::Left, cx);
             window.pointer_up(at, MouseButton::Left, cx);
             Ok(json!("click ok"))
+        }
+        // A click at a point in the window, in points from its top left,
+        // through its hit testing as a real one goes, without moving the
+        // pointer: for what has no label to find it by (the Swift command).
+        // `"right": true` for the right button, `count` 2 for a double-click.
+        "click-at" => {
+            let (Some(x), Some(y)) = (cmd["x"].as_f64(), cmd["y"].as_f64()) else { return Err("needs x and y".into()) };
+            window.render_frame(cx);
+            let at = point(px(x as f32), px(y as f32));
+            let size = window.viewport_size();
+            if at.x < px(0.) || at.y < px(0.) || at.x > size.width || at.y > size.height {
+                return Err(format!("({x}, {y}) is outside the window ({} by {})", f32::from(size.width), f32::from(size.height)));
+            }
+            let button = if cmd["right"].as_bool() == Some(true) { MouseButton::Right } else { MouseButton::Left };
+            window.pointer_move(at, None, cx);
+            // Each press carries its count, as a real double-click's second does.
+            for click_count in 1..=cmd["count"].as_u64().unwrap_or(1).clamp(1, 3) as usize {
+                let modifiers = window.modifiers();
+                window.dispatch_event(MouseDownEvent { button, position: at, modifiers, click_count, first_mouse: false }.to_platform_input(), cx);
+                window.render_frame(cx);
+                window.dispatch_event(MouseUpEvent { button, position: at, modifiers, click_count }.to_platform_input(), cx);
+                window.render_frame(cx);
+            }
+            Ok(json!("click-at ok"))
         }
         "expand" | "collapse" => {
             let open = text(cmd, "cmd") == "expand";
@@ -708,15 +966,15 @@ fn step(app: &Entity<Threadbear>, cmd: &Value, window: &mut Window, cx: &mut App
         // {"cmd":"press-button","id":"b7k2abcd"} (or "title":"Fill in the
         // form") clicks a reply button in the open thread as its pill would.
         "press-button" => {
-            let ids = app.read(cx).pane.as_ref().map(|p| p.read(cx).linked_buttons()).unwrap_or_default();
+            let (thread, ids) = app.read(cx).pane.as_ref().map(|p| (p.read(cx).summary.id.clone(), p.read(cx).linked_buttons())).unwrap_or_default();
             let id = cmd["id"].as_str().and_then(|want| ids.iter().rev().find(|id| *id == want).cloned()).or_else(|| {
-                cmd["title"].as_str().and_then(|want| ids.iter().rev().find(|id| crate::reply_buttons::known(id).is_some_and(|(_, b)| b.title == want)).cloned())
+                cmd["title"].as_str().and_then(|want| ids.iter().rev().find(|id| crate::reply_buttons::known(&thread, id).is_some_and(|b| b.title == want)).cloned())
             });
             let Some(id) = id else { return Err("no reply button like that in the open thread".into()) };
-            if crate::reply_buttons::known(&id).is_none() {
+            if crate::reply_buttons::known(&thread, &id).is_none() {
                 return Err(format!("button {id} isn't known"));
             }
-            app.update(cx, |t, cx| t.press_reply_button(id, window, cx));
+            app.update(cx, |t, cx| t.press_reply_button(thread, id, window, cx));
             Ok(json!("ok"))
         }
         "clipboard" => {
@@ -737,11 +995,13 @@ fn step(app: &Entity<Threadbear>, cmd: &Value, window: &mut Window, cx: &mut App
         // Words selected in a reply, and the bar over them (selection_bar.rs),
         // as the Swift app's; a follow-up in the Explain pane (explain_pane.rs).
         "select-text" => crate::selection_bar::select_command(app, cmd, window, cx),
+        "text-selection-source" => Ok(json!({"words":crate::text_services::front_selection(window,cx).map(|(words,_)|words),"terminalFocused":crate::terminal::has_focus(window,cx)})),
         "text-lines" => crate::selection_bar::text_lines_command(app, cmd, window, cx),
         "selection" => crate::selection_bar::selection_command(app, window, cx),
         "explain" => crate::explain_pane::explain_command(app, cmd, window, cx),
         // What the open gate would have opened, as a scripted app opens nothing.
         "opened" => Ok(json!(format!("ok {}", serde_json::to_string(&crate::open_gate::take_opened()).unwrap_or_default()))),
+        "milestone" => Ok(crate::milestones::automation(app, cmd, cx)),
         // Thread chips in a row's words, as the Swift app's `chip`.
         "chip" => crate::chips::chip_command(app, cmd, window, cx),
         // Quits as the app menu's Quit does once it's said yes (the quit
@@ -758,11 +1018,12 @@ fn step(app: &Entity<Threadbear>, cmd: &Value, window: &mut Window, cx: &mut App
         // As if the window had come to the front: both apps read a thread
         // only while it is, and a scripted one never is.
         "focus" => {
-            crate::thread::set_looking(crate::thread::SCRIPTED, true);
+            let active = cmd["on"].as_bool().unwrap_or(true);
+            if !active {
+                crate::thread::set_looking(crate::thread::window_key(window), false);
+            }
             app.update(cx, |t, cx| {
-                if let Some(pane) = t.pane.clone() {
-                    pane.read(cx).mark_seen();
-                }
+                t.looking_changed(crate::thread::SCRIPTED, active, cx);
             });
             Ok(json!("ok"))
         }
@@ -805,16 +1066,6 @@ fn step(app: &Entity<Threadbear>, cmd: &Value, window: &mut Window, cx: &mut App
         }
         // The colour space the window's drawn in (colour_space.rs): "sRGB" once tagged.
         "colour-space" => Ok(json!(crate::colour_space::describe(window))),
-        "screenshot" => {
-            let path = text(cmd, "path");
-            // A fresh frame first, as `dump` draws one: a covered window gets
-            // no frames from the system, so a picture that's finished loading
-            // since the last one (a project's icon) was missing from the shot.
-            window.render_frame(cx);
-            let image = window.render_to_image().map_err(|e| e.to_string())?;
-            image.save(path).map_err(|e| e.to_string())?;
-            Ok(json!("ok"))
-        }
         other => Err(format!("unknown command {other:?}")),
     }
 }
@@ -846,6 +1097,9 @@ fn shell_step(app: &Entity<Threadbear>, cmd: &Value, window: &mut Window, cx: &m
                 let Some(thread) = t.open_thread().cloned() else { return Err("no thread selected".to_string()) };
                 if let Some(id) = cmd["id"].as_str() {
                     let mut ids: Vec<String> = vec![shell::HIGHLIGHTS.to_string(), shell::FILES.to_string()];
+                    if t.browser_rail(&thread.id, cx).is_some() {
+                        ids.push(shell::BROWSER.to_string());
+                    }
                     ids.extend(thread.panels.iter().flatten().filter_map(|p| p["id"].as_str().map(String::from)));
                     if thread.patches.as_ref().is_some_and(|p| !p.is_empty()) {
                         ids.push(shell::PATCHES.to_string());
@@ -1026,6 +1280,9 @@ fn shell_step(app: &Entity<Threadbear>, cmd: &Value, window: &mut Window, cx: &m
                 pane.update(cx, |p, cx| p.scroll_command(None, Some(&row), 0., cx))?;
                 window.render_frame(cx);
                 let pencil = window.find_all(("edit-message", ix)).into_iter().next().ok_or("no pencil by that message")?;
+                // Its whole middle, not `click_point`: the pencil is drawn
+                // only while its row is hovered, so it isn't visible until
+                // this move reveals it.
                 let at = pencil.bounds().center();
                 window.pointer_move(at, None, cx);
                 window.render_frame(cx);
@@ -1072,7 +1329,7 @@ fn shell_step(app: &Entity<Threadbear>, cmd: &Value, window: &mut Window, cx: &m
         }
         // `resize`: the window's content size, as the Swift command sets it
         // (for pictures at a given size).
-        "resize" => {
+        "resize" | "size" => {
             let (w, h) = (cmd["w"].as_f64().unwrap_or(1240.) as f32, cmd["h"].as_f64().unwrap_or(820.) as f32);
             window.resize(size(px(w), px(h)));
             Ok(json!(format!("ok {w}x{h}")))
@@ -1098,4 +1355,81 @@ fn type_in_composer(app: &Entity<Threadbear>, words: &str, replace: bool, window
     window.render_frame(cx);
     window.input(words, cx);
     Ok(())
+}
+
+/// label-point against a Highlights card scrolled half out of its pane, with
+/// the transcript beside it: the card's whole-bounds middle is over the
+/// transcript, so a right click there opened the transcript's menu (13 Nov).
+#[cfg(test)]
+mod label_point_tests {
+    use super::label_point;
+    use gpui_kit::prelude::*;
+    use gpui_kit::test::{TestEventExt as _, TestQueryExt as _, TestWindowExt as _};
+    // By name: a glob of the kit would bring its `test` over the one the
+    // test macro's own expansion uses.
+    use gpui_kit::{div, px, size, Bounds, MouseButton, Point, TestAppContext, TestSupportExt as _, Window, WindowBounds, WindowOptions};
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    struct Board {
+        transcript: Rc<Cell<u32>>,
+        card: Rc<Cell<u32>>,
+    }
+
+    impl Render for Board {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let (transcript, card) = (self.transcript.clone(), self.card.clone());
+            div()
+                .size_full()
+                .flex()
+                .flex_row()
+                // The transcript, 0 to 100.
+                .child(div().id("transcript").w(px(100.)).h_full().on_mouse_down(MouseButton::Right, move |_, _, _| transcript.set(transcript.get() + 1)))
+                // The pane, 100 to 300, clipping a card scrolled so it spans
+                // -50 to 150: 100 to 150 shows. And one scrolled wholly out.
+                .child(
+                    div()
+                        .id("pane")
+                        .relative()
+                        .w(px(200.))
+                        .h_full()
+                        .overflow_hidden()
+                        .child(div().id("card").test_support().aria_label("Card").absolute().left(px(-150.)).top(px(10.)).w(px(200.)).h(px(40.)).on_mouse_down(MouseButton::Right, move |_, _, _| card.set(card.get() + 1)))
+                        .child(div().id("gone").test_support().aria_label("Gone").absolute().left(px(-300.)).top(px(60.)).w(px(100.)).h(px(20.))),
+                )
+        }
+    }
+
+    #[gpui_kit::test]
+    fn a_partly_scrolled_out_card_is_clicked_where_it_shows(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        let transcript = Rc::new(Cell::new(0));
+        let card = Rc::new(Cell::new(0));
+        let (t, c) = (transcript.clone(), card.clone());
+        let window = cx.update(|cx| {
+            let bounds = Bounds { origin: Point::default(), size: size(px(300.), px(100.)) };
+            let options = WindowOptions { window_bounds: Some(WindowBounds::Windowed(bounds)), ..Default::default() };
+            gpui_kit::open_window(options, cx, move |_, cx| cx.new(|_| Board { transcript: t, card: c })).expect("a test window").0
+        });
+        cx.update_window(window, |_, window, cx| {
+            window.render_frame(cx);
+            let drawn = window.find_all_by_label("Card").into_iter().next().expect("the card");
+            assert!(drawn.visible());
+            assert!(drawn.bounds().center().x < px(100.), "the test needs the card's whole middle over the transcript: {:?}", drawn.bounds());
+            let (x, y) = label_point(window, "Card", false).expect("the card's point");
+            assert!(x > 100 && x < 150, "{x} isn't on the drawn part of the card");
+            let at = gpui_kit::point(px(x as f32), px(y as f32));
+            window.pointer_move(at, None, cx);
+            window.pointer_down(at, MouseButton::Right, cx);
+            window.pointer_up(at, MouseButton::Right, cx);
+            assert_eq!((card.get(), transcript.get()), (1, 0), "the right click went to the transcript, not the card");
+            assert!(label_point(window, "Gone", false).is_err(), "a card wholly out of sight has no point");
+            // A sliver at a pane's edge: its rounded middle stays in it.
+            let sliver = |left: f32, right: f32| super::whole_point(Bounds::from_corners(gpui_kit::point(px(left), px(0.)), gpui_kit::point(px(right), px(10.)))).map(|(x, _)| x);
+            assert_eq!(sliver(299.6, 300.), None, "no whole point is inside 299.6 to 300");
+            assert_eq!(sliver(298.6, 300.), Some(299));
+            assert_eq!(sliver(100., 150.), Some(125));
+        })
+        .expect("the test window");
+    }
 }

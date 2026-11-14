@@ -2537,8 +2537,11 @@ mod tests {
     /// followed by an x, padded with backticks (20,000 characters took 7.5
     /// seconds), and the same for the other delimiters that searched to the
     /// end: unclosed emphasis, unclosed brackets, brackets with no `)`.
+    /// 400 ms of CPU, not 100: a debug build on a busy Mac's efficiency cores
+    /// went past 100 for linear work (DavidClarkTucson's fork, 12 Nov), and
+    /// the quadratic search this guards against took seconds.
     #[test]
-    fn a_crafted_note_parses_in_well_under_100ms() {
+    fn a_crafted_note_parses_in_well_under_half_a_second() {
         let mut ticks = String::new();
         for n in 1..=90 {
             ticks.push_str(&"`".repeat(n));
@@ -2569,7 +2572,7 @@ mod tests {
         ];
         for note in &notes {
             let took = cpu_time_of(note);
-            assert!(took < std::time::Duration::from_millis(100), "{} characters starting {:?} took {took:?}", note.len(), &note[..12]);
+            assert!(took < std::time::Duration::from_millis(400), "{} characters starting {:?} took {took:?}", note.len(), &note[..12]);
         }
         // Words come back as written.
         assert_eq!(inline_markdown(&"[".repeat(20_000)), vec![plain(&"[".repeat(20_000))]);

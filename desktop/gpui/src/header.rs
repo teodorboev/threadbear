@@ -12,7 +12,7 @@ use crate::{call, icons};
 use gpui_kit::assets::IconName;
 use gpui_kit::base::TestSupportExt as _;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
-use gpui_kit::component::spinner::Spinner;
+use crate::spinner::Spinner;
 use gpui_kit::component::{h_flex, v_flex, ActiveTheme as _, Icon, Sizable as _};
 use gpui_kit::prelude::*;
 use gpui_kit::*;
@@ -30,11 +30,15 @@ pub(crate) const HEADER_HEIGHT: f32 = 38.;
 /// A control's tooltip and the label scripts find it by (Swift's `.tip`), as
 /// `tipped!` in the sidebar: the element's result is whatever `test_support`
 /// makes of it, so this is a macro rather than a function.
+/// A button to VoiceOver, or what the third argument says.
 macro_rules! tipped {
-    ($el:expr, $tip:expr $(,)?) => {{
+    ($el:expr, $tip:expr $(,)?) => {
+        tipped!($el, $tip, gpui_kit::Role::Button)
+    };
+    ($el:expr, $tip:expr, $role:expr $(,)?) => {{
         let tip_text: SharedString = $tip.into();
         let shown = tip_text.clone();
-        crate::tips::Tip::tip($el.test_support().aria_label(tip_text), shown)
+        crate::tips::Tip::tip(crate::a11y::A11yRole::a11y_role($el.test_support(), $role).aria_label(tip_text), shown)
     }};
 }
 
@@ -92,6 +96,12 @@ pub(crate) struct LimitAdvice {
     /// Not for another Mac's thread, whose runner the setting can't reach
     /// through the backend yet.
     pub(crate) stopped: bool,
+    /// A turn stopped at the limit, or it's waiting for room, on any
+    /// runner: Continue now on asks it to carry on there at once
+    /// (`carryOn`), which another runner's thread takes through the backend
+    /// too (API 77). Without it, a thread whose Carry on by itself is off
+    /// moved to the new login and sat there (Codex's review, 13 Nov).
+    pub(crate) carry_on: bool,
     /// It's waiting, and carries on by itself at this time.
     pub(crate) carries_on_at: Option<i64>,
 }
@@ -144,10 +154,12 @@ impl Threadbear {
                     this.start_renaming(id.clone(), window, cx);
                 }
             }))
-            .child(title)
+            // Fades over to a new name, as the agent names a new thread (open_motion.rs).
+            .child(crate::open_motion::title(&thread.id, "header", title, cx.reduce_motion()))
             .into_any_element()
         };
         let worktree = thread.worktree.as_ref().and_then(|w| w["branch"].as_str()).map(String::from);
+        let worktree_tip = thread.worktree.as_ref().and_then(|w| w["mainCheckout"].as_str()).map(|path| format!("Works on its own branch in a worktree. tb land, or the Land chip, puts it on main in {}.", abbreviate(path))).unwrap_or_else(|| "Works on its own branch in a worktree.".to_owned());
         let schedule = thread.schedule.clone();
         h_flex()
             .min_w_0()
@@ -163,9 +175,9 @@ impl Threadbear {
             .child(title_el)
             .when(thread.is_archived(), |s| s.child(div().flex_none().text_color(faint).child("·  Archived")))
             .when(thread.on_old_runner == Some(true), |s| {
-                s.child(tipped!(div().id("old-runner").flex_none().text_color(faint), "This turn started before the runner updated, so it runs on the previous version. The thread moves to the new one when the turn ends.").child("·  Finishing on the previous version"))
+                s.child(tipped!(div().id("old-runner").flex_none().text_color(faint), "This turn started before the runner updated, so it runs on the previous version. The thread moves to the new one when the turn ends.", gpui_kit::Role::GenericContainer).child("·  Finishing on the previous version"))
             })
-            .when_some(worktree, |s, branch| s.child(div().flex_none().text_color(faint).child(format!("·  {branch}"))))
+            .when_some(worktree, |s, branch| s.child(tipped!(div().id("worktree-branch").flex_none().text_color(faint), worktree_tip).child(format!("·  {branch}"))))
             // A click opens the schedule in the editor, while it's still
             // there (`ScheduleChip`); the tip says when it runs.
             .when_some(schedule, |s, origin| {
@@ -198,7 +210,7 @@ impl Threadbear {
         if projects.is_empty() || !self.projects_supported {
             let tip = format!("In {}", abbreviate(&cwd));
             // SF's folder at 12 pt is about 13.5 wide; Lucide's is at 14.
-            return tipped!(div().id("header-folder").flex_none(), tip).child(icon("folder", 14., secondary)).into_any_element();
+            return tipped!(div().id("header-folder").flex_none(), tip, gpui_kit::Role::Image).child(icon("folder", 14., secondary)).into_any_element();
         }
         let hover = style::primary_opacity(cx, 0.08);
         let ring = secondary.opacity(0.5);
@@ -281,7 +293,7 @@ impl Threadbear {
         }
         let field = cx.new(|cx| InputState::new(window, cx).placeholder("Thread title").default_value(title));
         // A new name typed and not yet taken: an update's restart waits for it.
-        crate::unsent::watch(&field, cx);
+        crate::unsent::watch(&field, "a thread's new title", cx);
         // The whole name selected, so typing replaces it, as a click on the
         // Swift app's title does (Mike, 11 Nov).
         field.update(cx, |s, cx| s.select_all(window, cx));
@@ -458,7 +470,7 @@ impl Threadbear {
                 match res {
                     Ok(v) => {
                         if let Ok(t) = serde_json::from_value::<ThreadSummary>(v["thread"].clone()) {
-                            this.threads.insert(t.id.clone(), t);
+                            this.threads.insert(t.id.clone(), std::sync::Arc::new(t));
                         }
                     }
                     Err(e) => this.show_error(e.message, cx),
@@ -523,7 +535,7 @@ impl Threadbear {
             // (composer.rs, `LimitBox`), not across the top: Mike's call on
             // 10 Nov, as the bar read as an error and offered only the switch.
             let (account, remote) = (self.sign_in_account(thread, cx), self.remote_sign_in_runner(thread, cx));
-            if account.is_some() || remote.is_some() {
+            if self.sign_in_needed(thread, cx) {
                 column = column.child(self.render_signin_banner(thread, account, remote, cx));
             }
             // The refusal offer sits just above the box (RefusalOffer in
@@ -575,7 +587,17 @@ impl Threadbear {
         use crate::app::Connection;
         let restart = self.client.restart();
         let restarting = restart.is_restarting(std::time::Instant::now());
-        let connection = self.connection();
+        let mut connection = self.connection();
+        // Back already, as the client has it, while this app hasn't yet
+        // taken in the news (Seen::Status comes on its next turn). The
+        // client ends the restart before it says it's connected, so in
+        // between this read "not restarting, still down" and, the drop's
+        // grace long gone, said "Can't reach the runner." at the very end
+        // of a restart: GitHub's slower machines caught it every time
+        // (connection.feature, "While the runner restarts...", 13 Nov).
+        if !matches!(connection, Connection::Connected) && matches!(self.client.status(), threadbear_client::runner::Status::Connected { .. }) {
+            connection = Connection::Connected;
+        }
         if let Connection::Connected = connection {
             // Mike's own click comes first: he's looking for it.
             if let Some((_, note)) = self.busy_notes.last() {
@@ -597,8 +619,11 @@ impl Threadbear {
             return self.cli_banner();
         }
         // While a restart is under way the runner is meant to be down for a
-        // moment: say so quietly, with no buttons to press.
-        if restarting {
+        // moment: say so quietly, with no buttons to press. Down because of
+        // one counts until this app has seen it connected again, whatever
+        // the client says meanwhile (`restart_outage`).
+        let outage = self.restart_outage.is_some_and(|since| since.elapsed() < threadbear_client::restart::PATIENCE);
+        if restarting || outage {
             return Some(Banner::quiet("The runner is restarting. Reconnecting…"));
         }
         // An unexpected drop says nothing for its first few seconds: this
@@ -617,6 +642,14 @@ impl Threadbear {
             Connection::Unauthorized(reason) => Banner::warning("lock", "The runner didn't accept the token in secrets/runner-token.", Some(reason)),
             Connection::Connecting | Connection::Connected => Banner::warning("bolt.horizontal", "Connecting to the runner…", None),
         })
+    }
+
+    /// Not connected: whether that's because of a restart, kept until the
+    /// app sees it connected again (`restart_outage`).
+    pub(crate) fn note_restart_outage(&mut self) {
+        if let Some(since) = self.client.restart().restarting_since() {
+            self.restart_outage.get_or_insert(since);
+        }
     }
 
     /// Not connected: from now, unless it already wasn't, and a redraw once
@@ -697,7 +730,7 @@ impl Threadbear {
             // A restart: grey words on the window's own background with a
             // hairline under them, so it reads as information, not a
             // problem. The threads it waits for are its tooltip.
-            let line = tipped!(div().id("banner-text").flex_1().min_w_0().truncate(), banner.detail.clone().unwrap_or_default()).child(banner.text);
+            let line = tipped!(div().id("banner-text").flex_1().min_w_0().truncate(), banner.detail.clone().unwrap_or_default(), gpui_kit::Role::GenericContainer).child(banner.text);
             return h_flex()
                 .flex_none()
                 .px(px(14.))
@@ -736,7 +769,7 @@ impl Threadbear {
             .bg(warning_fill)
             .text_size(px(style::size::LABEL))
             .child(icon(banner.icon.unwrap_or("bolt.horizontal"), 13., secondary))
-            .child(tipped!(div().id("connection-text").flex_1().min_w_0().truncate(), detail).child(banner.text))
+            .child(tipped!(div().id("connection-text").flex_1().min_w_0().truncate(), detail, gpui_kit::Role::GenericContainer).child(banner.text))
             // Regular push buttons, as the Swift bar's. Start runner spins
             // until launchctl has answered and the app has tried again, and
             // can't be pressed twice meanwhile.
@@ -768,7 +801,7 @@ impl Threadbear {
             .bg(fill)
             .text_size(px(style::size::LABEL))
             .child(icon("exclamationmark.triangle", 13., orange))
-            .child(tipped!(div().id("error-text").flex_1().min_w_0(), tip).child(div().line_clamp(2).child(error)))
+            .child(tipped!(div().id("error-text").flex_1().min_w_0(), tip, gpui_kit::Role::GenericContainer).child(div().line_clamp(2).child(error)))
             .when(self.own_checkout().is_some(), |s| s.child(self.render_investigate_button(cx)))
             .child(tipped!(div().id("error-dismiss").px(px(6.)).py(px(2.)).rounded(px(5.)).text_color(style::secondary_text(cx)), "Hide this message").on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.dismiss_error(cx))).child("Dismiss"))
             .into_any_element()
@@ -802,10 +835,10 @@ impl Threadbear {
     }
 
     /// The same over a new list of every thread, against the one before it.
-    pub(crate) fn note_failed_accounts(&mut self, before: &std::collections::HashMap<String, ThreadSummary>) {
-        let now: Vec<ThreadSummary> = self.threads.values().cloned().collect();
+    pub(crate) fn note_failed_accounts(&mut self, before: &std::collections::HashMap<String, std::sync::Arc<ThreadSummary>>) {
+        let now: Vec<ThreadSummary> = self.threads.values().map(|t| &**t).cloned().collect();
         for t in &now {
-            self.note_failed_account(before.get(&t.id), t);
+            self.note_failed_account(before.get(&t.id).map(|t| &**t), t);
         }
         let known: std::collections::HashSet<String> = self.threads.keys().cloned().collect();
         self.failed_on_account.retain(|id, _| known.contains(id));
@@ -815,24 +848,34 @@ impl Threadbear {
     /// where it could go instead.
     pub(crate) fn limit_advice(&self, thread: &ThreadSummary, cx: &App) -> Option<LimitAdvice> {
         use threadbear_core::new_thread::{continue_title, has_room, pool_logins, switch_targets, usage_of};
-        let accounts = &self.logins.accounts;
+        // Another runner's thread is judged by that runner's own logins and
+        // offered them, never this Mac's: a login id like "claude-main" is
+        // that runner's, and one of the same id here is a different login
+        // (Mike, 13 Nov: a Pixel thread that had finished fine said this
+        // Mac's login was at its limit, and offered this Mac's logins). Until
+        // they've come (`load_remote_logins`), nothing is said.
+        let logins = match thread.runner_id.as_deref() {
+            Some(runner) => self.remote.logins.get(runner)?,
+            None => &self.logins,
+        };
+        let accounts = &logins.accounts;
         let targets: Vec<(String, String)> = switch_targets(accounts, &thread.account_id).into_iter().map(|a| (a.id.clone(), continue_title(a, accounts))).collect();
         let local = thread.runner_id.is_none();
         // A pool thread is the runner's to move: nothing while its pool has a
         // login with room, and when it carries on once it's waiting. Once
         // the whole pool is out it asks: Continue now on a login outside
         // the pool (which pins it there), or wait.
-        if self.logins.uses_pools() {
-            if let Some(pool) = thread.pool_id.as_deref().and_then(|id| self.logins.pool(id)) {
+        if logins.uses_pools() {
+            if let Some(pool) = thread.pool_id.as_deref().and_then(|id| logins.pool(id)) {
                 if let Some(until) = thread.waiting_for_room_until_ms() {
-                    return Some(LimitAdvice { text: format!("Every login in {} is out of room.", pool.title), targets, stopped: local, carries_on_at: Some(until) });
+                    return Some(LimitAdvice { text: format!("Every login in {} is out of room.", pool.title), targets, stopped: local, carry_on: true, carries_on_at: Some(until) });
                 }
                 if pool_logins(pool, accounts, None).into_iter().any(has_room) {
                     return None;
                 }
             }
         }
-        let usage = self.logins.account(&thread.account_id).and_then(usage_of);
+        let usage = logins.account(&thread.account_id).and_then(usage_of);
         let blocked = usage.as_ref().is_some_and(|u| u.blocked);
         // Only while the thread is still on the login the turn failed on:
         // after "Switch to ..." the status stays error until the next turn,
@@ -856,7 +899,13 @@ impl Threadbear {
             }
         }
         text.push('.');
-        Some(LimitAdvice { text, targets, stopped: local && (failed_on_limit || waiting.is_some()), carries_on_at: waiting })
+        // Another runner's thread always asks: neither why its turn failed
+        // nor its wait for room comes through the backend, and that runner
+        // carries on only a thread whose turn really stopped at its limit
+        // (runner.ts update, limitHitTurn), so asking is safe (Codex's
+        // second review, 13 Nov).
+        let carry_on = failed_on_limit || waiting.is_some() || !local;
+        Some(LimitAdvice { text, targets, stopped: local && carry_on, carry_on, carries_on_at: waiting })
     }
 
     /// The limit box's Carry on by itself (`setCarryOnAtReset`): shown at
@@ -910,19 +959,20 @@ impl Threadbear {
 
     /// Whether the open thread's last turn failed with its login refused
     /// (`signInNeeded`: errorKind auth, signed out or its session ran out).
-    fn sign_in_needed(&self, thread: &ThreadSummary, cx: &App) -> bool {
-        thread.status == "error" && self.latest_completion(cx).is_some_and(|c| c.outcome == TurnOutcome::Failed && c.error_kind == Some(TurnErrorKind::Auth))
+    pub(crate) fn sign_in_needed(&self, thread: &ThreadSummary, cx: &App) -> bool {
+        thread.status == "error" && self.completion_for(&thread.id, cx).is_some_and(|c| c.outcome == TurnOutcome::Failed && c.error_kind == Some(TurnErrorKind::Auth))
     }
 
     /// `signInAccount`: this Mac's login to sign in again. Never another
-    /// runner's thread (its login is signed in on that Mac), and an unknown
-    /// login falls back to the main one of a provider there is (sign_in.rs).
+    /// runner's thread (its login is signed in on that Mac). A missing
+    /// secondary login cannot fall back to another login (sign_in.rs).
     pub(crate) fn sign_in_account(&self, thread: &ThreadSummary, cx: &App) -> Option<SignInAccount> {
         if !self.sign_in_needed(thread, cx) {
             return None;
         }
         let known = self.logins.account(&thread.account_id).map(|a| SignInAccount { id: a.id.clone(), provider: a.provider_id().to_owned(), title: a.title.clone(), config_dir: a.config_dir.clone() });
-        sign_in::account_for(&thread.provider, thread.runner_id.is_some(), known)
+        let account = sign_in::account_for(&thread.account_id, &thread.provider, thread.runner_id.is_some(), known)?;
+        (!self.logins.login_command(&account.provider).is_empty()).then_some(account)
     }
 
     /// `remoteSignInRunner`: another Mac's thread whose login was refused,
@@ -937,11 +987,20 @@ impl Threadbear {
         let orange = style::needs_you(cx);
         let id = thread.id.clone();
         let provider = account.as_ref().map_or(thread.provider.as_str(), |a| a.provider.as_str());
-        let name = threadbear_core::logins::provider_title(provider);
+        let fallback = threadbear_core::logins::RunnerLogins::default();
+        let logins = match thread.runner_id.as_deref() {
+            Some(id) => self.remote.logins.get(id).unwrap_or(&fallback),
+            None => &self.logins,
+        };
+        let name = logins.provider_title(provider);
         let (text, tip) = match (&account, &remote) {
             (Some(a), _) => (format!("{name} needs you to sign in again."), format!("The login {} was refused: signed out, or its session ran out", a.title)),
-            (None, Some(runner)) => (format!("{name} on {runner} needs you to sign in again."), format!("Sign in on {runner} itself: {} in its Terminal", sign_in::login_command(provider))),
-            (None, None) => (String::new(), String::new()),
+            (None, Some(runner)) => {
+                let command = logins.login_command(provider);
+                let tip = if command.is_empty() { format!("Sign in on {runner} itself") } else { format!("Sign in on {runner} itself: {command} in its Terminal") };
+                (format!("{name} on {runner} needs you to sign in again."), tip)
+            }
+            (None, None) => (format!("{name} needs you to sign in again."), "Sign in using that login's CLI, then send your last message again".into()),
         };
         h_flex()
             .flex_none()
@@ -953,7 +1012,7 @@ impl Threadbear {
             .border_color(hairline)
             .text_size(px(style::size::LABEL))
             .child(icon("person.crop.circle.badge.exclamationmark", 13., orange))
-            .child(tipped!(div().id("signin-text").flex_1().min_w_0().truncate(), tip).child(text))
+            .child(tipped!(div().id("signin-text").flex_1().min_w_0().truncate(), tip, gpui_kit::Role::GenericContainer).child(text))
             // Another Mac's login is signed in on that Mac: Terminal here would
             // sign in this Mac's CLI.
             .when_some(account, |s, account| {
@@ -979,6 +1038,8 @@ impl Threadbear {
     /// not on the PATH), asked for now so it's the one in use.
     pub(crate) fn sign_in(&mut self, account: SignInAccount, cx: &mut Context<Self>) {
         let client = self.client.clone();
+        let command = self.logins.login_command(&account.provider).to_owned();
+        let name = self.logins.provider_title(&account.provider);
         cx.spawn(async move |this, cx| {
             let clis = call(client, "clis.list", json!({})).await.ok();
             let path = clis
@@ -989,7 +1050,7 @@ impl Threadbear {
                 .unwrap_or("")
                 .to_owned();
             let file = std::env::temp_dir().join(format!("threadbear-sign-in-{}.command", sign_in::file_safe(&account.id)));
-            let written = write_script(&file, &sign_in::script(&account, &path));
+            let written = write_script(&file, &sign_in::script_named(&account, &path, &command, &name));
             this.update(cx, |this, cx| match written {
                 // The script this app just wrote, every word of it quoted.
                 Ok(()) => crate::open_gate::open_own(&file, cx),
@@ -1002,14 +1063,25 @@ impl Threadbear {
 
     /// Sends the thread's last message of his again, after signing in
     /// (`sendAgain`).
-    pub(crate) fn send_again(&mut self, _thread: &str, cx: &mut Context<Self>) {
-        if let Some(pane) = &self.pane {
+    pub(crate) fn send_again(&mut self, thread: &str, cx: &mut Context<Self>) {
+        if let Some(pane) = self.pane_for(thread, cx) {
             pane.update(cx, |p, cx| {
                 if let Some(text) = p.last_user_text() {
                     p.send(text, None, cx);
                 }
             });
         }
+    }
+
+    /// A pinned thread's auth failure belongs to its own pane, even while a
+    /// different thread is open in the main panel.
+    fn completion_for(&self, thread: &str, cx: &App) -> Option<TurnCompletion> {
+        let pane = self.pane_for(thread, cx)?;
+        let p = pane.read(cx);
+        p.feed.model().rows().iter().rev().take(40).find_map(|row| match &row.content {
+            RowContent::Footer(c) => Some(c.clone()),
+            _ => None,
+        })
     }
 
     pub(crate) fn latest_completion(&self, cx: &App) -> Option<TurnCompletion> {
@@ -1094,11 +1166,13 @@ impl Threadbear {
         self.continuing_refusal = Some(thread.clone());
         cx.notify();
         let client = self.client.clone();
+        // The runner it's shown on, as every send says it (thread.rs, Daybreak 113).
+        let runner_id = self.threads.get(&thread).and_then(|t| t.runner_id.clone());
         let params = json!({ "threadId": thread, "accountId": account, "model": REFUSAL_MODEL });
         cx.spawn(async move |this, cx| {
             let moved = call(client.clone(), "threads.update", params).await;
             let sent = match &moved {
-                Ok(v) if v["thread"]["provider"] == "codex" => call(client, "threads.send", json!({ "threadId": thread, "text": REFUSAL_CONTINUATION })).await.map(|_| ()),
+                Ok(v) if v["thread"]["provider"] == "codex" => call(client, "threads.send", json!({ "threadId": thread, "text": REFUSAL_CONTINUATION, "runnerId": runner_id })).await.map(|_| ()),
                 Ok(_) => Err(threadbear_client::runner::RpcError { code: -1, message: "Codex Sol is no longer available. Choose a model to carry on.".into(), data: None }),
                 Err(e) => Err(e.clone()),
             };
@@ -1217,7 +1291,7 @@ impl Threadbear {
                         }
                         if let Ok(t) = serde_json::from_value::<ThreadSummary>(v["thread"].clone()) {
                             let id = t.id.clone();
-                            this.threads.insert(t.id.clone(), t);
+                            this.threads.insert(t.id.clone(), std::sync::Arc::new(t));
                             this.open(id, window, cx);
                         }
                     }
@@ -1251,6 +1325,9 @@ impl Threadbear {
         }
         if let Some(text) = self.import_note.clone() {
             return overlay.child(self.render_import_note(text, cx)).into_any_element();
+        }
+        if let Some(tier) = self.milestone.note {
+            return overlay.child(self.render_milestone_toast(tier, cx)).into_any_element();
         }
         div().into_any_element()
     }

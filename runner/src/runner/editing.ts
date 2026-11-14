@@ -102,6 +102,14 @@ export const editingPart = {
       // And what it was told of reply button presses (Codex review).
       this.retellPressesFrom(rec, seq, Boolean(cut.fresh));
       (rec.rewinds ??= []).push({ from: seq, to: toSeq });
+      // Rewinding a carrying input removes its combined CLI message too.
+      // Earlier saved rows survive in the visible history and are owed again.
+      for (const recovery of rec.messageRecoveries ?? []) {
+        if (recovery.seq < seq || recovery.seq > toSeq || !Array.isArray(recovery.messages)) continue;
+        const pending = new Set(rec.interruptedMessages);
+        for (const message of recovery.messages) if (Number.isSafeInteger(message) && message > 0 && message < seq) pending.add(message);
+        if (pending.size) rec.interruptedMessages = [...pending];
+      }
       const ev = this.emit(st, { type: 'thread.rewound', fromSeq: seq, toSeq, files });
       // What the cut turns left open or found goes with them (pins stay).
       if (rec.needs && rec.needs.seq >= seq) delete rec.needs;
@@ -135,6 +143,8 @@ export const editingPart = {
         // Messages sent while it failed still go.
         if (!rt.turn) this.kickQueue(st);
       }
+      // A handover that began meanwhile kept the thread for the edit.
+      if (this.draining) this.queueHandoverCheck();
       this.markDirty(st);
     }
   },

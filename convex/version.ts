@@ -351,4 +351,23 @@
 //    plan and what became of it, so another Mac draws its plan card rather
 //    than folding the plan into the turn's work. A runner sends `review`,
 //    `cardTurn` and `planDecision` only from 76.
-export const API_VERSION = 76;
+// 77: an `update` command from the main Mac can change a thread's login
+//    or model (with carryOn, the limit box's Continue now on), and its
+//    finished command keeps the login and model that runner applied;
+//    relay:remoteAccounts includes each login's usage, so the Mac switches
+//    another runner's thread to one of that runner's logins with room. The
+//    Mac's runner sends one only from 77; an older backend refuses it.
+// 78: a message row can be a login's note (role "note"): a runner's
+//    system.note that the thread's login ran out and it moved to another,
+//    is waiting for room, or was told not to wait. relay:remoteTail and
+//    relay:remoteMessages give them to a runner that asks (`notes: true`,
+//    which a runner sends only from 78), so a thread on another machine
+//    says on the Mac that it changed login; phone:thread, phone:messages,
+//    phone:search and share's page leave them out. A runner sends one only
+//    from 78, and keeps any it couldn't send till then.
+// 79: phone:messages takes `notes: true` and then includes those rows
+//    (role "note"), so the iPhone app and the website say when a thread
+//    changed login, as the Mac does. Without it the page is as before, for
+//    apps built earlier. phone:thread, phone:search and share's page still
+//    leave them out.
+export const API_VERSION = 79;

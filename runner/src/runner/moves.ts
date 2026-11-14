@@ -59,6 +59,12 @@ function swapHome(p: string, fromHome: string): string {
 // there. They're asked or made again on this machine. True if it changed.
 function dropMovedPowers(rec: Record<string, any>): boolean {
   let changed = false;
+  for (const key of ['interruptedMessages', 'messageRecoveries']) {
+    if (rec[key] !== undefined) {
+      delete rec[key];
+      changed = true;
+    }
+  }
   if (rec.allowRules !== undefined) {
     delete rec.allowRules;
     changed = true;
@@ -480,7 +486,7 @@ export const movesPart = {
     const st = this.threads.get(threadId);
     if (!st) return false;
     const { rt } = st;
-    if (rt.turn || rt.approvals.size || rt.wakeTimer || rt.hooksRunning || rt.runningActions?.size || rt.editing || rt.cleaning) return false;
+    if (rt.turn || rt.approvals.size || rt.wakeTimer || rt.hooksRunning || rt.runningActions?.size || rt.editing || rt.cleaning || rt.preparing) return false;
     return !rt.tasks.some((t) => t.kind === 'agent') && !st.rec.subagents?.some((a) => a.status === 'running');
   },
 

@@ -12,9 +12,9 @@ struct PanePreview: Equatable {
         case page(URL)
         /// Words selected in the transcript, explained (`explainers`).
         case explain
-        /// A file on the Mac another runner's thread is on, being fetched
-        /// (`files.read`), or why it couldn't be. Once it's here the
-        /// preview becomes `.file` of this Mac's copy.
+        /// A file on the Mac another runner's thread is on, with why it
+        /// can't be shown here (RemoteFiles.swift). Nil `failed` shows a
+        /// spinner, which nothing asks for now.
         case remote(path: String, failed: String?)
     }
 
@@ -27,12 +27,9 @@ struct PanePreview: Equatable {
     var opened = 0
     /// A text file with its raw text up for editing (TextFileView).
     var editing = false
-    /// "bruce": a copy of a file on another runner's Mac. It isn't edited
-    /// here (the edit would only change this Mac's copy) or shown in the
-    /// Finder (the copy lives in a cache).
+    /// "bruce": a file or folder on another runner's Mac, which isn't
+    /// edited here or shown in the Finder.
     var away: String?
-    /// That runner sent only the start of it (over the size cap).
-    var cut = false
     /// What Back goes through before the section: the folders and files
     /// Mike came through in the browser, last one nearest. Empty for
     /// anything opened from outside it.
@@ -51,16 +48,11 @@ struct PanePreview: Equatable {
         return nil
     }
 
-    /// The path on the Mac it's from, for a file fetched from another
-    /// runner's Mac (`.file` is then this Mac's cached copy).
-    var remotePath: String?
-
-    /// The file or folder it shows, by its own path (another Mac's, for a
-    /// fetched copy). Nil for a page or an explanation.
+    /// The file or folder it shows, by its own path. Nil for a page or an
+    /// explanation.
     var shownPath: String? {
         switch target {
-        case .file(let path): remotePath ?? path
-        case .folder(let path), .remote(let path, _): path
+        case .file(let path), .folder(let path), .remote(let path, _): path
         case .page, .explain: nil
         }
     }
@@ -163,7 +155,7 @@ extension AppModel {
     /// which only ever goes to the pane or the browser, never another app.
     func open(_ highlight: Highlight, in thread: ThreadSummary, external: Bool, shownByAgent: Bool = false) {
         if let path = highlight.path, thread.isRemote {
-            // On that Mac: fetched, then its copy here is used.
+            // On that Mac: the pane or the banner says so.
             openRemoteFile(URL(fileURLWithPath: path), external && !shownByAgent ? .app : .panel, in: thread, title: highlight.title)
         } else if let path = highlight.path {
             if !shownByAgent, external || FileLinkAction.opensInItsApp(path) { openExternally(URL(fileURLWithPath: path)) } else { preview(path: path, title: highlight.title, in: thread) }
@@ -317,31 +309,19 @@ extension AppModel {
     /// A file in its app or a link where it goes, through OpenGate: a
     /// program asks first (and never opens from another Mac's copy), a
     /// link that isn't a web page asks before starting its app.
-    func openExternally(_ url: URL, from origin: OpenGate.Origin = .thisMac) {
-        if url.isFileURL { OpenGate.openFile(url, origin: origin) } else { OpenGate.openLink(url, origin: origin) }
+    func openExternally(_ url: URL) {
+        if url.isFileURL { OpenGate.openFile(url) } else { OpenGate.openLink(url) }
     }
 
     /// A file a thread's runner named (a patch's file, an edited file) in
-    /// its app: this Mac's own, or another Mac's fetched copy. Never the
-    /// file here that has that other Mac's path.
+    /// its app: this Mac's own. Never the file here that has another Mac's
+    /// path.
     func openFile(_ path: String, of thread: ThreadSummary) {
         if thread.isRemote {
             openRemoteFile(URL(fileURLWithPath: path), .app, in: thread)
         } else {
             openExternally(URL(fileURLWithPath: path))
         }
-    }
-
-    /// Where a copy of `thread`'s runner's files comes from, for OpenGate.
-    func copyOrigin(of thread: ThreadSummary) -> OpenGate.Origin {
-        .otherMac(name: runnerName(of: thread) ?? "another Mac", root: remoteFiles.cache.root)
-    }
-
-    /// Whether `url` is in this Mac's copies of other Macs' files.
-    func isRemoteCopy(_ url: URL) -> Bool {
-        let root = remoteFiles.cache.root.standardizedFileURL.resolvingSymlinksInPath().path
-        let path = url.standardizedFileURL.resolvingSymlinksInPath().path
-        return path.hasPrefix(root.hasSuffix("/") ? root : root + "/")
     }
 
     /// The thread a transcript link was followed in (`linkThreadId`), else
@@ -352,14 +332,12 @@ extension AppModel {
 
     /// The file on this Mac that dragging, Quick Look or a hover card may
     /// use for a link in `thread`: the file itself for this Mac's thread,
-    /// this Mac's whole copy for another Mac's, or nil while there isn't
-    /// one. Never the other Mac's path read as this Mac's, which named a
-    /// file here that the drag then handed out (Daybreak, 7 Nov).
+    /// nil for another Mac's. Never the other Mac's path read as this
+    /// Mac's, which named a file here that the drag then handed out
+    /// (Daybreak, 7 Nov).
     func localCopy(of url: URL, in thread: ThreadSummary?) -> URL? {
         guard url.isFileURL else { return url }
-        guard let thread, let runnerId = thread.runnerId else { return url }
-        guard let copy = remoteFiles.ready(url.path, runnerId: runnerId), !copy.truncated else { return nil }
-        return copy.url
+        return thread?.isRemote == true ? nil : url
     }
 
     func revealInFinder(_ path: String) {

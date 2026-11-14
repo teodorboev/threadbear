@@ -75,6 +75,9 @@ final class AppModel {
     /// Whether threads read phone:messages (API 2) rather than phone:thread's
     /// newest 20 plus the runner's paging.
     var hasMessagePages: Bool { (apiVersion ?? 0) >= BackendCompatibility.messagePagesAPIVersion }
+    /// Whether to ask for the lines a thread writes when its login runs out
+    /// (role `note`): an older backend refuses the argument.
+    var hasLoginNotes: Bool { (apiVersion ?? 0) >= BackendCompatibility.loginNotesAPIVersion }
 
     /// Archived threads past the den's newest 100 with these words in
     /// (API 16), and from API 74 any thread with one in any message. Empty
@@ -400,6 +403,7 @@ final class AppModel {
         if args.contains("-ThreadbearFake") {
             // -ThreadbearSlowLoad: the lists answer after a few seconds, to see the loading rows.
             // -ThreadbearPictures: and a thread with pictures, "pics".
+            // -ThreadbearLoginNote: and one whose login ran out and moved, "moved".
             // -ThreadbearDiagrams: and one with a mermaid diagram and an html block.
             // -ThreadbearLong: and a very long thread, "long".
             // -ThreadbearSecret: and a thread waiting on a secret card, "secret".
@@ -407,7 +411,7 @@ final class AppModel {
             // -ThreadbearOffline: the Mac's been asleep for hours, so messages wait, and a3 has two waiting.
             let offline = args.contains("-ThreadbearOffline")
             // -ThreadbearManyThreads: and a long inbox, a few more running and starred, to scroll.
-            let fake = FakeBackend(runnerOnline: !offline, listDelay: args.contains("-ThreadbearSlowLoad") ? .seconds(6) : .zero, pictures: args.contains("-ThreadbearPictures"), long: args.contains("-ThreadbearLong"), secret: args.contains("-ThreadbearSecret"), diagrams: args.contains("-ThreadbearDiagrams"), runners: args.contains("-ThreadbearRunners"), queued: offline, many: args.contains("-ThreadbearManyThreads"))
+            let fake = FakeBackend(runnerOnline: !offline, listDelay: args.contains("-ThreadbearSlowLoad") ? .seconds(6) : .zero, pictures: args.contains("-ThreadbearPictures"), long: args.contains("-ThreadbearLong"), secret: args.contains("-ThreadbearSecret"), diagrams: args.contains("-ThreadbearDiagrams"), runners: args.contains("-ThreadbearRunners"), queued: offline, many: args.contains("-ThreadbearManyThreads"), loginMoved: args.contains("-ThreadbearLoginNote"))
             // -ThreadbearSlowStart: a new thread takes a minute to start, so its Starting row stays.
             if args.contains("-ThreadbearSlowStart") { fake.startDelay = .seconds(60) }
             // -ThreadbearShortInbox: one thread in the inbox, one running, one of each put away.
@@ -1169,28 +1173,6 @@ final class AppModel {
                 }
             } catch {
                 presses[key] = CommandStatus(state: .failed, note: (error as? LocalizedError)?.errorDescription ?? error.localizedDescription)
-            }
-        }
-    }
-
-    /// Run buttons tapped and not yet taken by the Mac: spinning, and no
-    /// more taps. After that the card's own `running` says so.
-    private(set) var pressingRuns: Set<String> = []
-
-    /// Run on an ask card (backend API 71), which runs on the thread's Mac.
-    func pressRun(threadId: String, buttonId: String) {
-        guard let backend, pressingRuns.insert(buttonId).inserted else { return }
-        Task {
-            defer { pressingRuns.remove(buttonId) }
-            do {
-                let command = try await backend.press(threadId: threadId, buttonId: buttonId)
-                for try await status in backend.command(command) {
-                    guard let status, status.state == .done || status.state == .failed else { continue }
-                    if status.state == .failed { report(TransportError.server(status.note ?? "That Mac couldn't run it.")) }
-                    return
-                }
-            } catch {
-                report(error)
             }
         }
     }

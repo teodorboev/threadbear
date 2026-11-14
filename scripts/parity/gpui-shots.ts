@@ -10,6 +10,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { GpuiDriver } from '../../features/support/gpui.ts';
 import { sleep } from '../../features/support/driver.ts';
+import { ensurePerfLock } from '../../features/tools/perf-lock.ts';
+
+await ensurePerfLock();
 
 const [seedFile, out] = process.argv.slice(2);
 const seed = JSON.parse(fs.readFileSync(seedFile, 'utf8')) as { threads: { name: string; threadId: string; shows: string[] }[] };

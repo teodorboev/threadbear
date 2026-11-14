@@ -193,7 +193,7 @@ fn selection_ended(pane: &WeakEntity<ThreadPane>, release: Point<Pixels>, window
 
 /// What's selected now, as its plain words and as HTML with its links,
 /// bold and code. None when nothing is.
-fn selection_now(pane: &Entity<ThreadPane>, window: &mut Window, cx: &mut App) -> Option<(String, String)> {
+pub(crate) fn selection_now(pane: &Entity<ThreadPane>, window: &mut Window, cx: &mut App) -> Option<(String, String)> {
     let words = TextSelection::selected_text(window, cx).trim().to_owned();
     if words.is_empty() {
         return None;
@@ -226,7 +226,7 @@ pub(crate) fn copy(pane: &Entity<ThreadPane>, window: &mut Window, cx: &mut App)
 
 /// The plain words and the HTML together, as one copy (`SelectionHTML`).
 #[cfg(target_os = "macos")]
-fn put_on_clipboard(words: &str, html: &str, _cx: &mut App) {
+pub(crate) fn put_on_clipboard(words: &str, html: &str, _cx: &mut App) {
     use objc2_app_kit::{NSPasteboard, NSPasteboardTypeHTML, NSPasteboardTypeString};
     use objc2_foundation::NSString;
     let board = NSPasteboard::generalPasteboard();
@@ -240,7 +240,7 @@ fn put_on_clipboard(words: &str, html: &str, _cx: &mut App) {
 /// Elsewhere the plain words for now: GPUI's clipboard has no HTML flavour,
 /// and Windows' and Linux's need code of their own (features.md, rich.copy).
 #[cfg(not(target_os = "macos"))]
-fn put_on_clipboard(words: &str, _html: &str, cx: &mut App) {
+pub(crate) fn put_on_clipboard(words: &str, _html: &str, cx: &mut App) {
     cx.write_to_clipboard(ClipboardItem::new_string(words.to_owned()));
 }
 

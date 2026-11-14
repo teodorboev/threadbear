@@ -5,7 +5,7 @@
       "kind": "added",
       "title": "A Terminal under each thread",
       "text": "View > Show Terminal (⌘J) opens your own shell in the thread's folder, and each thread keeps its own. A shell command in a reply has a play icon that puts it at the prompt, for you to read before pressing Return.",
-      "credit": "muperdev",
+      "credit": "Mup",
       "media": {
         "type": "clip",
         "src": "terminal.mp4",
@@ -117,7 +117,8 @@
         "width": 1760,
         "height": 860,
         "alt": "Three threads are opened one after another, then the back arrow beside Share steps back through them and the forward arrow steps forward again."
-      }
+      },
+      "credit": "Wayne Sutton"
     },
     {
       "kind": "added",
@@ -158,13 +159,25 @@
   ],
   "added": [
     "Stop a running thread from the iPhone app or the website: Send turns into Stop while it works, as on the Mac",
-    "⌘Q asks before quitting, with a Don't ask again box, and Settings > General > Quitting turns the question back on",
-    "Settings > General > Experiments has a switch for each experiment, with what it does behind its ⓘ",
-    "Right-click a picture in the side pane for Show in Finder and Copy Path",
+    {
+      "text": "⌘Q asks before quitting, with a Don't ask again box, and Settings > General > Quitting turns the question back on",
+      "credit": "Wayne Sutton"
+    },
+    {
+      "text": "Settings > General > Experiments has a switch for each experiment, with what it does behind its ⓘ",
+      "credit": "Wayne Sutton"
+    },
+    {
+      "text": "Right-click a picture in the side pane for Show in Finder and Copy Path",
+      "credit": "Mup"
+    },
     "Write to a thread 12 hours or more after its last turn and the agent is asked to start with a short recap of what the thread was for",
     "A patch can name a teardown command that runs when its thread's worktree is cleaned up, for things its setup made outside the folder (a Convex deployment per worktree, say)",
     "Threadbear can run other tools' update commands once a day, listed under `cliUpdates.extra` in runner.json",
-    "A What's new page on the website, with each day's release",
+    {
+      "text": "A What's new page on the website, with each day's release",
+      "credit": "Wayne Sutton, whose fork's changelog it's modelled on"
+    },
     "Run OpenCode and Cursor threads next to Claude and Codex (an experiment)",
     "On Auto, a reviewer looks at approval cards first, lets through the ones that fit the thread's task and sends the rest to you with its reason (an experiment)",
     "An agent can put a command on its card that runs with one press on the thread's machine, with the output going straight back to the agent (an experiment)",
@@ -175,16 +188,31 @@
     "Keeping the Mac awake while threads work is on for everyone now, with a switch in Settings > General > Sleep",
     "When a thread that changed code finishes, your other provider tries to break the change: this was an experiment and is now on for everyone, with Settings > General > Code review to turn it off",
     "Every agent knows it can draw diagrams and small pages in its replies, which was an experiment before",
-    "New installs start threads on Auto, while existing installs keep Full access",
+    {
+      "text": "New installs start threads on Auto, while existing installs keep Full access",
+      "credit": "David Clark, Yuri and nennat, who each made the same change"
+    },
     "File edits can only be allowed in the Mac app: on the phone and the website their cards offer Deny and say to allow them on the Mac",
-    "A permission card says why it's asking (Auto's safety check couldn't clear a command, say), and a call Auto refuses without asking says why in the thread",
+    {
+      "text": "A permission card says why it's asking (Auto's safety check couldn't clear a command, say), and a call Auto refuses without asking says why in the thread",
+      "credit": "David Clark"
+    },
     "Permission cards show tabs as ⇥ and spaces at the end of a line as ·, and say when a file being written doesn't end with a line break",
     "The agent's own pick on a question card is a small gold star and Recommended, in place of the blue \"my pick\"",
     "On the iPhone and the website, a question card shows what each answer does under it, as on the Mac",
     "The footer under each turn shows tokens out and in, for Codex turns too, with the API price when you hover over it, where it used to show a dollar cost",
-    "A Markdown file in the side pane has a Preview / Markdown menu in its bar in place of the pencil, and the drawn page keeps its lines to a readable width",
-    "The side pane's bar names a file by its own name, with its full path when you hover over it",
-    "Attach Image takes Markdown files too, which go in as their path",
+    {
+      "text": "A Markdown file in the side pane has a Preview / Markdown menu in its bar in place of the pencil, and the drawn page keeps its lines to a readable width",
+      "credit": "Wayne Sutton"
+    },
+    {
+      "text": "The side pane's bar names a file by its own name, with its full path when you hover over it",
+      "credit": "David Clark"
+    },
+    {
+      "text": "Attach Image takes Markdown files too, which go in as their path",
+      "credit": "Wayne Sutton"
+    },
     "A clip enlarged in the options window plays with its sound on",
     "With natural scrolling off, a two-finger swipe over a sidebar row goes Back rather than archiving the thread, and a swipe has to go a little further before it counts"
   ],
@@ -192,9 +220,18 @@
     "A message sent just as the runner restarted could be lost: it now goes again once the runner is back, or comes back into the box with a note saying so",
     "Dragging the edge of the Settings window could crash the app",
     "A small picture in the options window could crash the app as the window opened",
-    "Long option descriptions on question cards wrap instead of being cut off after one line",
-    "Pictures and links to files in folders with spaces in their names (Application Support, say) show as pictures and links, not as raw text",
-    "In a narrow window, panels stay inside their space instead of hanging off both sides with their text showing through the bars",
+    {
+      "text": "Long option descriptions on question cards wrap instead of being cut off after one line",
+      "credit": "Wayne Sutton"
+    },
+    {
+      "text": "Pictures and links to files in folders with spaces in their names (Application Support, say) show as pictures and links, not as raw text",
+      "credit": "Mup"
+    },
+    {
+      "text": "In a narrow window, panels stay inside their space instead of hanging off both sides with their text showing through the bars",
+      "credit": "Wayne Sutton"
+    },
     "From the Mac, reply buttons and slash commands work on threads running on another machine",
     "On iPhone, the done card and its follow-ups show for agents that write their reply before finishing the turn, as Codex does",
     "On the iPhone and the website, a thread that said it needs nothing from you counts as done, as on the Mac, and no longer adds to the phone's badge",
@@ -206,9 +243,15 @@
     "One mistake in runner.json (a stray comma, say) could get it written over, losing your logins and settings: the runner now stops and says what's wrong",
     "A thread that archives or snoozes itself waits while one of its cards is still open, so the work waiting on that card isn't stopped",
     "The agent doesn't offer an option you passed over in an options review as a new follow-up",
-    "Waking the Mac no longer starts a \"needs someone at its screen\" thread because of a notification window that isn't showing",
+    {
+      "text": "Waking the Mac no longer starts a \"needs someone at its screen\" thread because of a notification window that isn't showing",
+      "credit": "David Clark"
+    },
     "A runner update that failed because its machine ran short of something (disk space, say) is tried again once the machine recovers",
-    "Setup and builds work on more Macs: with only the Command Line Tools, with Node from Homebrew, with a company registry in ~/.npmrc, or with two signing certificates of the same name",
+    {
+      "text": "Setup and builds work on more Macs: with only the Command Line Tools, with Node from Homebrew, with a company registry in ~/.npmrc, or with two signing certificates of the same name",
+      "credit": "Michał Frączek, Gabriel Bressan, David Clark and Yair Haimo"
+    },
     "Closed several security holes, including ways a thread on Ask or Auto could get more access through Threadbear's own commands, a folder's git settings could run a program before you'd trusted the folder, and an approval from the phone could allow more than its card showed"
   ]
 }

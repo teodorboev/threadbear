@@ -227,7 +227,7 @@ final class PromptWatchingTerminalView: LocalProcessTerminalView {
             OpenGate.refuse("Threadbear couldn't open that link: it isn't a web address or a file on this Mac.")
             return
         }
-        OpenGate.openLink(url, origin: .thisMac)
+        OpenGate.openLink(url)
     }
 
     /// What a terminal link names: a file, if it's the path of one (read

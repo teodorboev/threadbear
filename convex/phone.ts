@@ -12,7 +12,7 @@ import { API_VERSION } from './version';
 import { pushOff } from './pushHealth';
 import { imagesFrom, phoneImage, replyImagesFrom } from './share';
 import { deleteIfUnused, endCommandFiles, eventBodyAnswer, finishedArgs, readEventBody, runnerName } from './sync';
-import { docBytes, holdThreadTimes, isReadableTime } from './runnerAccess';
+import { docBytes, holdReviewNumbers, holdThreadTimes, isReadableTime } from './runnerAccess';
 import { HEADS_MARK } from './projectHeads';
 import { notesOf } from './projectNotes';
 
@@ -32,7 +32,7 @@ const WAITING_LIMIT = 50;
 
 const row = v.object({ ...threadFields, view: v.union(...views.map((x) => v.literal(x))) });
 const message = v.object({ seq: v.number(), role: v.union(v.literal('user'), v.literal('assistant')), text: v.string(), origin: v.optional(v.string()), at: v.string() });
-const pageMessage = v.object({ seq: v.number(), role: v.union(v.literal('user'), v.literal('assistant'), v.literal('tool')), text: v.string(), origin: v.optional(v.string()), toolKind: v.optional(v.string()), summary: v.optional(v.boolean()), plan: v.optional(v.boolean()), turn: v.optional(v.string()), wokeBy: v.optional(v.array(v.object({ kind: v.string(), description: v.string() }))), buttons: v.optional(v.array(messageButton)), at: v.string() });
+const pageMessage = v.object({ seq: v.number(), role: v.union(v.literal('user'), v.literal('assistant'), v.literal('tool'), v.literal('note')), text: v.string(), origin: v.optional(v.string()), toolKind: v.optional(v.string()), summary: v.optional(v.boolean()), plan: v.optional(v.boolean()), turn: v.optional(v.string()), wokeBy: v.optional(v.array(v.object({ kind: v.string(), description: v.string() }))), buttons: v.optional(v.array(messageButton)), at: v.string() });
 // phone:thread's newest text messages for an old phone, and how far back it
 // looks past tool rows for them.
 const MESSAGES_SHOWN = 20;
@@ -50,6 +50,8 @@ const PAGE_MAX = 2000;
 // messages. Most rows are one-line tool rows, so a page stops at this many
 // read whatever it found, and says there's more.
 const TOOL_ROWS_SKIPPED = 4000;
+// And at most this many login notes (role "note"), which no page shows.
+const NOTE_ROWS_SKIPPED = 500;
 const PAGE_BYTES = 8 * 1024 * 1024;
 
 function strip<T extends { _id: unknown; _creationTime: unknown }>(doc: T): Omit<T, '_id' | '_creationTime'> {
@@ -73,6 +75,8 @@ function stripThread(doc: Doc<'threads'>): PhoneThread {
   if (doc.view === 'overflow') out.view = doc.wantView ?? 'inbox';
   // Times a phone can read, whoever wrote them and whenever.
   holdThreadTimes(out, isReadableTime);
+  // Counts a phone turns into an Int, however old the row (Daybreak 109).
+  holdReviewNumbers(out);
   return out as PhoneThread;
 }
 
@@ -237,6 +241,9 @@ export const search = query({
         .withSearchIndex('search_text', (q) => q.search('text', words))
         .take(SEARCH_MESSAGES);
       for (const m of said) {
+        // Not a login's note (API 78): the phone doesn't show those, so a
+        // thread found by one would have nothing in it to match.
+        if (m.role === 'note') continue;
         if (seen.has(m.threadId) || out.length >= SEARCH_LIMIT) continue;
         seen.add(m.threadId);
         const t = await ctx.db
@@ -284,7 +291,8 @@ export const thread = query({
     const t = await findThread(ctx, threadId);
     const bySeq = new Map<number, { seq: number; role: 'user' | 'assistant'; text: string; origin?: string; at: string }>();
     const add = (m: Doc<'messages'>) => {
-      if (m.role === 'tool') return;
+      // Nor a login's note (API 78), which only another runner reads.
+      if (m.role === 'tool' || m.role === 'note') return;
       bySeq.set(m.seq, { seq: m.seq, role: m.role, text: m.text, ...(m.origin ? { origin: m.origin } : {}), at: m.at });
     };
     // Tool rows sit between the text ones, so this reads back far enough to
@@ -293,7 +301,7 @@ export const thread = query({
     let read = 0;
     for await (const m of ctx.db.query('messages').withIndex('by_thread_seq', (q) => q.eq('threadId', threadId)).order('desc')) {
       if (++read > THREAD_SCAN) break;
-      if (m.role === 'tool') continue;
+      if (m.role === 'tool' || m.role === 'note') continue;
       add(m);
       if (++text >= MESSAGES_SHOWN) break;
     }
@@ -371,15 +379,18 @@ export const heldPicture = query({
 export const messages = query({
   // noImages (API 37): for a client watching phone:images instead, so a new
   // message doesn't read every picture row again.
-  args: { token: v.string(), threadId: v.string(), beforeSeq: v.optional(v.number()), limit: v.optional(v.number()), tools: v.optional(v.boolean()), noImages: v.optional(v.boolean()) },
+  // notes (API 79): also the lines a thread writes when its login runs out
+  // (role "note"), for an app that draws them. One built before can't read
+  // the role, so it's only for the asking.
+  args: { token: v.string(), threadId: v.string(), beforeSeq: v.optional(v.number()), limit: v.optional(v.number()), tools: v.optional(v.boolean()), noImages: v.optional(v.boolean()), notes: v.optional(v.boolean()) },
   // images: from the page's first row on (share.ts), a shared thread's
   // uploaded pictures (API 8), so Mike's page shows what the shared one
   // does, and any thread's reply and pinned pictures (API 24).
   returns: v.object({ messages: v.array(pageMessage), hasMore: v.boolean(), images: v.optional(v.array(phoneImage)) }),
-  handler: async (ctx, { token, threadId, beforeSeq, limit, tools, noImages }) => {
+  handler: async (ctx, { token, threadId, beforeSeq, limit, tools, noImages, notes: withNotes }) => {
     await checkPhoneToken(ctx, token);
     const want = pageLimit(limit, PAGE_DEFAULT, PAGE_MAX);
-    const out: { seq: number; role: 'user' | 'assistant' | 'tool'; text: string; origin?: string; toolKind?: string; summary?: boolean; turn?: string; buttons?: Doc<'messages'>['buttons']; at: string }[] = [];
+    const out: { seq: number; role: 'user' | 'assistant' | 'tool' | 'note'; text: string; origin?: string; toolKind?: string; summary?: boolean; turn?: string; buttons?: Doc<'messages'>['buttons']; at: string }[] = [];
     const q = ctx.db
       .query('messages')
       .withIndex('by_thread_seq', (x) => (beforeSeq === undefined ? x.eq('threadId', threadId) : x.eq('threadId', threadId).lt('seq', beforeSeq)))
@@ -390,7 +401,20 @@ export const messages = query({
     let read = 0;
     let bytes = 0;
     let hasMore = false;
+    let notes = 0;
     for await (const m of q) {
+      // A login's note (API 78) goes only to an app that asks for them
+      // (`notes`, API 79): one built before can't read the role. For the
+      // rest it's looked past without counting as one of the page's rows:
+      // counted, a page asked for under a few notes came back empty saying
+      // there was more, with no row to page from (Codex's review, 13 Nov).
+      if (m.role === 'note' && !withNotes) {
+        if (++notes > NOTE_ROWS_SKIPPED || (bytes += docBytes(m)) > PAGE_BYTES) {
+          hasMore = true;
+          break;
+        }
+        continue;
+      }
       // And bytes: a page of big rows stops short, saying there's more, rather than going past what a query may read.
       if (++read > most || (bytes += docBytes(m)) > PAGE_BYTES) {
         hasMore = true;

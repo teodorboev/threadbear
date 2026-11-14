@@ -373,10 +373,4 @@ final class FolderBrowserTests: XCTestCase {
         preview.away = "bruce"
         XCTAssertNil(preview.externalURL)
     }
-
-    func testARemoteFolderErrorIsRecognised() {
-        XCTAssertTrue(AppModel.isFolderError(RPCError.server(code: -32602, message: "Not a file: /a")))
-        XCTAssertFalse(AppModel.isFolderError(RPCError.server(code: -32602, message: "No such file: /a")))
-        XCTAssertFalse(AppModel.isFolderError(RPCError.disconnected(nil)))
-    }
 }

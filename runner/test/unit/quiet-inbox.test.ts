@@ -4,6 +4,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import { execFileSync } from 'node:child_process';
 import { makeHarness, tmpDir } from '../helpers/fakes.ts';
 import { PATIENCE_MS } from '../helpers/patience.ts';
 
@@ -36,6 +37,17 @@ function finish(h: H, id: string, input: Record<string, unknown> = { needs: 'not
   s.result('completed');
 }
 
+// Leaves a file the thread changed uncommitted in a repo of its own: a
+// loose end only git shows. (Until 13 Nov 2026 these tests used a line the
+// agent wrote itself, end_turn's `open`, which is gone.)
+function leaveUncommitted(h: H, id: string) {
+  const repo = h.runner.get(id).cwd;
+  execFileSync('/bin/sh', ['-c', 'git init -q -b main && echo one > notes.md && git add -A && git -c user.name=t -c user.email=t@t commit -qm init && echo two > notes.md'], { cwd: repo });
+  const s = h.adapter.sessions.filter((x) => x.opts.threadId === id).at(-1)!;
+  s.init();
+  s.out({ kind: 'event', event: { type: 'tool.call', itemId: `w${Math.random()}`, name: 'Edit', kind: 'edit', title: 'Edit notes.md', input: { file_path: path.join(repo, 'notes.md') } } });
+}
+
 const mine = (h: H, text = 'Plan the port') => h.runner.create({ text, accountId: 'claude-main' }).thread.id;
 const helper = (h: H, parent: string, text = 'Fix the panel reload') =>
   h.runner.create({ text, accountId: 'claude-main', startedBy: { kind: 'thread', label: 'Agent', threadId: parent } }).thread.id;
@@ -45,7 +57,7 @@ test('quietInbox: a thread another thread started archives itself when it finish
   const h = setup();
   const parent = mine(h);
   const child = helper(h, parent);
-  finish(h, child, { needs: 'nothing', byline: 'landed and pushed, nothing to do', open: [] });
+  finish(h, child, { needs: 'nothing', byline: 'landed and pushed, nothing to do' });
   await until(() => Boolean(h.runner.get(child).archivedAt), 'the helper archived');
   const t = h.runner.get(child);
   assert.equal(t.archivedBy, 'threadbear');
@@ -85,8 +97,9 @@ test('quietInbox: a helper that asks, suggests a follow-up, leaves something ope
   finish(h, asks, { needs: 'you', asks: [{ question: 'Deploy it?' }] });
   const next = helper(h, parent);
   finish(h, next, { needs: 'nothing', next: ['Stop the Threadbear transcript jumping when a long reply arrives'] });
-  const open = helper(h, parent);
-  finish(h, open, { needs: 'nothing', open: ['A reply to Keith is worth sending'] });
+  const open = h.runner.create({ text: 'Fix the notes', accountId: 'claude-main', cwd: fs.realpathSync(tmpDir('tb-quiet-open-')), startedBy: { kind: 'thread', label: 'Agent', threadId: parent } }).thread.id;
+  leaveUncommitted(h, open);
+  finish(h, open);
   const booked = helper(h, parent);
   h.runner.schedulesFor = (t) => (t === booked ? [{ id: 's', title: 'Check the Android build', text: '', whenText: '', paused: false, createdAt: '', updatedAt: '', runs: 0, threadId: t, nextRunAt: '2026-11-13T01:30:00Z' }] : []);
   finish(h, booked);
@@ -190,9 +203,10 @@ test('quietInbox: a finished thread whose only loose ends are threads it started
 
 test("quietInbox: with something else left open as well, or with it off, a thread with helpers still going stays in the inbox", async () => {
   const h = setup();
-  const mixed = mine(h);
+  const mixed = h.runner.create({ text: 'Plan the port', accountId: 'claude-main', cwd: fs.realpathSync(tmpDir('tb-quiet-mixed-')) }).thread.id;
   helper(h, mixed);
-  finish(h, mixed, { needs: 'nothing', open: ['The export is being redone'] });
+  leaveUncommitted(h, mixed);
+  finish(h, mixed);
   const asks = mine(h);
   helper(h, asks);
   finish(h, asks, { needs: 'you', asks: [{ question: 'Which first?' }] });
@@ -205,7 +219,7 @@ test("quietInbox: with something else left open as well, or with it off, a threa
   finish(h, control);
   await until(() => Boolean(h.runner.get(control).waitingOn?.length), 'the control');
   await settle();
-  assert.equal(h.runner.get(mixed).snoozedUntil, undefined, "something of the agent's own is open too");
+  assert.equal(h.runner.get(mixed).snoozedUntil, undefined, 'a file it changed is uncommitted too');
   assert.equal(h.runner.get(asks).snoozedUntil, undefined, 'it asked Mike something');
   assert.equal(off.runner.get(plain).snoozedUntil, undefined, 'off: stays');
 });

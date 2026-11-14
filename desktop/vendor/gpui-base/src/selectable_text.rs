@@ -79,7 +79,7 @@ impl SelectableText {
         window: &mut Window,
     ) {
         let (Some(start), Some(end)) = (
-            layout.position_for_index(range.start),
+            crate::selection_start_position(layout, range.start),
             layout.position_for_index(range.end),
         ) else {
             return;
@@ -237,7 +237,7 @@ impl Element for SelectableText {
         // TextView does after its paint, so `TextSelection::painted_edges`
         // knows this text's part of a selection too.
         let line_height = layout.line_height();
-        let painted = edges.and_then(|(start, end)| Some((layout.position_for_index(start)?, layout.position_for_index(end)?))).map(|(start, end)| {
+        let painted = edges.and_then(|(start, end)| Some((crate::selection_start_position(&layout, start)?, layout.position_for_index(end)?))).map(|(start, end)| {
             (crate::touch_selection::caret_line_box(start, line_height), crate::touch_selection::caret_line_box(end, line_height))
         });
         // Only when they differ from what prepaint carried over.

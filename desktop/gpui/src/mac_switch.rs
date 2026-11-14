@@ -25,12 +25,22 @@ pub(crate) struct MacSwitch {
     id: ElementId,
     checked: bool,
     disabled: bool,
+    outside_form: bool,
     on_change: Option<Rc<dyn Fn(bool, &mut Window, &mut App)>>,
 }
 
 impl MacSwitch {
     pub(crate) fn new(id: impl Into<ElementId>, checked: bool) -> Self {
-        MacSwitch { id: id.into(), checked, disabled: false, on_change: None }
+        MacSwitch { id: id.into(), checked, disabled: false, outside_form: false, on_change: None }
+    }
+
+    /// Swift's `.controlSize(.small)` outside a grouped Form has a 44×20
+    /// track and a 26×16 knob, two points inset. Measured from a hidden
+    /// NSHostingView on macOS 27; its layout is 54×24 including the padding.
+    /// Forms use the smaller dimensions above.
+    pub(crate) fn outside_form(mut self) -> Self {
+        self.outside_form = true;
+        self
     }
 
     pub(crate) fn disabled(mut self, disabled: bool) -> Self {
@@ -49,9 +59,10 @@ impl RenderOnce for MacSwitch {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let dark = cx.theme().is_dark();
         let on = self.checked;
+        let (track_w, track_h, knob_w, knob_h, inset) = if self.outside_form { (44., 20., 26., 16., 2.) } else { (TRACK_W, TRACK_H, KNOB_W, KNOB_H, INSET) };
         let track = if on { style::control_accent(cx) } else { style::primary_opacity(cx, if dark { 0.1 } else { 0.09 }) };
         let knob = if dark { hsla(0., 0., 0.88, 1.) } else { hsla(0., 0., 1., 1.) };
-        let travel = px(TRACK_W - KNOB_W - INSET * 2.);
+        let travel = px(track_w - knob_w - inset * 2.);
         let x = spring((self.id.clone(), "knob"), if on { travel } else { gpui_kit::px(0.) }, cx.theme().motion_tokens().spring_move, window, cx);
         let on_change = self.on_change.clone();
         BaseSwitch::new(self.id.clone())
@@ -59,15 +70,16 @@ impl RenderOnce for MacSwitch {
             .disabled(self.disabled)
             .when_some(on_change.filter(|_| !self.disabled), |s, f| s.on_change(move |next, _, window, cx| f(next, window, cx)))
             .flex_none()
+            .when(self.outside_form, |s| s.px(px(5.)).py(px(2.)))
             .child(
                 SwitchTrack::new((self.id.clone(), "track"))
                     .checked(on)
                     .disabled(self.disabled)
-                    .w(px(TRACK_W))
-                    .h(px(TRACK_H))
+                    .w(px(track_w))
+                    .h(px(track_h))
                     .flex_none()
                     .rounded_full()
-                    .p(px(INSET))
+                    .p(px(inset))
                     .bg(track)
                     .when(self.disabled, |s| s.opacity(0.5))
                     .cursor_pointer()
@@ -75,8 +87,8 @@ impl RenderOnce for MacSwitch {
                         SwitchThumb::new(on)
                             .relative()
                             .left(x)
-                            .w(px(KNOB_W))
-                            .h(px(KNOB_H))
+                            .w(px(knob_w))
+                            .h(px(knob_h))
                             .rounded_full()
                             .bg(knob)
                             // A light knob on a light track needs its edge.

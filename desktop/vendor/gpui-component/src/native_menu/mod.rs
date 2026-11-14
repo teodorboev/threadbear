@@ -188,6 +188,53 @@ impl NativeMenu {
         self
     }
 
+    /// This app's (Threadbear's scripts read a menu without opening it): each
+    /// item's label, a submenu's items as "Submenu › Item", a ticked item
+    /// with "✓ " in front and a disabled one with "(off) ", separators left out.
+    pub fn titles(&self) -> Vec<String> {
+        fn walk(items: &[NativeMenuItem], prefix: &str, out: &mut Vec<String>) {
+            for item in items {
+                match item {
+                    NativeMenuItem::Separator => {}
+                    NativeMenuItem::Item { label, disabled, checked, .. } => {
+                        let tick = if *checked { "✓ " } else { "" };
+                        let off = if *disabled { "(off) " } else { "" };
+                        out.push(format!("{prefix}{off}{tick}{label}"));
+                    }
+                    NativeMenuItem::Submenu { label, items, .. } => walk(items, &format!("{prefix}{label} › "), out),
+                }
+            }
+        }
+        let mut out = Vec::new();
+        walk(&self.items, "", &mut out);
+        out
+    }
+
+    /// This app's, with `titles`: the action of the item called `title`
+    /// (as `titles` writes it, without the tick or "(off) "), for a script
+    /// choosing it. `None` for a missing or disabled item.
+    pub fn action_for(self, title: &str) -> Option<Box<dyn Action>> {
+        fn find(items: Vec<NativeMenuItem>, prefix: &str, title: &str) -> Option<Box<dyn Action>> {
+            for item in items {
+                match item {
+                    NativeMenuItem::Separator => {}
+                    NativeMenuItem::Item { label, disabled, action, .. } => {
+                        if !disabled && format!("{prefix}{label}") == title {
+                            return action;
+                        }
+                    }
+                    NativeMenuItem::Submenu { label, items, .. } => {
+                        if let Some(found) = find(items, &format!("{prefix}{label} › "), title) {
+                            return Some(found);
+                        }
+                    }
+                }
+            }
+            None
+        }
+        find(self.items, "", title)
+    }
+
     /// Whether the menu has no items.
     pub fn is_empty(&self) -> bool {
         self.items.is_empty()

@@ -91,7 +91,6 @@ final class RemoteLoginsTests: XCTestCase {
 final class RelayCardSummaryTests: XCTestCase {
     func testARelayedSummaryTakesItsAsksFromTheCardShown() {
         let app = AppModel()
-        app.directRemoteLink = false
         let ask = Ask(action: "Start the spike?", options: ["Start the spike", "Not yet"])
         var remote = ThreadSummary(id: "t1", title: "On Hetzner", status: .idle, needs: "you", asks: [ask], asksSeq: 4)
         remote.runnerId = "r-cloud"

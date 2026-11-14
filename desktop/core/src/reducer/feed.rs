@@ -64,6 +64,26 @@ impl ThreadFeed {
         self.accepted_seq
     }
 
+    /// The relay can insert a result below the newest seq. Tell it exactly
+    /// what this pane has, including events waiting for the next frame, so
+    /// reconnecting doesn't replay every earlier result from other readers.
+    pub fn relay_seen(&self) -> Option<Vec<[i64; 2]>> {
+        if !self.sparse {
+            return None;
+        }
+        let seqs: BTreeSet<i64> = self.model.events().iter().chain(&self.pending).filter(|e| !e.is_transient() && e.seq > 0).map(|e| e.seq).collect();
+        let mut ranges: Vec<[i64; 2]> = Vec::new();
+        for seq in seqs {
+            if let Some(last) = ranges.last_mut().filter(|r| r[1].checked_add(1) == Some(seq)) {
+                last[1] = seq;
+            } else {
+                ranges.push([seq, seq]);
+            }
+        }
+        // An exceptionally long pane can still use the older replay path.
+        (ranges.len() <= 20_000).then_some(ranges)
+    }
+
     pub fn is_catching_up(&self) -> bool {
         self.is_catching_up
     }

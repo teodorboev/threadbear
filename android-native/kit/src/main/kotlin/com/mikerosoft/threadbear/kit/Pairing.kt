@@ -29,9 +29,11 @@ data class Pairing(
 
     companion object {
         /**
-         * Convex cloud deployments, or a self-hosted backend on the tailnet
-         * over https. `allowLocal` (debug builds) also takes http://127.0.0.1
-         * and the emulator's 10.0.2.2.
+         * Convex cloud deployments, or a self-hosted backend at any https
+         * address: on the tailnet, or one of the user's own (setup --url,
+         * 14 Nov 2026; Pairing.swift says why the host isn't checked).
+         * `allowLocal` (debug builds) also takes http://127.0.0.1 and the
+         * emulator's 10.0.2.2.
          */
         fun parse(link: String, allowLocal: Boolean = false): Pairing? {
             val uri = try { URI(link.trim().replace(" ", "%20")) } catch (_: Exception) { return null }
@@ -46,10 +48,9 @@ data class Pairing(
                 val port = if (deployment.port > 0) ":${deployment.port}" else ""
                 return Pairing("http://$host$port", token, keys)
             }
-            tailnetBackend(deployment, host)?.let { return Pairing(it, token, keys) }
             if (deployment.scheme != "https") return null
             val lower = host.lowercase()
-            if (!(lower.endsWith(".convex.cloud") || lower.endsWith(".convex.site"))) return null
+            if (!isCloud(lower)) return selfHostedBackend(deployment, lower)?.let { Pairing(it, token, keys) }
             if (deployment.rawUserInfo != null) return null
             val cloud = lower.removeSuffix(".convex.site").let { if (it == lower) lower else "$it.convex.cloud" }
             return Pairing("https://$cloud", token, keys)
@@ -74,20 +75,32 @@ data class Pairing(
         fun isUsableKey(key: String): Boolean =
             try { Base64.getDecoder().decode(key).size == 32 } catch (_: Exception) { false }
 
-        internal fun tailnetBackend(url: URI, host: String): String? {
+        internal fun isCloud(host: String) = host.endsWith(".convex.cloud") || host.endsWith(".convex.site")
+
+        internal fun isLoopback(host: String): Boolean {
+            val h = host.trim('[', ']').lowercase()
+            return h == "localhost" || h == "::1" || h.startsWith("127.") || h.endsWith(".localhost")
+        }
+
+        /** A self-hosted backend: https, any host but this phone's loopback, and just its origin. */
+        internal fun selfHostedBackend(url: URI, host: String): String? {
             val name = host.lowercase()
-            if (url.scheme != "https" || !name.endsWith(".ts.net") || name.split('.').size < 4) return null
+            if (url.scheme != "https" || name.isEmpty() || isLoopback(name)) return null
             if (url.rawUserInfo != null || url.rawQuery != null || url.rawFragment != null) return null
             val path = url.rawPath ?: ""
             if (path.isNotEmpty() && path != "/") return null
             return "https://$name" + if (url.port > 0) ":${url.port}" else ""
         }
 
-        /** A server's name: a tailnet backend's host and port, else the host. */
+        /**
+         * A server's name: a self-hosted backend's host and port, else the
+         * host (Convex cloud and the dev backend, keyed as they always were).
+         */
         fun serverName(url: String): String {
             val uri = try { URI(url) } catch (_: Exception) { return url }
             val host = uri.host ?: return url
-            return if (host.lowercase().endsWith(".ts.net") && uri.port > 0) "$host:${uri.port}" else host
+            val lower = host.lowercase()
+            return if (!isCloud(lower) && !isLoopback(lower) && lower != "10.0.2.2" && uri.port > 0) "$host:${uri.port}" else host
         }
 
         /** Query items, percent-decoded, "+" left as it is (as URLComponents reads them). */

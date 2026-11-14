@@ -62,7 +62,7 @@ pub(crate) async fn menu_command(window: AnyWindowHandle, cmd: &serde_json::Valu
                 // by the name each has for VoiceOver.
                 let found = window.elements().into_iter().find(|e| e.visible() && e.label().is_some_and(|l| SEND_BUTTON_NAMES.contains(&l)));
                 let Some(button) = found else { return Err("no send button on screen".to_owned()) };
-                let at = button.bounds().center();
+                let at = button.visible_bounds().center();
                 window.pointer_move(at, None, cx);
                 window.pointer_down(at, MouseButton::Right, cx);
                 window.pointer_up(at, MouseButton::Right, cx);

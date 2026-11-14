@@ -60,31 +60,50 @@ fn value_string(text: &str) -> Option<Value> {
     Some(value)
 }
 
-fn set_pref(context: &mut RequestContext, name: &str, value: Option<Value>) {
-    let Some(mut value) = value else { return };
+thread_local! {
+    /// Every rule took on the sealed context: the proxy, no prediction, no
+    /// WebRTC round the proxy. A local page runs its scripts only then
+    /// (panel.rs): they're what's left once a script can make connections.
+    static ALL_RULES: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Whether the sealed context has every rule on it.
+pub(crate) fn all_rules() -> bool {
+    ALL_RULES.with(std::cell::Cell::get)
+}
+
+fn set_pref(context: &mut RequestContext, name: &str, value: Option<Value>) -> bool {
+    let Some(mut value) = value else { return false };
     let mut error = CefString::from("");
     if context.set_preference(Some(&CefString::from(name)), Some(&mut value), Some(&mut error)) != 1 {
         // The page's policy and the request handler still stand; this is the
-        // third layer, so it's said and not fatal.
+        // third layer, so it's said and not fatal for a page with no scripts.
         eprintln!("threadbear-web: couldn't set {name} on the sealed context: {error}");
+        return false;
     }
+    true
 }
 
 fn apply_rules(context: &mut RequestContext) {
+    let mut all = false;
     if let (Some(mut proxy), Some(value)) = (dictionary_value_create(), value_create()) {
         proxy.set_string(Some(&CefString::from("mode")), Some(&CefString::from("fixed_servers")));
         proxy.set_string(Some(&CefString::from("server")), Some(&CefString::from(DEAD_PROXY)));
         value.set_dictionary(Some(&mut proxy));
-        set_pref(context, "proxy", Some(value));
+        all = set_pref(context, "proxy", Some(value));
     }
     // NETWORK_PREDICTION_NEVER: no DNS prefetching or preconnecting.
     if let Some(value) = value_create() {
         value.set_int(2);
-        set_pref(context, "net.network_prediction_options", Some(value));
+        all &= set_pref(context, "net.network_prediction_options", Some(value));
+    } else {
+        all = false;
     }
-    // WebRTC finds its own way round proxies; only a diagram page runs a
-    // script, and it's the app's, but it costs nothing to close.
-    set_pref(context, "webrtc.ip_handling_policy", value_string("disable_non_proxied_udp"));
+    // WebRTC finds its own way round proxies: only through the dead proxy
+    // here. A local page running its scripts also has the API taken away
+    // (preview_rules::CLIPBOARD_GUARD).
+    all &= set_pref(context, "webrtc.ip_handling_policy", value_string("disable_non_proxied_udp"));
+    ALL_RULES.with(|r| r.set(all));
 }
 
 wrap_request_context_handler! {

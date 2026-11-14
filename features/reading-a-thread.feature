@@ -104,9 +104,3 @@ Feature: Reading a thread
     And another Mac's thread with a bash block is open in a panel of its own
     Then that panel's block has its copy icon and no play icon
     And a block in another of this Mac's threads open in a panel of its own has no play icon either
-
-  @manual @gpui-pending @terminal.panel
-  Scenario: A link clicked in the Terminal is checked like a link in a reply
-    When the Terminal shows a hyperlink to a ".command" file
-    And I click the link
-    Then Threadbear asks before opening it

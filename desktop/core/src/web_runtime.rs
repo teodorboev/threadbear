@@ -15,9 +15,9 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 /// The CEF build this Threadbear runs. It has to be the one desktop/web's
-/// `cef` crate was generated from (cef 156.3.0+156.0.15), or the two sides of
+/// `cef` crate was generated from (cef 156.4.0+156.0.26), or the two sides of
 /// the C API disagree, so moving it means moving that pin too.
-pub const CEF_VERSION: &str = "156.0.15+gcf671c0+chromium-156.0.8078.80";
+pub const CEF_VERSION: &str = "156.0.26+g8ea0c73+chromium-156.0.8078.88";
 
 /// Where the builds come from while Threadbear has no place of its own to
 /// publish one: Spotify's CDN, which builds and hosts CEF's official binaries
@@ -27,7 +27,7 @@ pub const CDN: &str = "https://cef-builds.spotifycdn.com";
 
 /// One system's build, pinned. `sha1` is what Spotify's index.json (and the
 /// `.sha1` file beside the archive) says; `sha256` was worked out from the
-/// file that matched it, on 11 Nov 2026, so a download is checked against a
+/// file that matched it, on 13 Nov 2026, so a download is checked against a
 /// hash that isn't SHA-1 alone.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Archive {
@@ -44,17 +44,17 @@ pub struct Archive {
 pub const ARCHIVES: &[Archive] = &[
     Archive {
         platform: "macosarm64",
-        file: "cef_binary_156.0.15+gcf671c0+chromium-156.0.8078.80_macosarm64_minimal.tar.bz2",
-        bytes: 135_024_501,
-        sha1: "bcdd1877edb300b0fb91d8f71c0b14aae256cd0f",
-        sha256: "a27f1d856e84047657ed2a14caf355fb04480c4fe1963f04249a8a3184af1c30",
+        file: "cef_binary_156.0.26+g8ea0c73+chromium-156.0.8078.88_macosarm64_minimal.tar.bz2",
+        bytes: 134_979_837,
+        sha1: "ca4fafe7a9c52d9f28200bb8713971a9662b891c",
+        sha256: "6d7936cdd55ef30cf351a6358b2d922becefe87b25a8a8870a2b9ff5af2d39f6",
     },
     Archive {
         platform: "macosx64",
-        file: "cef_binary_156.0.15+gcf671c0+chromium-156.0.8078.80_macosx64_minimal.tar.bz2",
-        bytes: 141_647_289,
-        sha1: "13756e3029307720fe00898d54aef8a64c9b4043",
-        sha256: "e2aedb3cb41cc293ff2db81245f3462c61c49e13ac137f628872889c8a36c702",
+        file: "cef_binary_156.0.26+g8ea0c73+chromium-156.0.8078.88_macosx64_minimal.tar.bz2",
+        bytes: 141_699_633,
+        sha1: "f0f47aa3cdefa7eea54f2e8c6e73c68b4db125f3",
+        sha256: "28b343526664cacb8d855891ce112c62437684b4d9cbdc55fb5a6d7e5eac18fb",
     },
 ];
 
@@ -454,7 +454,7 @@ fn framework_path(entry: &Path, top: &str) -> Result<Option<PathBuf>, InstallErr
 /// The framework out of a checked archive (`file`, at its start) into
 /// `dest`: its files, with their executable bit but no set-id bits or
 /// owners, and its folders. Nothing else. CEF's framework has no links
-/// (156.0.15's two archives have none, of either kind), and a link is how an
+/// (156.0.26's two archives have none, of either kind), and a link is how an
 /// archive gets a later entry written somewhere else: checks of where links
 /// point were got round twice in review (Codex, 11 Nov: `a -> .`, then
 /// `escape -> a/..`, then a file written to `escape/planted-file`; then two
@@ -906,13 +906,13 @@ mod tests {
     #[test]
     fn says_where_it_has_got_to() {
         assert_eq!(State::Missing.words(), "Not installed");
-        let s = State::Downloading { received: 45_200_000, total: 135_024_501 };
+        let s = State::Downloading { received: 45_200_000, total: 134_979_837 };
         assert_eq!(s.words(), "Downloading, 45 of 135 MB");
         assert_eq!(s.percent(), Some(33));
         assert!(s.busy());
         assert_eq!(State::Failed("no network".into()).words(), "Couldn't install it: no network");
         assert_eq!(ARCHIVES[0].megabytes(), 135);
-        assert!(ARCHIVES[0].url().ends_with("cef_binary_156.0.15%2Bgcf671c0%2Bchromium-156.0.8078.80_macosarm64_minimal.tar.bz2"));
+        assert!(ARCHIVES[0].url().ends_with("cef_binary_156.0.26%2Bg8ea0c73%2Bchromium-156.0.8078.88_macosarm64_minimal.tar.bz2"));
         for archive in ARCHIVES {
             assert!(archive.file.contains(CEF_VERSION), "{} is the pinned build", archive.file);
             assert_eq!(archive.sha1.len(), 40);

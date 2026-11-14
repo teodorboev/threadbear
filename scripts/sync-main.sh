@@ -26,7 +26,32 @@ MAIN="$(git -C "$(dirname "$SELF")" worktree list --porcelain | awk '
 [ -n "$MAIN" ] || die "No checkout of this repo has main checked out."
 LOCK="$(git -C "$MAIN" rev-parse --path-format=absolute --git-common-dir)/threadbear-land.lock"
 
-# Everything below runs under the landing lock, in one process.
+# This Mac's main only ahead of GitHub's (the usual case: landings since
+# the last push): push it straight away, without the lock. A push moves
+# only GitHub's main, never this one, and is a fast-forward or refused, so
+# it can't race a landing. With landings queued, waiting for the lock took
+# over 30 minutes (13 Nov), and GitHub's main lagged all that time. The
+# commit pushed is the one read here, even if a landing moves main since.
+if [ "${THREADBEAR_SYNC_LOCKED:-}" != 1 ]; then
+  git -C "$MAIN" fetch -q origin main
+  here="$(git -C "$MAIN" rev-parse refs/heads/main)"
+  there="$(git -C "$MAIN" rev-parse refs/remotes/origin/main)"
+  if [ "$here" = "$there" ]; then
+    echo "main is the same here and on GitHub."
+    exit 0
+  fi
+  if git -C "$MAIN" merge-base --is-ancestor "$there" "$here"; then
+    # Refused if GitHub moved meanwhile; then it goes the long way, below.
+    if git -C "$MAIN" push -q origin "$here:refs/heads/main"; then
+      echo "Pushed main to GitHub ($(git -C "$MAIN" rev-list --count "$there..$here") commits)."
+      exit 0
+    fi
+    git -C "$MAIN" fetch -q origin main
+  fi
+fi
+
+# Everything below runs under the landing lock, in one process: GitHub's
+# has moved too, so this Mac's main may have to.
 if [ "${THREADBEAR_SYNC_LOCKED:-}" != 1 ]; then
   echo "Taking the landing lock (a landing in progress finishes first)..."
   if [ "$(uname)" = Darwin ]; then

@@ -157,7 +157,8 @@ import Testing
 
     @Test func notAPairingLinkIsntHeld() {
         let gate = PairingGate()
-        #expect(.notPairing == gate.ask(URL(string: "threadbear://pair?url=https://evil.example.com&token=t")!, allowLocal: false, current: nil, keys: Saved().keys))
+        #expect(.notPairing == gate.ask(URL(string: "threadbear://pair?url=http://evil.example.com&token=t")!, allowLocal: false, current: nil, keys: Saved().keys))
+        #expect(.notPairing == gate.ask(URL(string: "threadbear://quickask?url=https://evil.example.com&token=t")!, allowLocal: false, current: nil, keys: Saved().keys))
         #expect(gate.pending == nil)
     }
 }

@@ -8,7 +8,7 @@ import { spawnSync } from 'node:child_process';
 import { GiB, SCRIPT, macDf, setup, shortHome } from '../helpers/check-remote-harness.ts';
 
 // THREADBEAR_NODE: find-node.sh finds the Node nvm installed in its home.
-function onHost(checkExit: number, df: string, opts: { hang?: boolean; env?: Record<string, string> } = {}) {
+function onHost(checkExit: number, df: string, opts: { hang?: boolean; leave?: string; env?: Record<string, string> } = {}) {
   const home = shortHome();
   const base = path.join(home, '.cache', 'threadbear-check');
   const copy = path.join(base, 'runs', '1-1-0');
@@ -17,7 +17,7 @@ function onHost(checkExit: number, df: string, opts: { hang?: boolean; env?: Rec
   fs.copyFileSync(path.join(path.dirname(SCRIPT), 'limit-step.mjs'), path.join(copy, 'scripts', 'limit-step.mjs'));
   fs.mkdirSync(path.join(copy, 'runner', 'scripts'), { recursive: true });
   fs.copyFileSync(path.join(path.dirname(SCRIPT), '..', 'runner', 'scripts', 'find-node.sh'), path.join(copy, 'runner', 'scripts', 'find-node.sh'));
-  fs.writeFileSync(path.join(copy, 'check.sh'), `#!/bin/bash\necho made >"$TMPDIR/big"\n${opts.hang ? 'sleep 60\n' : ''}exit ${checkExit}\n`, { mode: 0o755 });
+  fs.writeFileSync(path.join(copy, 'check.sh'), `#!/bin/bash\necho made >"$TMPDIR/big"\n${opts.hang ? 'sleep 60\n' : ''}${opts.leave ? `mkdir -p "$TMPDIR/wt"; (cd "$TMPDIR/wt" && exec sleep 300) >/dev/null 2>&1 </dev/null &\necho $! >'${opts.leave}'\n(exec sleep 300) >/dev/null 2>&1 </dev/null &\necho $! >>'${opts.leave}'\n` : ''}exit ${checkExit}\n`, { mode: 0o755 });
   const nodeBin = path.join(home, '.nvm', 'versions', 'node', 'v24.0.0', 'bin');
   fs.mkdirSync(nodeBin, { recursive: true });
   fs.symlinkSync(process.execPath, path.join(nodeBin, 'node'));
@@ -45,6 +45,18 @@ test('--on-host records nothing when the run passed', () => {
   assert.ok(!fs.existsSync(kept));
 });
 
+// A test that timed out left a `tb land` in its temp worktree, and with the
+// run gone it sat on Tinker Desk for days (7 to 14 Nov).
+test('--on-host stops what the run left working in its temp folder or its copy', () => {
+  const pidFile = path.join(shortHome(), 'left.pid');
+  const { r } = onHost(0, macDf(100 * GiB), { leave: pidFile });
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  // One in the temp folder, one in the run's copy of the checkout.
+  const pids = fs.readFileSync(pidFile, 'utf8').trim().split('\n').map(Number);
+  assert.equal(pids.length, 2);
+  for (const pid of pids) assert.throws(() => process.kill(pid, 0), /ESRCH/, `${pid} is gone`);
+});
+
 // A host that stops answering partway: 8 Nov, Tinker Desk stopped taking ssh
 // connections and a check sat in its ssh for 79 minutes, holding every landing.
 const quickPing = { THREADBEAR_CHECK_PING_SECS: '1', THREADBEAR_CHECK_PING_MISSES: '2' };
@@ -65,7 +77,7 @@ test('with no other host, one that stops answering ends as unreachable, so check
   const r = s.run('h1', 3600, '', quickPing);
   assert.equal(r.status, 255, r.stdout + r.stderr);
   assert.match(r.stderr, /h1 stopped answering/);
-  assert.match(r.stderr, /None of h1 can run this check now\./);
+  assert.match(r.stderr, /None of h1 can be reached/);
 });
 
 test('a host that stops answering during the copy is dropped too', () => {
@@ -92,14 +104,20 @@ test('a run past the overall limit is stopped, and not as unreachable', () => {
   assert.match(r.stderr, /This check has been going for 0 minutes, waiting in line included, so it was stopped\./);
 });
 
-test('a connection lost during the check goes to the next host, and with none to this Mac (255)', () => {
+test('a connection lost during the check goes to the next host, and with none to this Mac only if the host is gone (255)', () => {
   const s = setup({ h1: { state: 'free', drop: true }, h2: { state: 'free' } });
   const r = s.run('h1,h2', 3600);
   assert.equal(r.status, 0, r.stdout + r.stderr);
   assert.match(r.stderr, /Lost the connection to h1 during the check; trying the others\./);
   assert.match(r.stdout, /ran on h2 now/);
+  // The host gone with it: unreachable, so this Mac's.
+  const gone = setup({ h1: { state: 'free', drop: true, dropDead: true } }).run('h1', 3600);
+  assert.equal(gone.status, 255, gone.stdout + gone.stderr);
+  // Still answering a new connection: the check's channel broke, not the
+  // host, so it fails rather than run here (Codex, 14 Nov).
   const alone = setup({ h1: { state: 'free', drop: true } }).run('h1', 3600);
-  assert.equal(alone.status, 255, alone.stdout + alone.stderr);
+  assert.equal(alone.status, 1, alone.stdout + alone.stderr);
+  assert.match(alone.stderr, /h1: the check's connection broke, though it still answers/);
 });
 
 test('--on-host stops a run past its own limit, so a host this Mac gave up on frees its lock', () => {
@@ -118,4 +136,21 @@ test('a hung check that ignores SIGTERM is still killed, and the next host runs 
   assert.equal(r.status, 0, r.stdout + r.stderr);
   assert.ok(Date.now() - started < 60_000, `took ${Date.now() - started} ms`);
   assert.match(r.stdout, /ran on h2 now/);
+});
+
+test("a host whose probe fails as ssh's own 255 but takes a fresh connection is never this Mac's to stand in for", () => {
+  const s = setup({ h1: { state: 'free' } });
+  fs.writeFileSync(path.join(s.fake, 'h1', 'probe-255'), '');
+  const r = s.run('h1', 3600);
+  assert.equal(r.status, 1, r.stdout + r.stderr);
+  assert.match(r.stderr, /but h1 still answers, so it doesn't run on this Mac instead/);
+});
+
+test('a login whose shell exits 124 still counts as answering, not as a timeout', () => {
+  const s = setup({ h1: { state: 'free' } });
+  fs.writeFileSync(path.join(s.fake, 'h1', 'probe-255'), '');
+  fs.writeFileSync(path.join(s.fake, 'h1', 'login-124'), '');
+  const r = s.run('h1', 3600);
+  assert.equal(r.status, 1, r.stdout + r.stderr);
+  assert.match(r.stderr, /but h1 still answers/);
 });

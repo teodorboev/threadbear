@@ -83,6 +83,7 @@ export class ClaudeNormalizer {
     switch (msg.type) {
       case 'command_lifecycle':
         this.lifecycle = true;
+        if (typeof msg.command_uuid === 'string' && ['queued', 'started', 'cancelled'].includes(msg.state)) out.push({ kind: 'messageState', id: msg.command_uuid, state: msg.state });
         if (msg.state === 'started') {
           this.turn = 'user';
           if (typeof msg.command_uuid === 'string') this.command = msg.command_uuid;

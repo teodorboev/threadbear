@@ -40,9 +40,27 @@ export function useScrubForCuts(fn: (text: string) => string): void {
   scrub = fn;
 }
 
+// A cut also never lands between the two UTF-16 halves of an emoji (or any
+// character past U+FFFF). The half left behind goes out as an escape like
+// "\\ud83e", which strict JSON parsers refuse (serde_json in the GPUI app,
+// Swift's): on 14 Nov a tool title cut through 🧵 made every transcript page
+// with it unreadable, and the app sat on its spinner until the 120 s timeout.
+function splitsPair(text: string, at: number): boolean {
+  if (at <= 0 || at >= text.length) return false;
+  const before = text.charCodeAt(at - 1);
+  const after = text.charCodeAt(at);
+  return before >= 0xd800 && before <= 0xdbff && after >= 0xdc00 && after <= 0xdfff;
+}
+
 // The furthest place at or before `end` to cut `text` without leaving part of
-// a secret before it.
+// a secret (or of an emoji) before it.
 export function safeEnd(text: string, end: number): number {
+  const at = secretSafeEnd(text, splitsPair(text, end) ? end - 1 : end);
+  // Stepping back over an emoji's first half can't land in a secret.
+  return splitsPair(text, at) ? at - 1 : at;
+}
+
+function secretSafeEnd(text: string, end: number): number {
   if (end >= text.length) return text.length;
   if (end <= 0) return 0;
   const [from, to, before] = around(text, end);
@@ -70,8 +88,14 @@ export function safeEnd(text: string, end: number): number {
 }
 
 // The nearest place at or after `start` to begin a tail of `text` (what keeps
-// the last part, as a check's output does) without part of a secret after it.
+// the last part, as a check's output does) without part of a secret (or of an
+// emoji) after it.
 export function safeStart(text: string, start: number): number {
+  const at = secretSafeStart(text, splitsPair(text, start) ? start + 1 : start);
+  return splitsPair(text, at) ? at + 1 : at;
+}
+
+function secretSafeStart(text: string, start: number): number {
   if (start <= 0) return 0;
   if (start >= text.length) return text.length;
   const [from, to, before] = around(text, start);

@@ -20,8 +20,8 @@ you go.
 - [x] Projects: the Projects page and sidebar view, a project's page, its
   decisions, Projects ▸ in the row and ... menus, the header's project tiles
   opening the page, New Thread in a project (`projects.*`, `header.projectchip`)
-- [x] The Terminal: ⌘J with a shell per thread, Run on an ask with a command,
-  the play icon on a reply's shell block (`terminal.*`, `cards.run`)
+- [x] The Terminal: ⌘J with a shell per thread and the play icon on a
+  reply's shell block (`terminal.*`)
 - [x] Slack, email and draft boxes in replies with Copy, and chips in your
   bubbles: pictures, thread ids and card mentions (`rich.draft`,
   `rich.*chips`, `transcript.user`, `transcript.agentmessage`)
@@ -35,8 +35,9 @@ you go.
 - [x] Web panels (the Convex dashboard and the like) show a placeholder with
   Open in browser (`panel.web`, `panel.convex`, `panel.bar`; pages through the
   web runtime on a Mac since 11 Nov, with Open in browser until it's installed)
-- [ ] No Browser pane, so BrowserBear's handoffs don't show in the app
-  (`browser.*`, `rich.browserbear`, `rail.right`)
+- [x] No Browser pane, so BrowserBear's handoffs don't show in the app
+  (`browser.*`, `rich.browserbear`, `rail.right`; since 13 Nov, with the
+  sign-in link's handoff and show_panel for it)
 - [x] A reply's links all go to the system browser: no "in a panel", Chrome
   profiles or Copy Link on right-click, no hover peek, ⌘-click isn't read
   (`rich.webmenu`, `rich.filemenu`, `rich.linkpeek`, `rich.cmdclick`).
@@ -47,8 +48,8 @@ you go.
 - [x] Selecting text in a reply has no Explain, Quote or Copy bar, and no
   Explain pane (`rich.selectionbar`, `rich.explain`)
 - [x] ⌘C copies plain text only, without the links (`rich.copy`)
-- [ ] Tables stretch to the column's width rather than their natural widths,
-  and list items sit a little closer than Swift's (`rich.table`, `rich.blocks`)
+- [x] Tables stop at their content width, fitting or scrolling inside the
+  available space, and list items have Swift's six-point gap (`rich.table`, `rich.blocks`)
 - [x] File names in replies don't find the files the thread's tools touched,
   and this Mac's documents and pictures open in their app, not the pane
   (`rich.filerefs`, `file.host`)
@@ -82,9 +83,8 @@ you go.
   (`composer.schedulefromsend`). In since 11 Nov
 - [x] The slash palette can't be resized (`composer.slash.resize`). In since
   11 Nov
-- [ ] In a narrow panel (a thread in a panel of its own, a narrow window) the
-  chips under the box run past its edge, where the Swift app's shrink their
-  labels to fit (`composer.modelpicker`, `composer.permission`)
+- [x] In a narrow panel the chips under the box shrink their labels to fit
+  (`composer.modelpicker`, `composer.permission`, `ChipTrigger`).
 - [x] The card: no lab-review findings on it (since 12 Nov they're a row in
   the transcript instead, in both apps), no slide between pages, picks
   don't show as chips while it's collapsed, no pictures in a Something else
@@ -119,57 +119,69 @@ you go.
 - [x] Another Mac's pictures in a transcript stay blank (`transcript.images`).
   In since 12 Nov they're asked of the runner and say "Couldn't get it from
   bruce" (why, on hover), never showing a file of this Mac's at that path.
-  Seeing them waits for connecting to other machines directly, which this
-  app doesn't do yet: through Convex they stay on their Mac
+  Through Convex they stay on their Mac (the direct link that showed them
+  in the Swift app was taken out on 13 Nov)
 
 ### Smaller things
-- [ ] The offer to continue a refused turn sits at the top, not just above the
-  composer (`banner.refusal`)
-- [ ] No milestone toast (`toast.milestone`)
-- [ ] Highlights: no Notion board (`highlights.board`)
+- [x] Messages sent from the phone have their phone mark beside the words or
+  pictures, with its note on hover and click (`transcript.user`). Row menus
+  have their copy icons, and copying a transcript disables its menu item
+  until the older pages arrive (`transcript.rowmenu`).
+- [x] The offer to continue a refused turn is above the composer
+  (`banner.refusal`, `composer.rs`), as in Swift.
+- [x] The milestone capsule shows at 100 threads and each thousand, once,
+  when you are there to see it (`toast.milestone`). Mike chose a static paw
+  with no entrance motion or wave.
+- [x] Highlights shows each project's Notion board (`highlights.board`),
+  with card mentions and links to the thread working on a card. Done folds
+  away, long columns have More, and the board scrolls sideways.
 - [ ] An image panel has no Open Simulator button; `.app`, `.icns` and PDF
   icons fall back to a symbol (`panel.image`, `patches.icons`,
   `rail.originbadge`)
 - [x] Settings > Runners, Devices and Keyboard are placeholders (the Keyboard
   file is picked up live if edited by hand) (`settings.runners`,
-  `settings.devices`, `settings.keyboard`). In since 11 Nov, but for
-  Runners' Connect to other machines directly, as this app has no direct
-  link yet
-- [ ] Connect to other machines directly: other runners' threads only come
-  through Convex here (`settings.runners`, `remote.rs`)
-- [ ] Help's two items, the tour and Finish Setting Up, are stubs that say
-  so (`menu.help`, `tour.firstrun`, `tour.setup`). About's window, the
+  `settings.devices`, `settings.keyboard`). In since 11 Nov
+- [x] Help's two items, the tour and Finish Setting Up (`menu.help`,
+  `tour.firstrun`, `tour.intros`, `tour.setup`). In since 13 Nov. About's window, the
   Edit menu, File > Close, the Window menu's Zoom, Bring All to Front and
   window list, the sidebar's and Settings' arrow keys and the Updates
   icon's popover are in since 12 Nov (`tour.about`, `menu.edit`,
   `menu.window`, `sidebar.keys`, `updates.popover`)
-- [ ] GPUI's text boxes have no spelling or grammar checks, Substitutions,
-  Look Up, Translate, Writing Tools or Services on selected words: its input
-  isn't an AppKit text view. The Swift app's menu bar has none of these
-  either, but its boxes had them on the right-click menu
+- [x] The Mac's spelling/grammar checks, Substitutions and Speech, with
+  Look Up, Translate, Writing Tools and Services on selected words. The shared
+  selection getter serves both spelling/Speech and the native responder bridge;
+  returned text is checked against the original editable selection. Other
+  systems omit these Mac services (`composer.spelling`, `rich.textservices`).
 - [x] The archive and hibernate flights: the open thread's page drops into
   the Archived heading or sinks into the moon, and the heading's box bounces
   (`juice.archiveflight`, `juice.hibernateflight`). A drawn card with a
   transcript's shape, not a picture of the real one, and level, as GPUI can't
   picture or turn a view
-- [ ] The bears and the little animations: the working and waking bears,
-  inbox zero, the message rising from the box,
-  the Librarian's wobble (`juice.*`, `foundation.bear`, `transcript.working`,
-  `transcript.woke`, `transcript.sendlift`, `librarian.picture`)
-- [ ] The system accent colour isn't followed (always blue), and Reduce Motion
-  isn't read (`foundation.theme`, `foundation.reducemotion`)
-- [ ] The switches are smaller than macOS 27's (the Usage helper's note: one
-  fix for Settings, the Librarian page and Usage). Settings' are macOS's now
-  (`mac_switch.rs`: 36 by 16 with a pill knob, as measured in the Swift
-  Settings window); the Librarian page and Usage still have the kit's, and
-  want measuring there first (the Usage helper saw 44 by 20)
+- [x] The little animations Mike picked from Swift-beside-GPUI clips on 13
+  Nov: the sidebar's selection sliding, a row archived from its button
+  sliding off, a sent message rising, the send arrow's hop, an arriving card
+  settling in with the done tick drawing on, the activity bar's bounce,
+  sliding square and view settling in, and the Librarian's wobble (a sway, as
+  GPUI can't turn a picture). He passed over the bears (inbox zero, the pane
+  bear, the working, waking and sitting bears, the milestone toast's wave),
+  a finished row's wash and drawn-on tick, and the unread dot's pop
+  (`transcript.sendlift`, `librarian.picture`, `rail.activity`, `card.done`)
+- [x] The working line's paw moving, in place of the bear: every 2.4 s it
+  flips, spins, kneads, waves or leaves a few prints, one at random each
+  time, as Mike asked on 13 Nov (`transcript.working`)
+- [ ] A row pressing in while the mouse is down: GPUI can't scale a row
+- [x] The Mac's accent colour is followed, and Reduce Motion is read by the
+  kit at launch and again when the app comes back to the front
+  (`foundation.theme`, `foundation.reducemotion`).
+- [x] Settings, the Librarian and Usage use the Mac-sized switches
+  (`mac_switch.rs`); the larger switches outside forms use `outside_form`.
 
 ## Before other people move over
 
 - [x] The app updating itself (`system.selfupdate`)
-- [ ] A seamless restart onto a new build (`system.handover`): the window
-  goes and comes back for now, so the app only restarts by itself while
-  it isn't in front
+- [x] A seamless restart onto a new build (`system.handover`): the incoming
+  app restores the windows and threads before the outgoing app leaves
+  (`handover.rs`).
 - [x] Crash reports to Sentry, and the hang watch (`system.crash`,
   `system.hangwatch`)
 - [x] The activity log (`system.activitylog`, `foundation.tooltips`)

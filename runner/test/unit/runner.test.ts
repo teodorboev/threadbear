@@ -502,6 +502,71 @@ test('snooze releases the CLI, hides the thread, and brings it back unread', asy
   assert.equal(seen.woke, undefined);
 });
 
+// Archived while hibernating, it woke in the archive anyway: a "Woke up"
+// and an unread mark there, and any message it had queued started while it
+// was still archived (13 Nov 2026, the implicit state machines scan). Its
+// hibernation now just ends there, quietly, so brought back it's in the
+// inbox, as it would have been.
+test('a hibernating thread that is archived stays quiet in the archive, and is in the inbox when brought back after its time', () => {
+  const h = makeHarness();
+  const { thread } = create(h);
+  h.adapter.last.init();
+  h.adapter.last.result();
+  h.runner.markSeen(thread.id, 99);
+  h.runner.update({ threadId: thread.id, snoozedUntil: new Date(h.clock.now() + 60 * MIN).toISOString() });
+  h.runner.update({ threadId: thread.id, archived: true });
+  h.clock.advance(2 * 60 * MIN);
+  const t = h.runner.get(thread.id);
+  assert.equal(t.woke, undefined);
+  assert.equal(t.needsYou, false);
+  assert.ok(!h.events(thread.id).some((e) => e.type === 'system.note' && e.text.startsWith('Woke up')));
+  assert.deepEqual(h.runner.list(['archived']).map((x) => x.id), [thread.id]);
+  assert.equal(h.runner.get(thread.id).snoozedUntil, undefined, 'its hibernation ended');
+  h.runner.update({ threadId: thread.id, archived: false });
+  assert.deepEqual(h.runner.list().map((x) => x.id), [thread.id]);
+  assert.ok(!h.events(thread.id).some((e) => e.type === 'system.note' && e.text.startsWith('Woke up')));
+});
+
+// From Codex's review of that fix: skipping archived threads at start left
+// a hibernation in words that was still being worked out (its answer lost
+// with the old runner) with its year-9999 time for good, so bringing the
+// thread back left it asleep with nothing to wake it.
+test('an archived thread whose hibernation in words was cut short by a restart is in the inbox when brought back', () => {
+  const h = makeHarness();
+  const { thread } = create(h);
+  h.adapter.last.init();
+  h.adapter.last.result();
+  h.runner.update({ threadId: thread.id, archived: true });
+  const st = h.runner.threads.get(thread.id)!;
+  st.rec.snoozedUntil = '9999-01-01T00:00:00.000Z';
+  st.rec.wakeWhen = { said: 'when the build is done', pending: true } as never;
+  h.runner.markDirty(st);
+  h.runner.flush?.();
+  const again = h.restart();
+  again.runner.update({ threadId: thread.id, archived: false });
+  assert.deepEqual(again.runner.list().map((x) => x.id), [thread.id]);
+  assert.equal(again.runner.get(thread.id).snoozedUntil, undefined);
+});
+
+// Archived (or snoozed) during a turn with a message queued behind it: the
+// turn ends and the queue is kept for when it comes back, but scheduleIdle
+// returned on the queue before releasing a put-away thread's CLI, so it
+// stayed alive with any background work, and the archive's cleanup never
+// ran (13 Nov 2026, the implicit state machines scan, Codex's review).
+test('a thread archived during a turn with a message queued behind it lets its CLI go', async () => {
+  const h = makeHarness();
+  const { thread } = create(h);
+  const s = h.adapter.last;
+  s.init();
+  h.runner.send(thread.id, 'and then this', [], { queue: true });
+  assert.equal(h.runner.threads.get(thread.id)!.rec.queue.length, 1);
+  h.runner.update({ threadId: thread.id, archived: true });
+  if (h.runner.get(thread.id).status === 'running') s.result('interrupted');
+  await tick();
+  assert.equal(s.ended, true, 'its CLI goes');
+  assert.equal(h.runner.threads.get(thread.id)!.rec.queue.length, 1, 'the message waits for it to come back');
+});
+
 test('the wake note counts from when it first went away, even if the time changed', () => {
   const h = makeHarness();
   const { thread } = create(h);
@@ -1848,7 +1913,8 @@ test('live state: a when chip comes and goes by itself on the poll, with its bad
   fs.writeFileSync(path.join(project, 'count'), '3');
   // No summary asked for: the poll reads it again by itself.
   h.clock.advance(21_000);
-  await settle();
+  // The poll runs a real shell, which a busy Mac can take seconds to start.
+  await until(() => h.runner.get(thread.id).actions !== undefined, 'the chip to show');
   const shown = h.runner.get(thread.id);
   assert.deepEqual(shown.actions?.map((a) => [a.title, a.badge]), [['Your turn', 3]]);
   assert.deepEqual(checkSummary(shown), []);
@@ -1856,8 +1922,7 @@ test('live state: a when chip comes and goes by itself on the poll, with its bad
   assert.ok(!h.events(thread.id).some((e) => e.type === 'system.note'));
   fs.writeFileSync(path.join(project, 'count'), '0');
   h.clock.advance(21_000);
-  await settle();
-  assert.equal(h.runner.get(thread.id).actions, undefined);
+  await until(() => h.runner.get(thread.id).actions === undefined, 'the chip to go');
 });
 
 test('live state: a command action that changes what its chips ask swaps them straight away, without waiting for the poll', async () => {
@@ -1882,6 +1947,51 @@ test('live state: a command action that changes what its chips ask swaps them st
   await h.runner.runAction(thread.id, 'server.stop');
   await h.runner.patchesIdle();
   assert.deepEqual(titles(), ['Start']);
+});
+
+// The turn's end asks for live state again (the agent may have resolved
+// comments or started a server). It went through refreshPatches, which
+// drops the ask while a read is going, so a poll's read that looked before
+// the turn's change stood until the next poll, 20 s later (13 Nov 2026,
+// the implicit state machines scan; the same shape as 589c357f4).
+test("live state: a turn's end while a poll's read is going reads again once that read ends", async () => {
+  const root = tmpDir();
+  const project = path.join(root, 'app');
+  const gate = tmpDir();
+  fs.mkdirSync(path.join(project, '.threadbear/patches'), { recursive: true });
+  // The chip shows while `on` exists. With `hold` there, a read notes what
+  // it saw, then waits for `go` before answering with it.
+  fs.writeFileSync(path.join(project, '.threadbear/patches/server.ts'), `
+    import fs from "node:fs";
+    const gate = ${JSON.stringify(gate)};
+    const on = async ({ cwd }) => {
+      const seen = fs.existsSync(cwd + "/on");
+      if (fs.existsSync(gate + "/hold")) {
+        fs.writeFileSync(gate + "/entered", "");
+        while (!fs.existsSync(gate + "/go")) await new Promise((r) => setTimeout(r, 10));
+      }
+      return seen;
+    };
+    export default { actions: [{ title: "Stop", run: "rm on", when: on }] };`);
+  const h = makeHarness(undefined, {}, { panelsRoot: root, actionShell: ['/bin/sh', '-c'], actionTimeoutMs: 5000 });
+  const { thread } = create(h, { cwd: project });
+  await until(() => h.adapter.last !== undefined && h.runner.get(thread.id).patches?.length === 1, 'the CLI to start and the patch to load');
+  const s = h.adapter.last;
+  s.init();
+  await h.runner.patchesIdle();
+  assert.equal(h.runner.get(thread.id).actions, undefined);
+
+  // The poll's read starts, and looks before the turn starts the server.
+  fs.writeFileSync(path.join(gate, 'hold'), '');
+  h.clock.advance(21_000);
+  await until(() => fs.existsSync(path.join(gate, 'entered')), "the poll's read to start");
+  fs.writeFileSync(path.join(project, 'on'), '');
+  s.result('completed');
+  await tick();
+  fs.rmSync(path.join(gate, 'hold'));
+  fs.writeFileSync(path.join(gate, 'go'), '');
+  await until(() => h.runner.get(thread.id).actions !== undefined, "the turn's change to show without another poll");
+  assert.deepEqual(h.runner.get(thread.id).actions?.map((a) => a.title), ['Stop']);
 });
 
 test('a turn.end hook runs after a turn that edited a matching file, and a failure is told to the agent twice at most', async () => {

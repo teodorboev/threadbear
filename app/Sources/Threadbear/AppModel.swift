@@ -213,7 +213,9 @@ final class AppModel {
             // into one of this Mac's: its calls go to this Mac's runner
             // ("Thread not found") and its own runner's events are dropped.
             // Setting threads in its own didSet doesn't run didSet again.
-            for (id, thread) in threads where thread.runnerId == nil {
+            // Except one this Mac's own list says has arrived here from a move
+            // (`arrivedHere`, confirmArrival).
+            for (id, thread) in threads where thread.runnerId == nil && !arrivedHere.contains(id) {
                 if let runnerId = oldValue[id]?.runnerId { threads[id]?.runnerId = runnerId }
             }
             // Nor does the sidebar's table say if another runner's thread is
@@ -227,11 +229,9 @@ final class AppModel {
             // A thread read through Convex keeps the asks of the card it
             // shows, whatever summary is stored over it (the table's row,
             // a reply's): none of those carry them (withRelayCard).
-            if !directRemoteLink {
-                for (id, thread) in threads where thread.runnerId != nil && oldValue[id] != thread {
-                    let carded = withRelayCard(thread)
-                    if carded != thread { threads[id] = carded }
-                }
+            for (id, thread) in threads where thread.runnerId != nil && oldValue[id] != thread {
+                let carded = withRelayCard(thread)
+                if carded != thread { threads[id] = carded }
             }
             threadsVersion &+= 1
             refreshDockBadge()
@@ -256,7 +256,6 @@ final class AppModel {
                 mainContextChanged()
                 // Back and forward set this without select().
                 servePanelRequest()
-                tidyRemoteClients()
             }
         }
     }
@@ -355,7 +354,7 @@ final class AppModel {
     /// The runner the next new thread starts on ("Runs on", the
     /// composer's machine chip): nil for this Mac, or another runner's id.
     /// Its folder, account, model and effort are then that runner's
-    /// (`newThreadLogins`), and the thread is made over its connection.
+    /// (`newThreadLogins`), and the thread is made through Convex.
     /// For one thread, like the folder: back to this Mac after it starts.
     var newThreadRunnerId: String?
     /// The runner new threads start on when Mike hasn't picked one (the
@@ -366,19 +365,6 @@ final class AppModel {
     }
     static let defaultRunnerKey = "defaultRunnerId"
 
-    /// Settings > Runners, "Connect to other machines directly": open other
-    /// runners' threads over the tailnet, as before 5 Nov, rather than
-    /// through this Mac's runner and Convex (docs/protocol.md, "Other
-    /// runners' threads through the backend"). Off by default; it goes once
-    /// the Convex way has been used for a while.
-    var directRemoteLink: Bool = UserDefaults.standard.bool(forKey: AppModel.directRemoteLinkKey) {
-        didSet {
-            guard directRemoteLink != oldValue else { return }
-            UserDefaults.standard.set(directRemoteLink, forKey: Self.directRemoteLinkKey)
-            switchedRemoteLink()
-        }
-    }
-    static let directRemoteLinkKey = "directRemoteLink"
     /// Mike picked this draft's runner himself, so the default doesn't
     /// move it when the runner list next changes.
     var newThreadRunnerPicked = false
@@ -392,8 +378,7 @@ final class AppModel {
     /// by `pools.updated`.
     var pools: [Pool] = []
     /// Other runners' logins (accounts, pools, defaults), by runner id, from
-    /// the hello their connection made and their accounts.updated and
-    /// pools.updated since: what the composer's pickers offer on one of
+    /// Convex through this Mac's runner (`loadRelayLogins`): what the composer's pickers offer on one of
     /// their threads (`logins(for:)`).
     var remoteLogins: [String: RunnerLogins] = [:]
     /// The runner has pools. False for an older one, which sends none in
@@ -413,14 +398,25 @@ final class AppModel {
     private(set) var lastModels: [String: String] = AppModel.loadMemory(AppModel.lastModelKey)
     private(set) var lastEfforts: [String: String] = AppModel.loadMemory(AppModel.lastEffortKey)
     /// The mode picked in the new-thread composer, for that draft only.
-    /// Nil: the runner's default (`newThreadPermission`).
+    /// Nil: the last one picked, else the runner's default (`newThreadPermission`).
     var newThreadPermissionPick: PermissionMode?
-    /// The mode the next new thread starts on: the one picked, else its
-    /// runner's `defaults.permissionMode` (Auto on a new install), else Full
-    /// access, for a runner that has none, predates it, or hasn't said yet.
+    /// The mode last picked for a new thread, kept across launches as the
+    /// model is: Full, Ask or Auto, never Plan first, which is for one task
+    /// (Mike, 13 Nov, after Ian kept landing back on Auto).
+    private(set) var lastPermission: PermissionMode? = AppModel.loadLastPermission()
+    /// The mode the next new thread starts on: the one picked, else the one
+    /// last picked, else its runner's `defaults.permissionMode` (Auto on a
+    /// new install), else Full access, for a runner that has none, predates
+    /// it, or hasn't said yet.
     var newThreadPermission: PermissionMode {
-        get { newThreadPermissionPick ?? newThreadLogins?.defaults.permissionMode ?? .full }
-        set { newThreadPermissionPick = newValue }
+        get { newThreadPermissionPick ?? lastPermission ?? newThreadLogins?.defaults.permissionMode ?? .full }
+        set {
+            newThreadPermissionPick = newValue
+            if [.full, .ask, .auto].contains(newValue) {
+                lastPermission = newValue
+                UserDefaults.standard.set(newValue.rawValue, forKey: Self.lastPermissionKey)
+            }
+        }
     }
     /// What the runner says about the Claude and Codex CLIs (`clis.list`,
     /// `clis.updated`). Empty until it's said anything.
@@ -463,8 +459,8 @@ final class AppModel {
     /// The Move sheet, while it's open.
     var moveRequest: MoveRequest?
     /// Other runners, from this one (docs/protocol.md, "Other runners'
-    /// threads"): their names, icons, whether they're online and how to
-    /// reach them. Their threads are in `threads`, marked with `runnerId`
+    /// threads"): their names, icons and whether they're online. Their
+    /// threads are in `threads`, marked with `runnerId`
     /// (RemoteRunners.swift).
     var remoteRunners: [RemoteRunner] = []
     /// Mike's runner order (`remoteIndex.order`, backend API 58), or the
@@ -483,23 +479,16 @@ final class AppModel {
     var runnerStats: [String: RunnerMachineStats] = [:]
     /// The runner has answered `runners.stats` at least once since then.
     var runnerStatsAsked = false
-    /// The last `remoteThreads` list, kept to put the sidebar table's rows
-    /// back once a runner's own connection closes.
+    /// The last `remoteThreads` list.
     @ObservationIgnored var remoteIndex = RemoteThreads()
-    /// Other runners' threads whose summary came from their own runner's
-    /// connection, which is fuller and fresher than the sidebar table's
-    /// row, until that connection closes.
-    @ObservationIgnored var liveRemote: Set<String> = []
     /// Threads made on another runner through Convex that the sidebar table
-    /// doesn't list yet: kept until it does.
+    /// doesn't list yet, and threads whose old runner let them go during a
+    /// move that where they're going hasn't listed yet (movedAway): kept
+    /// until it does.
     @ObservationIgnored var madeRemote: Set<String> = []
-    /// One connection per other runner, made when one of its threads is
-    /// opened.
-    @ObservationIgnored var remoteClients = RemoteClients(version: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev")
-    @ObservationIgnored var remoteTidy: Task<Void, Never>?
-    /// This Mac's copies of files in other runners' threads
-    /// (`remoteFiles`, RemoteFiles.swift), made on first use.
-    @ObservationIgnored var remoteFileStore: RemoteFileStore?
+    /// Threads being stored as this Mac's because its own list has them,
+    /// having moved here: `threads`' didSet lets their old runner go.
+    @ObservationIgnored var arrivedHere: Set<String> = []
     /// The thread a transcript link is being followed in, while a click on
     /// it is handled (TranscriptTextView.forItsThread): a thread open in a
     /// panel isn't the selected one, and another Mac's paths mustn't be
@@ -791,6 +780,7 @@ final class AppModel {
     /// came along is still remembered; other providers add ".<provider>".
     static let lastModelKey = "lastModel"
     static let lastEffortKey = "lastEffort"
+    static let lastPermissionKey = "lastPermissionMode"
     static let memoryProviders = ["claude", "codex", "cursor", "opencode"]
     static let collapsedSectionsKey = "collapsedSections"
     /// Set once Hibernating and Archive have been folded the first time.
@@ -831,7 +821,6 @@ final class AppModel {
             save?(layout)
             self?.dockChanged(layout)
         }
-        wireRemoteClients()
         clockTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated {
                 guard let self else { return }
@@ -928,14 +917,14 @@ final class AppModel {
     }
 
     /// The logins a new thread's pickers offer and it starts on: this
-    /// Mac's, or the chosen runner's once its connection has said hello
-    /// (nil until then).
+    /// Mac's, or the chosen runner's once Convex has given them (nil until
+    /// then).
     var newThreadLogins: RunnerLogins? {
         guard let runnerId = newThreadRunnerId else { return RunnerLogins(accounts: accounts, pools: pools, defaults: defaults) }
         return remoteLogins[runnerId]
     }
 
-    /// The same, with none for a runner that hasn't said hello yet.
+    /// The same, with none for a runner whose logins haven't come yet.
     var draftLogins: RunnerLogins {
         newThreadLogins ?? RunnerLogins(accounts: [], pools: [], defaults: RunnerDefaults(cwd: "", accountId: ""))
     }
@@ -969,6 +958,10 @@ final class AppModel {
 
     static func memoryKey(_ base: String, provider: String) -> String {
         provider == "claude" || provider.isEmpty ? base : base + "." + provider
+    }
+
+    private static func loadLastPermission() -> PermissionMode? {
+        UserDefaults.standard.string(forKey: lastPermissionKey).flatMap(PermissionMode.init(rawValue:)).flatMap { [.full, .ask, .auto].contains($0) ? $0 : nil }
     }
 
     private static func loadMemory(_ base: String) -> [String: String] {

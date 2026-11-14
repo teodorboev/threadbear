@@ -128,7 +128,7 @@ test('account discovery reads only the login email', () => {
   const accts = path.join(root, 'Accounts');
   for (const n of ['claude-2', 'claude-10', 'codex-1', 'claude-x']) fs.mkdirSync(path.join(accts, n), { recursive: true });
   fs.writeFileSync(path.join(accts, 'claude-2', '.claude.json'), JSON.stringify({ oauthAccount: { emailAddress: 'two@example.com' } }));
-  const found = discoverAccounts({ claudeMainDir: main, claudeMainJson: path.join(root, 'claude.json'), tokenStatsAccountsDir: accts });
+  const found = discoverAccounts({ userHome: root, pathEnv: '', claudeMainDir: main, claudeMainJson: path.join(root, 'claude.json'), tokenStatsAccountsDir: accts });
   assert.deepEqual(found, [
     { id: 'claude-main', provider: 'claude', title: 'main@example.com', email: 'main@example.com', configDir: main },
     { id: 'claude-2', provider: 'claude', title: 'two@example.com', email: 'two@example.com', configDir: path.join(accts, 'claude-2') },
@@ -144,7 +144,7 @@ test("without Token Stats, logins come from the data dir's accounts folder", () 
   const stats = path.join(root, 'Accounts');
   fs.mkdirSync(path.join(stats, 'claude-1'), { recursive: true });
   fs.mkdirSync(path.join(stats, 'claude-2'), { recursive: true });
-  const base = { claudeMainDir: path.join(root, 'none'), claudeMainJson: path.join(root, 'none.json') };
+  const base = { userHome: root, pathEnv: '', claudeMainDir: path.join(root, 'none'), claudeMainJson: path.join(root, 'none.json') };
   assert.deepEqual(discoverAccounts({ ...base, tokenStatsAccountsDir: path.join(root, 'no-stats'), accountsDir: own }).map((a) => [a.id, a.configDir]), [['claude-1', path.join(own, 'claude-1')]]);
   // Both: Token Stats keeps an id it has.
   assert.deepEqual(discoverAccounts({ ...base, tokenStatsAccountsDir: stats, accountsDir: own }).map((a) => [a.id, a.configDir]), [['claude-1', path.join(stats, 'claude-1')], ['claude-2', path.join(stats, 'claude-2')]]);
@@ -158,7 +158,7 @@ test("an account's default model: its settings.json, made exact by what the CLI 
   const accts = path.join(root, 'Accounts');
   fs.mkdirSync(path.join(accts, 'claude-2'), { recursive: true });
   fs.writeFileSync(path.join(accts, 'claude-2', 'settings.json'), '{ not json');
-  const cfg = { claudeMainDir: main, claudeMainJson: path.join(root, 'claude.json'), tokenStatsAccountsDir: accts };
+  const cfg = { userHome: root, pathEnv: '', claudeMainDir: main, claudeMainJson: path.join(root, 'claude.json'), tokenStatsAccountsDir: accts };
   const found = discoverAccounts(cfg);
   assert.equal(found[0].defaultModel, 'claude-fable-5-1', 'the [1m] suffix is not part of the id');
   assert.equal(found[1].defaultModel, undefined, 'nothing set: unknown until a turn runs');

@@ -19,6 +19,7 @@ import type { Notification } from './runner.ts';
 import type { Project, ProjectIcon, ProjectLink, ProjectMaker, ThreadProject, ThreadSummary } from './protocol.ts';
 import { ErrorCode, RpcError } from './protocol.ts';
 import type { ThreadRecord } from './store.ts';
+import type { PatchThread } from './patches.ts';
 import type { ProjectFolder } from './patches.ts';
 import { atomicWriteFileSync, isDirectory, readJsonSync } from './fsutil.ts';
 import { expandHome } from './config.ts';
@@ -243,6 +244,20 @@ export class Projects {
       if (p) out.push({ ...m, title: p.title });
     }
     return out.length ? out : undefined;
+  }
+
+  // The thread as its patches' live functions see it (patches.ts,
+  // PatchThread): its title and the projects it's in that aren't archived,
+  // a part with its parent.
+  patchThread(rec: ThreadRecord): PatchThread {
+    const projects: PatchThread['projects'] = [];
+    for (const m of rec.projects ?? []) {
+      const p = this.items.get(m.id);
+      if (!p || p.archived) continue;
+      const parent = p.parentId ? this.items.get(p.parentId) : undefined;
+      projects.push(parent ? { id: p.id, title: p.title, parent: { id: parent.id, title: parent.title } } : { id: p.id, title: p.title });
+    }
+    return { title: rec.title, projects };
   }
 
   // The folders the thread's patches load from, besides its own.

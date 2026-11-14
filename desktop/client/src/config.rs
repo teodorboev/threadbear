@@ -53,6 +53,45 @@ pub fn default_home() -> PathBuf {
     home.join("Library").join("Application Support").join("Threadbear")
 }
 
+/// Why a scripted app (one with THREADBEAR_AUTOMATION set) mustn't start
+/// with `config`: it would reach the live runner, the one with the real data
+/// folder `real`, and every command a script sent would act on Mike's real
+/// threads, write his drafts and settings, and start real turns. That's what
+/// an app with no THREADBEAR_HOME gets (the parity audit, 13 Nov). Not only
+/// the real folder itself: a folder whose token is the real one (`secrets`
+/// linked to it), or any folder on the live runner's port (a copied token),
+/// gets through to it too (Codex's review). `allowed` is
+/// THREADBEAR_AUTOMATION_LIVE=1, for when the person whose runner it is says
+/// so, as the Swift app's `--automation-allow-live`.
+pub fn scripted_refusal(config: &RunnerConfig, real: &Path, allowed: bool) -> Option<String> {
+    if allowed {
+        return None;
+    }
+    // Compared with links resolved, so ~/x/../Library/... or a link to the
+    // real folder is the real folder too.
+    // A file not there yet (a token before the runner's first start) by its
+    // folder, so a linked `secrets` still counts.
+    let resolved = |p: &Path| {
+        std::fs::canonicalize(p).unwrap_or_else(|_| match (p.parent().and_then(|d| std::fs::canonicalize(d).ok()), p.file_name()) {
+            (Some(dir), Some(name)) => dir.join(name),
+            _ => p.to_path_buf(),
+        })
+    };
+    let live = RunnerConfig { home: real.to_path_buf(), port: port_from_runner_json(real).unwrap_or(DEFAULT_PORT) };
+    let why = if resolved(&config.home) == resolved(real) {
+        format!("won't use the real data folder ({})", real.display())
+    } else if resolved(&config.token_path()) == resolved(&live.token_path()) {
+        format!("won't use the live runner's token ({} is it)", config.token_path().display())
+    } else if config.port == live.port {
+        format!("won't connect on the live runner's port ({})", live.port)
+    } else {
+        return None;
+    };
+    Some(format!(
+        "A scripted app {why}: that runner has the real threads. Set THREADBEAR_HOME to the mock's or a dev runner's (desktop/scripts/dev-app.sh does), or THREADBEAR_AUTOMATION_LIVE=1 if the person whose runner it is has said so."
+    ))
+}
+
 fn expand_home(p: &str) -> PathBuf {
     if p == "~" {
         return dirs::home_dir().unwrap_or_default();
@@ -83,6 +122,39 @@ mod tests {
         std::fs::write(dir.join("runner.json"), r#"{"port": 0}"#).unwrap();
         assert_eq!(port_from_runner_json(&dir), None);
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_scripted_app_refuses_the_live_runner() {
+        let base = std::env::temp_dir().join(format!("tb-desktop-refuse-{}", std::process::id()));
+        let real = base.join("real");
+        let other = base.join("mock");
+        std::fs::create_dir_all(real.join("secrets")).unwrap();
+        std::fs::create_dir_all(&other).unwrap();
+        std::fs::write(real.join("runner.json"), r#"{"port": 9555}"#).unwrap();
+        let at = |home: PathBuf, port: u16| RunnerConfig { home, port };
+        assert!(scripted_refusal(&at(real.clone(), 1234), &real, false).is_some());
+        // The same folder by another way there.
+        assert!(scripted_refusal(&at(base.join("mock/../real"), 1234), &real, false).is_some());
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(&real, base.join("link")).unwrap();
+            assert!(scripted_refusal(&at(base.join("link"), 1234), &real, false).is_some());
+            // A folder of its own whose token is the real one.
+            let borrowed = base.join("borrowed");
+            std::fs::create_dir_all(&borrowed).unwrap();
+            std::os::unix::fs::symlink(real.join("secrets"), borrowed.join("secrets")).unwrap();
+            assert!(scripted_refusal(&at(borrowed, 1234), &real, false).unwrap().contains("token"));
+        }
+        // The real folder not made yet still counts.
+        assert!(scripted_refusal(&at(base.join("none"), 1234), &base.join("none"), false).is_some());
+        // The live runner's port, from its runner.json, else the default.
+        assert!(scripted_refusal(&at(other.clone(), 9555), &real, false).unwrap().contains("port"));
+        assert!(scripted_refusal(&at(other.clone(), DEFAULT_PORT), &base.join("none"), false).unwrap().contains("port"));
+        assert_eq!(scripted_refusal(&at(other.clone(), 1234), &real, false), None);
+        // Told it may.
+        assert_eq!(scripted_refusal(&at(real.clone(), 9555), &real, true), None);
+        std::fs::remove_dir_all(&base).unwrap();
     }
 
     #[test]

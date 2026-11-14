@@ -55,12 +55,6 @@ import Testing
         #expect(normal.entries.map(\.size) == [1024, 0])
     }
 
-    @Test func aRemoteFilesSizeOutOfRangeIsZero() throws {
-        let file = try decode(FileRead.self, #"{"path":"/a","size":1e100,"modifiedAt":"x","unchanged":true}"#)
-        #expect(file.stamp.size == 0)
-        #expect(try decode(FileRead.self, #"{"path":"/a","size":2048,"unchanged":true}"#).stamp.size == 2048)
-    }
-
     // MARK: runners.stats
 
     @Test func aRunnersStatsOutOfRangeLeaveThatRunnerOut() throws {

@@ -22,7 +22,7 @@ import { codeWriteNote, codeWriteReason, runsAsCodeByName, type CodeWrite } from
 import path from 'node:path';
 import { RUNNER_VERSION } from '../../config.ts';
 import { stripModelSuffix } from '../../accounts.ts';
-import { END_TURN_FULL_NAME, END_TURN_NUDGE, endTurnMessageStands, endTurnWantsReply, ONE_REPLY_END_TURN_NUDGE, ONE_REPLY_WRITE_NUDGE, owedReplyAfterCompact, WakeRead } from '../../needs.ts';
+import { END_TURN_FULL_NAME, END_TURN_NUDGE, endTurnMessageStands, endTurnWantsReply, needsFromTool, ONE_REPLY_END_TURN_NUDGE, ONE_REPLY_WRITE_NUDGE, owedReplyAfterCompact, replyAsks, replyAsksNudge, WakeRead } from '../../needs.ts';
 
 // Variables a parent Claude Code session sets for its own children. If the
 // runner was started from inside one (tests, a terminal in T3), they would
@@ -75,6 +75,13 @@ export function sdkPermissionMode(mode: PermissionMode): 'bypassPermissions' | '
   if (mode === 'auto' || mode === 'plan') return mode;
   return mode === 'full' ? 'bypassPermissions' : 'default';
 }
+
+// How many end_turn calls are refused for one message the CLI hasn't handed
+// over. The CLI hands every waiting message over with the first refusal's
+// result (two sent together both started then, 13 Nov 2026), so the second is
+// for one it kept back anyway (from Codex's review), and the limit is so a
+// frame that never comes can't keep a turn from ending.
+const UNREAD_REFUSALS = 2;
 
 // Streaming input for query(): the runner pushes one user message per turn
 // and ends it to let the CLI exit.
@@ -408,6 +415,13 @@ class ClaudeSession implements AgentSession {
   private messageStands = false;
   private pastEndTurn = false;
   private endTurnCall?: string;
+  // Each end_turn call's arguments until its result, then whether the one
+  // taken said nothing was needed, and the words written after it: a reply
+  // that closes on a question under a done card is sent back for its card
+  // (onStop; needs.ts, REPLY_ASKS).
+  private endTurnInputs = new Map<string, unknown>();
+  private doneCard = false;
+  private replyAfterEnd = '';
   // Whether the agent has read a background task's notification that came
   // into the turn: from then its end_turn is behind it, so the Stop hook
   // asks for another (needs.ts, WakeRead).
@@ -421,6 +435,14 @@ class ClaudeSession implements AgentSession {
   // a new message from the user (the agent goes on to that) or the turn's
   // result ends it.
   private owedReply?: string[];
+  // Messages sent that the CLI hasn't handed to the agent yet, by uuid: one
+  // sent while a response is being written waits in the CLI's queue until
+  // that response's tools have run, and the CLI's command_lifecycle frame
+  // "started" says when it goes over (unreadMessage), with how many calls
+  // end_turn has refused for each: a refusal is what hands it over, so a
+  // second is only for one the CLI kept back, and there is never a third.
+  private notStarted = new Map<string, number>();
+  private lifecycle = false;
 
   constructor(opts: StartSessionOptions, sink: SessionSink, deps: ClaudeAdapterDeps) {
     this.opts = opts;
@@ -516,6 +538,7 @@ class ClaudeSession implements AgentSession {
     const stop = input as { stop_hook_active?: boolean; background_tasks?: unknown[] };
     const ended = this.endTurnTaken;
     const wrote = this.wroteAfterEnd || this.messageStands;
+    const asks = this.doneCard && this.wroteAfterEnd ? replyAsks(this.replyAfterEnd) : undefined;
     this.forgetEndTurn();
     // A turn that ended in plain text leaves the runner reading the card
     // from the prose (needs.ts, needsFromText), which drops what end_turn
@@ -528,7 +551,15 @@ class ClaudeSession implements AgentSession {
     if (!this.hasEndTurn || stop.stop_hook_active || stop.background_tasks?.length) return {};
     // One reply: end_turn without words after it leaves no reply, so the
     // agent is asked for it, once (the hook's own guard, stop_hook_active).
-    if (ended) return this.oneReply && !wrote ? { decision: 'block', reason: ONE_REPLY_WRITE_NUDGE } : {};
+    if (ended && this.oneReply && !wrote) return { decision: 'block', reason: ONE_REPLY_WRITE_NUDGE };
+    // ...and one whose reply closes by asking for an answer, over a card that
+    // said nothing was needed, is asked for the card, once. The runner is told
+    // first, so the end_turn it brings isn't refused as a repeat.
+    if (ended && this.oneReply && asks) {
+      this.sink.output({ kind: 'endTurnNudge', reopen: true });
+      return { decision: 'block', reason: replyAsksNudge(asks) };
+    }
+    if (ended) return {};
     this.sink.output({ kind: 'endTurnNudge' });
     return { decision: 'block', reason: this.oneReply ? ONE_REPLY_END_TURN_NUDGE : END_TURN_NUDGE };
   }
@@ -553,6 +584,8 @@ class ClaudeSession implements AgentSession {
     this.messageStands = false;
     this.pastEndTurn = false;
     this.endTurnCall = undefined;
+    this.doneCard = false;
+    this.replyAfterEnd = '';
   }
 
   private onEndTurn(input: HookInput): Record<string, never> {
@@ -718,9 +751,11 @@ class ClaudeSession implements AgentSession {
           this.wake.reset();
           this.owedReply = undefined;
           this.endTurnAsks.clear();
+          this.endTurnInputs.clear();
           this.openCalls.clear();
           this.checkedCalls.clear();
         }
+        this.noteLifecycle(msg as Record<string, unknown>);
         this.noteCalls(msg as Record<string, unknown>);
         for (let out of this.normalizer.handle(msg as Record<string, unknown>)) {
           // The mode the call went through on, recorded at the call.
@@ -743,18 +778,32 @@ class ClaudeSession implements AgentSession {
             if (this.wake.see(ev)) this.forgetEndTurn();
             if (ev.type === 'tool.call' && ev.name === END_TURN_FULL_NAME) {
               this.endTurnCall = ev.itemId;
+              this.endTurnInputs.set(ev.itemId, ev.input);
               const asks = Array.isArray(ev.input.asks) ? (ev.input.asks as { question?: unknown; action?: unknown }[]) : [];
               this.endTurnAsks.set(ev.itemId, asks.map((a) => String(a?.question ?? a?.action ?? '')).filter(Boolean));
             }
             else if (ev.type === 'tool.result' && ev.itemId === this.endTurnCall && ev.ok) {
               this.pastEndTurn = true;
               this.messageStands = endTurnMessageStands(ev);
+              // Only a call that asked for its reply next: after "Stop here"
+              // the words that count were written before it. A repeat that
+              // only added archive or snooze ("Added: ...") changes neither
+              // the card nor the reply under it (from Codex's review: one
+              // took the check away, and the thread was archived with its
+              // question unanswered).
+              if (endTurnWantsReply(ev)) {
+                this.doneCard = (needsFromTool(this.endTurnInputs.get(ev.itemId))?.needs ?? 'nothing') === 'nothing';
+                this.replyAfterEnd = '';
+              } else if (this.messageStands) this.doneCard = false;
               // Only an accepted call's own card: a refused repeat's result
               // isn't ok, and its questions never showed.
               if (endTurnWantsReply(ev)) this.owedReply = this.endTurnAsks.get(ev.itemId) ?? [];
             }
             else if (ev.type === 'assistant.text' && !ev.itemId.includes('/') && ev.text.trim()) {
-              if (this.pastEndTurn) this.wroteAfterEnd = true;
+              if (this.pastEndTurn) {
+                this.wroteAfterEnd = true;
+                this.replyAfterEnd = ev.text;
+              }
               this.owedReply = undefined;
             }
           }
@@ -772,6 +821,40 @@ class ClaudeSession implements AgentSession {
       this.resolveExit();
       this.sink.exited(error);
     }
+  }
+
+  // A message is the agent's to read from "started" (handed over with the
+  // next request to the model); "completed" and "cancelled" end it too.
+  // Only "queued" leaves it waiting. A turn's result names the messages it
+  // answered, for a CLI that folded several into one and reported on one.
+  private noteLifecycle(msg: Record<string, unknown>): void {
+    if (msg.parent_tool_use_id) return;
+    if (msg.type === 'result') {
+      const answered = [msg.user_message_uuid, ...(Array.isArray(msg.user_message_uuids) ? msg.user_message_uuids : [])];
+      for (const id of answered) if (typeof id === 'string') this.handedOver(id);
+      return;
+    }
+    if (msg.type !== 'command_lifecycle') return;
+    this.lifecycle = true;
+    if (msg.state !== 'queued' && typeof msg.command_uuid === 'string') this.handedOver(msg.command_uuid);
+  }
+
+  private handedOver(uuid: string): void {
+    this.notStarted.delete(uuid);
+  }
+
+  // Whether a message was sent that the agent can't have read: the call
+  // end_turn is handling was written before the CLI handed it over. Not
+  // known on a CLI that sends no lifecycle frames (before 2.1.310).
+  unreadMessage(): boolean {
+    if (!this.lifecycle) return false;
+    let unread = false;
+    for (const [id, refused] of this.notStarted) {
+      if (refused >= UNREAD_REFUSALS) continue;
+      this.notStarted.set(id, refused + 1);
+      unread = true;
+    }
+    return unread;
   }
 
   private markToolSeen(id: string): void {
@@ -944,6 +1027,11 @@ class ClaudeSession implements AgentSession {
       return { type: 'image', source: { type: 'base64', media_type: mediaType, data: data.toString('base64') } };
     });
     if (content.length === 0) content.push({ type: 'text', text: input.text });
+    const uuid = input.id ?? crypto.randomUUID();
+    // Not the agent's to read until the CLI says it has started on it. A
+    // frame that never comes mustn't keep them for ever.
+    this.notStarted.set(uuid, 0);
+    while (this.notStarted.size > 50) this.handedOver(this.notStarted.keys().next().value!);
     this.input.push({
       type: 'user',
       message: { role: 'user', content: content.length === 1 && content[0].type === 'text' ? input.text : (content as never) },
@@ -953,7 +1041,7 @@ class ClaudeSession implements AgentSession {
       origin: { kind: 'human' },
       // With a uuid the CLI reports command_lifecycle frames for the
       // message, which is how its own turns are told apart from this one.
-      uuid: input.id ?? crypto.randomUUID(),
+      uuid,
     } as SDKUserMessage);
   }
 

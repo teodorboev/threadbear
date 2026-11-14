@@ -16,6 +16,15 @@ export type WakeWhen = {
   // Set while the model works it out. A runner that restarts meanwhile
   // puts the thread back in the inbox, as the answer is lost.
   pending?: true;
+  // Set by the thread's own agent (end_turn's snooze in words), waiting for
+  // something to happen before it carries on: the topic is then what has to
+  // have happened, and waking hands the agent a turn to check it really
+  // has, and go back to sleep if not. Mike's own Wake when… only brings the
+  // thread back for him. Kept in the runner: the apps never see it.
+  // Before 13 Nov 2026 an agent's "until the GPUI app replaces the Swift
+  // app" was read as a topic, woke on the first talk of the plan, and sat
+  // in the inbox with nothing done.
+  by?: 'agent';
 };
 
 export type WakeAnswer = { until?: string; topic?: string; why: string };
@@ -27,6 +36,7 @@ export type WakeInput = {
   title: string;
   first?: string;
   brief?: string;
+  by?: 'agent';
 };
 
 // What Mike can type, and how far ahead a time can be.
@@ -40,6 +50,7 @@ export const WAKE_SYSTEM = [
   '- A time when they name one, however loosely: "at the weekend" is Saturday 9 am, "tonight" 7 pm, "in a few weeks" three weeks on at 9 am, "after Christmas" 27 December 9 am. Pick a sensible hour when they give none: 9 am for a day. Never a time that has already passed.',
   '- A topic when they want it back the next time they bring something up ("next time I talk about woodworking", "when I get back to the shed"): a few words for what to listen for, as you would say it in "when the user talks about …" ("woodworking", "the shed build"). Add a time as well only when they give a limit ("or in a month at the latest").',
   "- Something you can't watch for (a reply from someone, a PR merging, a delivery): the time it's most likely to have happened by, and say so in why.",
+  "When it's the thread's own agent asking, it is waiting for something to happen before it carries on (\"until the GPUI app replaces the Swift app\"). Then a topic is that thing, said as done (\"the GPUI app has replaced the Swift app\"), which another thread's messages will show once it has, not a subject to listen for; add a time only when they give a limit.",
   'Reply with JSON only, no prose and no code fence: {"until": "an ISO 8601 time with its UTC offset, or null", "topic": "a few words, or null", "why": "one short line, in plain words"}',
 ].join('\n\n');
 
@@ -50,7 +61,7 @@ export function wakePrompt(input: WakeInput): string {
   ];
   if (input.first) parts.push(`How it started (the user): ${cut(input.first, 800)}`);
   if (input.brief) parts.push(`Where it's up to:\n${cut(input.brief, 600)}`);
-  parts.push(`The user wants it back: ${input.said.trim()}`);
+  parts.push(input.by === 'agent' ? `The thread's agent is waiting: ${input.said.trim()}` : `The user wants it back: ${input.said.trim()}`);
   return parts.join('\n\n');
 }
 
@@ -73,11 +84,14 @@ export function readWakeAnswer(text: string, now: number): WakeAnswer | { error:
 }
 
 // The note the thread gets: "Hibernating until Saturday 1 November, 9 am."
-export function hibernateNote(answer: WakeAnswer, said: string, timeZone: string): string {
+export function hibernateNote(answer: WakeAnswer, said: string, timeZone: string, by?: 'agent'): string {
   const when = answer.until ? localWhen(Date.parse(answer.until), timeZone) : undefined;
-  const head = answer.topic
-    ? `Hibernating until you next talk about ${answer.topic}${when ? `, or ${when} at the latest` : ''}.`
-    : `Hibernating until ${when}.`;
+  const latest = when ? `, or ${when} at the latest` : '';
+  if (by === 'agent') {
+    const head = answer.topic ? `Hibernating until ${answer.topic}${latest}.` : `Hibernating until ${when}.`;
+    return `${head} The agent said "${cut(said.trim(), 120)}".`;
+  }
+  const head = answer.topic ? `Hibernating until you next talk about ${answer.topic}${latest}.` : `Hibernating until ${when}.`;
   return `${head} You said "${cut(said.trim(), 120)}".`;
 }
 

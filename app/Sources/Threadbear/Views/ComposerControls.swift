@@ -21,8 +21,8 @@ struct ComposerControls: View {
 
     var body: some View {
         if let thread, let place = app.runnerPlace(of: thread) {
-            // Its pickers fill from that Mac's logins once its connection
-            // has said hello; until then just its name.
+            // Its pickers fill from that Mac's logins once Convex has
+            // given them; until then just its name.
             if app.logins(for: thread) != nil {
                 controls(remote: (thread, place))
             } else {
@@ -92,7 +92,7 @@ struct ComposerControls: View {
         .tip("\(place), in \(thread.cwd.abbreviatingHome)")
     }
 
-    /// Another runner's thread before its connection has said hello: its
+    /// Another runner's thread before its logins have come: its
     /// Mac's name where the chips would be, and send.
     private func remoteControls(_ thread: ThreadSummary, place: String) -> some View {
         HStack(spacing: zoomed(4)) {

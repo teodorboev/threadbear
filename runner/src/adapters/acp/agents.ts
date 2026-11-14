@@ -48,7 +48,9 @@ function isExecutableFile(file: string): boolean {
   }
 }
 
-function onPath(name: string, pathEnv: string): string | undefined {
+// Also config.ts's, for a claude from npm or Homebrew. Relative PATH folders
+// never count: a thread's folder must not supply the runner's CLI.
+export function onPath(name: string, pathEnv: string): string | undefined {
   for (const dir of pathEnv.split(':')) {
     if (!path.isAbsolute(dir)) continue;
     const file = path.join(dir, name);

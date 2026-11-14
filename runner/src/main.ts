@@ -9,15 +9,16 @@ import { readShareImage } from './share-images.ts';
 import { CallerGate } from './rpc-gate.ts';
 import { threadOfPort } from './peer.ts';
 import { threadKey as makeThreadKey } from './rpc-auth.ts';
-import { loadConfig, ensureHome, readToken, paths, recordListening, defaultHome, DEFAULT_CWD, RUNNER_VERSION, RunnerJsonError } from './config.ts';
+import { loadConfig, ensureHome, readToken, paths, recordListening, defaultHome, DEFAULT_CWD, RUNNER_VERSION, RunnerJsonError, readRunnerJson, writeRunnerJson } from './config.ts';
 import { startHousekeeping } from './housekeeping.ts';
 import { RELEASE, markConfigStop, markGoodLater, onSupervisorGone, ownCheckout, readRelease, readState, requestHandover, supervised, takeRollbackNotice, tellLaunchListening } from './release.ts';
 import { PatchTrust } from './patch-trust.ts';
 import type { RunnerUpdates } from './runner.ts';
-import { Peers, PrimaryLink, ThreadRouter, drainChildrenName, peersElsewhere, phoneCommands, primaryElsewhere, primaryRemote, projectRouter, removeDrainInfo, scheduleRouter, writeDrainInfo, type CrossRunnerHooks, type Elsewhere } from './handover.ts';
+import { scheduledSendMethods, sendScheduled, Peers, PrimaryLink, ThreadRouter, drainChildrenName, peersElsewhere, phoneCommands, primaryElsewhere, primaryRemote, projectRouter, removeDrainInfo, scheduleRouter, writeDrainInfo, type CrossRunnerHooks, type Elsewhere } from './handover.ts';
 import { RunnerUpdater, releaseTreeAt } from './update.ts';
 import { RELEASE_NOTES_SYSTEM, SETTLE_MS, Upstream } from './upstream.ts';
 import { BringIn } from './bring-in.ts';
+import { SwiftChanges } from './swift-changes.ts';
 import { UpdateFixer } from './fix-update.ts';
 import { followOriginOn } from './follow-origin.ts';
 import { bringInSetting } from './settings.ts';
@@ -28,6 +29,7 @@ import { StuckJobs } from './stuck-jobs.ts';
 import { FrozenClis } from './frozen-cli.ts';
 import { KeepAwake } from './keep-awake.ts';
 import { experimentOn } from './experiments.ts';
+import { Reinstaller } from './reinstall.ts';
 import { MacScreen } from './mac-screen.ts';
 import { Projects, drainProjectMethods, projectMethods } from './projects.ts';
 import { Librarian, librarianMethods } from './librarian.ts';
@@ -41,6 +43,14 @@ import { ClaudeAdapter } from './adapters/claude/adapter.ts';
 import { ProcessRegistry } from './proc.ts';
 import { Runner } from './runner.ts';
 import { startOwnThread } from './own-threads.ts';
+import { askBrief, ConvexUseTally, FullSyncOffer, fullSyncAnswerer, fullSyncQuestion, fullSyncReason } from './convex-use.ts';
+// How long after starting the runner looks for a reason to ask about full sync,
+// and how long after a pairing or a new machine it asks (convex-use.ts).
+const ASK_FULL_SYNC_AFTER_MS = 5 * 60_000;
+const ASK_FULL_SYNC_EVENT_MS = 30_000;
+// And how often it looks again while it hasn't asked: a token issued by hand
+// (npx convex run tokens:issue) fires nothing here.
+const ASK_FULL_SYNC_LOOK_MS = 60 * 60_000;
 import { CodexAdapter } from './adapters/codex/adapter.ts';
 import { AcpAdapter } from './adapters/acp/adapter.ts';
 import { ACP_AGENTS, ACP_PROVIDERS, type AcpProvider } from './adapters/acp/agents.ts';
@@ -50,6 +60,7 @@ import { resolveCodexBinary } from './adapters/codex/appserver.ts';
 import { checkSurface, testedVersion } from './adapters/codex/surface.ts';
 import { CliUpdates } from './updates/manager.ts';
 import { ExtraUpdates } from './updates/extra.ts';
+import { WebRuntimeUpdates, runtimeInstalled } from './updates/web-runtime.ts';
 import { UsageStore } from './usage.ts';
 import { UsageHistory } from './usage-history.ts';
 import { TokenTally } from './token-tally.ts';
@@ -184,7 +195,6 @@ async function main(): Promise<void> {
   const projectControl = () => projectRouter(projects, () => primaryLink, { draining: () => draining, holds: (threadId) => runner.has(threadId) });
   // Keeps both CLIs current (E). Its hooks call back into the runner and
   // the Restarter, made below; nothing calls them before start().
-  const acpOn = () => experimentOn(cfg.home, 'acpAgents');
   const acpBinary = (p: AcpProvider) => () => ACP_AGENTS[p].findBinary({ explicit: p === 'cursor' ? cfg.cursorPath : cfg.opencodePath, home: os.homedir(), pathEnv: process.env.PATH ?? '' });
   const updates = new CliUpdates({
     cfg,
@@ -198,7 +208,7 @@ async function main(): Promise<void> {
     },
     codex: { resolve: (start) => resolveCodexBinary(start), checkSurface, testedVersion },
     notice: (level, message) => runner.notice(level, message),
-    acp: { on: acpOn, providers: ACP_PROVIDERS, binary: (p) => acpBinary(p as AcpProvider)(), updateArgs: (p) => ACP_AGENTS[p as AcpProvider].updateArgs },
+    acp: { providers: ACP_PROVIDERS, binary: (p) => acpBinary(p as AcpProvider)(), updateArgs: (p) => ACP_AGENTS[p as AcpProvider].updateArgs },
   });
   // Other CLIs you use alongside Threadbear (Grok, Muse...), from runner.json.
   const extraUpdates = new ExtraUpdates({ home: cfg.home, log, clock: realClock, extra: cfg.cliUpdates.extra ?? [] });
@@ -256,14 +266,14 @@ async function main(): Promise<void> {
     claudePath: cfg.claudePath,
     registry,
     log,
-    mcpServersFor: (threadId) => ({ [SERVER_NAME]: threadbearMcpServer(router(), threadId, scheduleControl(), projectControl(), appRestarts, () => cfg.bulletReplies, pocketControl, () => cfg.oneReply, () => cfg.connectorsUrl, gatewayHealth, remoteControl, () => experimentOn(cfg.home, 'runAsks'), () => experimentOn(cfg.home, 'looseEnds')) }),
+    mcpServersFor: (threadId) => ({ [SERVER_NAME]: threadbearMcpServer(router(), threadId, scheduleControl(), projectControl(), appRestarts, () => cfg.bulletReplies, pocketControl, () => cfg.oneReply, () => cfg.connectorsUrl, gatewayHealth, remoteControl) }),
     oneReply: () => cfg.oneReply,
     sandboxFor: (cwd) => sandboxFor(cfg.sandbox, cwd),
     alwaysAsk: ALWAYS_ASK_TOOLS,
     neverAsk: NEVER_ASK_TOOLS,
   });
   // The threadbear tools for an agent that isn't given them in-process.
-  const codexStyleTools = (threadId: string) => buildThreadbearTools(router(), threadId, Date.now, scheduleControl(), projectControl(), appRestarts, { provider: 'codex', bulletReplies: () => cfg.bulletReplies, oneReply: () => cfg.oneReply, pocket: pocketControl, gateway: () => cfg.connectorsUrl, gatewayHealth, remote: remoteControl, runAsks: () => experimentOn(cfg.home, 'runAsks'), looseEnds: () => experimentOn(cfg.home, 'looseEnds') });
+  const codexStyleTools = (threadId: string) => buildThreadbearTools(router(), threadId, Date.now, scheduleControl(), projectControl(), appRestarts, { provider: 'codex', bulletReplies: () => cfg.bulletReplies, oneReply: () => cfg.oneReply, pocket: pocketControl, gateway: () => cfg.connectorsUrl, gatewayHealth, remote: remoteControl });
   // One app-server per live Codex thread, each starting what E says is
   // current, with the same threadbear tools as dynamic tools.
   const codex = new CodexAdapter({
@@ -283,7 +293,6 @@ async function main(): Promise<void> {
       new AcpAdapter({
         agent: ACP_AGENTS[p],
         binary: acpBinary(p),
-        on: acpOn,
         registry,
         log,
         toolsFor: codexStyleTools,
@@ -299,7 +308,7 @@ async function main(): Promise<void> {
     settings: () => cfg.models,
     claudePath: cfg.claudePath,
     registry,
-    askers: Object.fromEntries(ACP_PROVIDERS.filter((p) => PROVIDER_INFO[p].smallJobs).map((p) => [p, acpAsker({ agent: ACP_AGENTS[p], binary: acpBinary(p), on: acpOn, registry, log })])),
+    askers: Object.fromEntries(ACP_PROVIDERS.filter((p) => PROVIDER_INFO[p].smallJobs).map((p) => [p, acpAsker({ agent: ACP_AGENTS[p], binary: acpBinary(p), registry, log })])),
     poolHost: { pool: (id) => runner.smallModelPool(id), ranDry: (id) => runner.noteRanDry(id) },
   });
   const projects = new Projects({ home: cfg.home, clock: realClock, log });
@@ -310,6 +319,15 @@ async function main(): Promise<void> {
   const instructions = new InstructionsStore({ home: cfg.home, token, publish: (n) => runner.publish(n) });
   runner = new Runner({
     threadKey: (id) => makeThreadKey(token, id),
+    // Mike's pick on the full sync question's card sets it, once: the asking
+    // thread's agent can't (Daybreak 121, convex-use.ts fullSyncAnswer).
+    answered: fullSyncAnswerer({
+      asked: () => {
+        const s = readRunnerJson(cfg.home).sync;
+        return { thread: s?.fullAskedThread, question: s?.fullAskedQuestion };
+      },
+      set: (on) => void settings.update({ fullSync: on }),
+    }),
     standingInstructions: () => instructions.given(),
     projects,
     atMac: () => atMac,
@@ -400,7 +418,9 @@ async function main(): Promise<void> {
     home: cfg.home,
     clock: realClock,
     log,
-    elsewhere: (id) => peers.owns(id),
+    elsewhere: (id) => peers.owns(id) || peers.isArriving(id),
+    folderElsewhere: (id) => peers.find(id)?.cwd,
+    sendElsewhere: (id, text, scheduleId, run, since) => sendScheduled(runner, peers, id, text, scheduleId, run, since),
     self: { id: syncRunnerId, name: cfg.sync.name ?? defaultRunnerName(), icon: runnerIcon, version: RUNNER_VERSION, release: RELEASE.release, startedAt },
     syncOn: Boolean(cfg.sync.enabled && cfg.sync.url && readSyncKey(cfg.home)),
   });
@@ -513,8 +533,12 @@ async function main(): Promise<void> {
     if (scheduler.list(id).some((sc) => sc.threadId === id && !sc.finishedAt && sc.check)) leftBehind.push("its schedules' shell checks");
     return { ...info, leftBehind };
   };
+  // Made further down, once there's a runner to start its thread on; the
+  // backend's remote-runner updates reach it through this (convex-use.ts).
+  let fullSyncOfferRef: FullSyncOffer | undefined;
   const sync = new ConvexSync({
     config: { ...cfg.sync, runnerId: syncRunnerId, icon: runnerIcon },
+    use: new ConvexUseTally({ home: cfg.home }),
     key: syncKey,
     statePath: `${cfg.home}/sync-state.json`,
     cachePath: `${cfg.home}/sync-sent.json`,
@@ -565,7 +589,11 @@ async function main(): Promise<void> {
     publish: (n) => {
       runner.publish(n.method === 'remoteThreads.updated' ? { ...n, params: dressRemote(n.params) } : n);
       // Another runner's followProblem comes in with these rows.
-      if (n.method === 'remoteThreads.updated') publishUpdates();
+      if (n.method === 'remoteThreads.updated') {
+        publishUpdates();
+        // Another machine has turned up on this backend: full sync would help.
+        if ((n.params as { runners?: { online?: boolean }[] } | undefined)?.runners?.some((r) => r.online)) fullSyncOfferRef?.trigger('machine');
+      }
     },
     home: cfg.home,
     // A key the backend turns down (sync.ts KEY_REJECTED): said in the app,
@@ -582,7 +610,22 @@ async function main(): Promise<void> {
     clock: realClock,
     log,
   });
-  sync.start();
+  // A handover's draining runner may have threads waiting on a card, asked
+  // for before this runner was listening. The sync listens from here but
+  // writes nothing till they're read and back on their rows: another Mac's
+  // view takes a card gone from the row as answered, and the thread would
+  // sit needing Mike with nothing to answer (13 Nov, Peers.openCards).
+  const handedOver = peers.status().length > 0;
+  sync.start({ hold: handedOver });
+  if (handedOver) {
+    try {
+      sync.seedCards(await peers.openCards());
+    } catch (e) {
+      log.warn("could not read the draining runners' open cards", { error: String(e) });
+    } finally {
+      sync.release();
+    }
+  }
   // Counts only, and off unless runner.json asks (src/secret-check.ts).
   const secretCheck = new SecretCheck({ home: cfg.home, enabled: cfg.secretCheck === true, log });
   if (secretCheck.on) {
@@ -651,6 +694,27 @@ async function main(): Promise<void> {
     restart: (p) => restarter.request({ when: 'idle', ...p }),
     pendingRestart: () => Boolean(restarter.status().pendingRestart),
     followsOrigin: () => followOriginOn(cfg.home),
+    onChange: () => {
+      // updaterReady: the first onChange can come before the reinstaller exists.
+      if (updaterReady) reinstaller.consider();
+      publishUpdates();
+    },
+  });
+  // The LaunchAgent reinstalling itself when it's behind main (reinstall.ts):
+  // the Updates panel's Reinstall now, or by itself with selfReinstall on.
+  const reinstaller = new Reinstaller({
+    home: cfg.home,
+    checkout: updateRelease?.checkout,
+    clock: realClock,
+    log,
+    behind: () => {
+      const u = updater.status();
+      return u.launcherChanged && u.launcherReason && u.launcherKey ? { reason: u.launcherReason, key: u.launcherKey } : undefined;
+    },
+    // As a restart would wait: no busy thread, no old runner still finishing
+    // turns, and no restart of its own on the way (it would race the reinstall).
+    idle: () => !draining && restarter.busyThreads().length === 0 && peers.status().length === 0 && !restarter.status().pendingRestart,
+    auto: () => experimentOn(cfg.home, 'selfReinstall'),
     onChange: () => publishUpdates(),
   });
   // Mike's releases for a fork, and on Mike's own runner the tagging of
@@ -671,6 +735,65 @@ async function main(): Promise<void> {
     // The app's Bring Them In and Let's Discuss titles (UpdatesPanel).
     openByHand: () => runner.list(['inbox', 'snoozed']).find((t) => /^(Bring in|Discuss) Mike's release /.test(t.title))?.id,
   });
+  // Full sync starts off, and the main runner asks once whether to turn it on,
+  // when it would help: a phone or browser paired, or another machine here
+  // (convex-use.ts FullSyncOffer). An install with sync.full set either way is
+  // never asked. Noted in runner.json once the thread is open, so it's once.
+  // The question the asking thread was given, noted with its id: Mike's
+  // pick counts only on a card that asks exactly that (fullSyncAnswer).
+  let fullSyncQuestionAsked: string | undefined;
+  const fullSyncOffer = new FullSyncOffer({
+    read: () => {
+      const j = readRunnerJson(cfg.home);
+      return { syncOn: Boolean(cfg.sync.enabled && cfg.sync.url && syncKey), key: syncKey, full: j.sync?.full, asked: j.sync?.fullAsked };
+    },
+    start: (reason) => {
+      // The checkout's tb, as this release's folder is pruned after a few more.
+      const tbPath = thisRelease?.checkout ? path.join(thisRelease.checkout, 'runner', 'bin', 'tb') : path.join(import.meta.dirname, '..', 'bin', 'tb');
+      const tb = `'${tbPath.replace(/'/g, `'\\''`)}'`;
+      const machine = process.platform === 'darwin' ? 'Mac' : 'machine';
+      fullSyncQuestionAsked = fullSyncQuestion(reason, machine);
+      return startOwnThread(runner, askBrief(tb, reason, machine), thisRelease?.checkout);
+    },
+    note: (threadId, clear) => {
+      const json = readRunnerJson(cfg.home);
+      const { fullAsked: _a, fullAskedThread: _t, fullAskedQuestion: _q, ...rest } = json.sync ?? {};
+      json.sync = clear ? rest : { ...rest, fullAsked: new Date().toISOString(), ...(threadId ? { fullAskedThread: threadId, ...(fullSyncQuestionAsked ? { fullAskedQuestion: fullSyncQuestionAsked } : {}) } : {}) };
+      writeRunnerJson(cfg.home, json);
+    },
+    later: (fn, ms) => void setTimeout(fn, ms).unref?.(),
+    delayMs: ASK_FULL_SYNC_EVENT_MS,
+    allowed: () => !stopping && !draining,
+    log: (msg, meta) => log.info(msg, meta),
+  });
+  fullSyncOfferRef = fullSyncOffer;
+  // A phone, browser or other machine that's already there: a few minutes in,
+  // so a release that's about to roll back doesn't ask, then hourly while it
+  // hasn't, for a token issued by hand or a lookup that failed. Two small
+  // reads (tokens, and the runners list without their threads), and only a
+  // runner heard from in the last few minutes counts: one whose key was revoked
+  // can't heartbeat, but lingers in the list.
+  const lookForFullSyncReason = async () => {
+    if (!fullSyncOffer.open || stopping || draining) return;
+    try {
+      const devices = await sync.listTokens();
+      const now = Date.now();
+      const others = (await sync.scheduleBackend().runners()).filter((r) => r.id !== syncRunnerId && r.lastSeenAt !== undefined && now - r.lastSeenAt < 3 * 60_000);
+      fullSyncOffer.trigger(fullSyncReason({ devices, otherRunners: others.length }));
+    } catch {
+      // Offline or refused: the next look tries again.
+    }
+  };
+  setTimeout(() => {
+    void lookForFullSyncReason();
+    const look = setInterval(() => {
+      // Once it's asked, or been answered, there's nothing left to look for. An
+      // offer waiting to open isn't that: it may fail and need the next look.
+      if (!fullSyncOffer.eligible) clearInterval(look);
+      else void lookForFullSyncReason();
+    }, ASK_FULL_SYNC_LOOK_MS);
+    look.unref?.();
+  }, ASK_FULL_SYNC_AFTER_MS).unref?.();
   const upstream = new Upstream({
     home: cfg.home,
     checkout: thisRelease?.checkout,
@@ -688,12 +811,28 @@ async function main(): Promise<void> {
     // A release signed with a Touch ID key waits for Mike at the Mac.
     atMac: async () => isAtMac(true, await hidIdleMs()),
     onChange: () => publishUpdates(),
-    onChecked: (status) => void bringIn.consider(status),
+    onChecked: (status) => {
+      void bringIn.consider(status);
+      // A fetch may have brought in releases with their changes.
+      void swiftChanges.scan();
+    },
     // Only asked on Mike's runner, once a day as it tags a release.
     writeNotes: async (commits) => {
       const res = await models.generate({ feature: 'release-notes', cwd: thisRelease?.checkout, system: RELEASE_NOTES_SYSTEM, prompt: commits, maxTokens: 800, strong: true });
       return res.ok ? res.value : undefined;
     },
+  });
+  // A fork's own changes to the old Swift app, for rebuilding in the GPUI
+  // one (swift-changes.ts): a thread the first time the GPUI app connects,
+  // and the Updates panel's "Not in the new app yet".
+  const swiftChanges = new SwiftChanges({
+    home: cfg.home,
+    checkout: thisRelease?.checkout,
+    clock: realClock,
+    log,
+    start: (r) => startOwnThread(runner, r, thisRelease?.checkout),
+    open: openThread,
+    onChange: () => publishUpdates(),
   });
   // runner.updates: sent when what hello's `updates` says changes.
   let lastUpdates = '';
@@ -705,11 +844,18 @@ async function main(): Promise<void> {
     if (u.reason) out.reason = u.reason;
     if (u.launcherChanged) out.launcherChanged = true;
     if (u.launcherReason) out.launcherReason = u.launcherReason;
+    if (u.checkout) out.checkout = u.checkout;
+    const reinstall = reinstaller.status();
+    if (reinstall) out.reinstall = reinstall;
     if (u.followProblem) out.followProblem = u.followProblem;
+    const webRuntimeProblem = webRuntimeUpdates.problem();
+    if (webRuntimeProblem) out.webRuntimeProblem = webRuntimeProblem;
     const behind = sync.behindRunners();
     if (behind.length) out.behindRunners = behind;
     const up = upstream.status();
     if (up.state !== 'off' || up.published) out.upstream = up;
+    const swift = swiftChanges.status();
+    if (swift.changes.length) out.swiftChanges = swift;
     return out;
   };
   function publishUpdates(): void {
@@ -721,19 +867,22 @@ async function main(): Promise<void> {
     lastUpdates = key;
     runner.publish({ method: 'runner.updates', params: { updates } });
   }
+  const webRuntimeUpdates = new WebRuntimeUpdates({ home: cfg.home, clock: realClock, platform: process.arch === 'arm64' ? 'macosarm64' : 'macosx64', installed: () => runtimeInstalled(path.join(cfg.home, 'web-runtime')), changed: publishUpdates });
   updaterReady = true;
 
   runner.attachClis(updates);
-  const methods = { ...restartMethods(restarter), ...scheduleMethods(scheduler), ...projectMethods(projects), ...drainProjectMethods(projects), ...librarianMethods(librarian), ...connectorsMethods(connectors), ...settingsMethods(settings), ...instructionsMethods(instructions), ...modelMethods(models), ...devicesMethods(sync), ...usageStatsMethods({ tally, history: usageHistory, clock: realClock }) };
+  const methods = { ...restartMethods(restarter), ...scheduleMethods(scheduler), ...projectMethods(projects), ...drainProjectMethods(projects), ...librarianMethods(librarian), ...connectorsMethods(connectors), ...settingsMethods(settings), ...instructionsMethods(instructions), ...modelMethods(models), ...devicesMethods(sync, (kind) => fullSyncOffer.trigger(kind)), ...usageStatsMethods({ tally, history: usageHistory, clock: realClock }) };
   // runner.status carries the CLI statuses too (protocol, "runner.status").
   const restartStatus = methods['runner.status'];
   methods['runner.status'] = (p) => {
     const draining = peers.status();
     const behind = sync.behindRunners();
-    return { ...(restartStatus(p) as Record<string, unknown>), ...(behind.length ? { behindRunners: behind } : {}), clis: updates.list(), sync: sync.status(), secretCheck: secretCheck.status(), relay: relay.status(), upstream: upstream.status(), ...(draining.length ? { draining } : {}), ...(macScreen ? { macScreen: macScreen.status() } : {}) };
+    return { ...(restartStatus(p) as Record<string, unknown>), ...(behind.length ? { behindRunners: behind } : {}), webRuntimeProblem: webRuntimeUpdates.problem(), clis: updates.list(), sync: sync.status(), secretCheck: secretCheck.status(), relay: relay.status(), upstream: upstream.status(), ...(draining.length ? { draining } : {}), ...(macScreen ? { macScreen: macScreen.status() } : {}) };
   };
   // tb updates (docs/protocol.md, "Mike's releases").
   methods['upstream.status'] = () => ({ upstream: upstream.status() });
+  // The Updates panel's Reinstall now (docs/protocol.md, "Runner updates").
+  methods['runner.reinstall'] = () => ({ reinstall: reinstaller.request() ?? null });
   // Other runners' threads, for the Mac app's sidebar (step 6 part 2).
   // `forTools`: a draining runner's agent tools (handover.ts primaryRemote),
   // given what this runner's own tools get, the wait for the rows included.
@@ -756,6 +905,35 @@ async function main(): Promise<void> {
   // another Mac (files.ts).
   Object.assign(methods, filesMethods());
   methods['upstream.check'] = async () => ({ upstream: await upstream.check() });
+  // The Updates panel's "Not in the new app yet" (docs/protocol.md, "Your
+  // changes to the old app").
+  const swiftCommit = (p: unknown): string => {
+    const c = (p as { commit?: unknown } | undefined)?.commit;
+    if (typeof c !== 'string' || !/^[0-9a-f]{7,40}$/.test(c)) throw new RpcError(ErrorCode.badParams, 'commit must be a commit id');
+    return c;
+  };
+  const swiftCall = async <T>(f: () => Promise<T>): Promise<T> => {
+    try {
+      return await f();
+    } catch (e) {
+      throw new RpcError(ErrorCode.badParams, e instanceof Error ? e.message : String(e));
+    }
+  };
+  methods['swiftChanges.list'] = async () => ({ swiftChanges: await swiftChanges.scan() });
+  // With the thread itself, so the app can open it before its
+  // threads.updated arrives (Windows lost that race on GitHub, 13 Nov).
+  methods['swiftChanges.port'] = (p) =>
+    swiftCall(async () => {
+      const res = await swiftChanges.port(swiftCommit(p));
+      let thread;
+      try {
+        thread = runner.get(res.threadId);
+      } catch {
+        thread = undefined;
+      }
+      return { ...res, ...(thread ? { thread } : {}) };
+    });
+  methods['swiftChanges.dismiss'] = (p) => swiftCall(() => swiftChanges.dismiss(swiftCommit(p), (p as { undo?: unknown } | undefined)?.undo === true));
   const codexWarning = missingCodex(updates.codexBinary(), cfg);
   if (codexWarning) log.warn('codex CLI not found', { path: updates.codexBinary() });
   // Other runners' threads through the backend, for the Mac app (relay.ts).
@@ -975,6 +1153,10 @@ async function main(): Promise<void> {
     port: cfg.port,
     token,
     runner,
+    relayMoving: (id) => {
+      const m = remoteMoving.get(id);
+      return Boolean(m && m.until >= Date.now() && m.moving.state !== 'failed' && m.moving.state !== 'cancelled');
+    },
     log,
     clis: updates,
     methods,
@@ -984,13 +1166,17 @@ async function main(): Promise<void> {
     callerOfPort: (port) => threadOfPort(port, { registry, known: (id) => runner.has(id) || peers.owns(id), log }),
     updates: () => (draining ? undefined : runnerUpdates()),
     appHello: (build, app) => appRestarts.appHello(build, app),
+    desktopHello: () => void swiftChanges.desktopHello().catch((e) => log.warn('swift changes: first look failed', { error: String(e) })),
     helloNotices: () => {
       // Like a missing claude: said to every client, until it's there.
       const noCodex = missingCodex(updates.codexBinary(), cfg);
       // Pushes failing (sync.ts notePushFailing) is said once as it starts;
       // an app that wasn't connected then hears it here.
       const pushFailing = sync.status().pushFailing;
+      // Near the Free plan's limits, as far as this runner can tell (convex-use.ts).
+      const useWarning = sync.status().use?.warning;
       return [
+        ...(useWarning ? [{ level: 'warning' as const, message: useWarning }] : []),
         ...(pushFailing ? [{ level: 'warning' as const, message: pushFailingText(pushFailing) }] : []),
         ...(rolledBack ? [{ level: 'warning' as const, message: rolledBack }] : []),
         ...(noCodex ? [{ level: 'warning' as const, message: noCodex }] : []),
@@ -1020,6 +1206,7 @@ async function main(): Promise<void> {
   // Checks start a minute after this; installs never while a restart waits.
   updates.start();
   extraUpdates.start();
+  if (process.platform === 'darwin' && cfg.home === defaultHome() && RELEASE.release && process.env.THREADBEAR_CLI_UPDATES !== 'off') webRuntimeUpdates.start();
   // The runner's log is held open by launchd too, so it's emptied in place.
   // The app's update log sits beside it, but only for the real data dir: a
   // dev runner's log is in its temp home.
@@ -1034,7 +1221,9 @@ async function main(): Promise<void> {
   const cancelMarkGood = markGoodLater(cfg.home, RELEASE.release, log, process.env, () => {
     restarter.proven();
     updater.start();
+    reinstaller.consider();
     upstream.start();
+    swiftChanges.start();
   });
   // Only once listening: a runner that can't listen exits, and the next
   // one should still find the resume.
@@ -1064,7 +1253,9 @@ async function main(): Promise<void> {
     stopping = true;
     cancelMarkGood();
     updater.stop();
+    reinstaller.stop();
     upstream.stop();
+    swiftChanges.stop();
     stopHousekeeping();
     log.info('runner stopping', { signal });
     // Whatever stopped it, a pending restart has now happened. A draining
@@ -1089,6 +1280,7 @@ async function main(): Promise<void> {
     projects.stop();
     usage.stop();
     tally.stop();
+    webRuntimeUpdates.stop();
     updates.stop();
     extraUpdates.stop();
     // A restart's new release writes everything again under the same
@@ -1125,7 +1317,9 @@ async function main(): Promise<void> {
     try {
       cancelMarkGood();
       updater.stop();
+      reinstaller.stop();
       upstream.stop();
+      swiftChanges.stop();
       stopHousekeeping();
       scheduler.stop();
       librarian.stop();
@@ -1137,6 +1331,7 @@ async function main(): Promise<void> {
     keepAwake.stop();
       connectors.stop();
       projects.freeze();
+      webRuntimeUpdates.stop();
       updates.stop();
       extraUpdates.stop();
       usage.stopWriting();
@@ -1175,11 +1370,16 @@ async function main(): Promise<void> {
         gate: new CallerGate({ runner, schedules: scheduler }),
         callerOfPort: (port) => threadOfPort(port, { registry, known: (id) => runner.has(id), log }),
         methods: {
+          ...scheduledSendMethods(runner),
           'drain.hello': () => {
             primaryHeard = true;
             // After this answer, so the primary has subscribed first.
             setTimeout(() => runner.recheckHandovers(), 1000);
             return { pid: process.pid, version: RUNNER_VERSION, release: RELEASE.release, threads: runner.keeping() ?? [] };
+          },
+          'drain.openCards': async (p) => {
+            if (typeof p.threadId !== 'string') throw new RpcError(ErrorCode.badParams, 'threadId must be a string');
+            return { events: await runner.openCards(p.threadId) };
           },
           'drain.stop': () => {
             setImmediate(() => void stop('drain.stop'));

@@ -23,6 +23,12 @@ const list = (words: string) => words.split(',').map((w) => w.trim());
 /** A mock call's answer, past whatever the app puts before it ("ok", or nothing). */
 const answer = (out: string) => JSON.parse(out.slice(out.indexOf('{')));
 
+When('I scroll to settings in Usage', async function (this: ThreadbearWorld) {
+  await this.until('Usage has loaded its spend chart', (d) => Boolean(usage(d)?.chart?.title));
+  await this.app.do({ cmd: 'usage', scrollToSettings: true });
+  await this.app.dump();
+});
+
 When('I click the honey pot in the activity bar', async function (this: ThreadbearWorld) {
   // Its tooltip is "Usage", then a line for each pool once the logins have
   // come with the runner's hello.

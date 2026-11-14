@@ -23,6 +23,9 @@ pub struct BuildInfo {
     pub configuration: String,
     /// The checkout's origin remote when it was built.
     pub origin: Option<String>,
+    /// Where its binaries were built: an ssh host, or "" for this Mac. None
+    /// from a make-bundle.sh before 12 Nov 2026, or one not told.
+    pub built_on: Option<String>,
 }
 
 impl BuildInfo {
@@ -70,6 +73,52 @@ pub fn bundle_of(exe: &Path) -> Option<PathBuf> {
     contents.parent().map(Path::to_path_buf)
 }
 
+/// runner.json's `updateBuildHosts`: the only Macs trusted to build what this
+/// one runs (desktop/scripts/stage-update.sh). Check hosts never are.
+pub fn update_build_hosts(runner_json: &Path) -> Vec<String> {
+    let Ok(data) = std::fs::read(runner_json) else { return Vec::new() };
+    let Ok(json) = serde_json::from_slice::<serde_json::Value>(&data) else { return Vec::new() };
+    match &json["updateBuildHosts"] {
+        serde_json::Value::String(h) => vec![h.clone()],
+        serde_json::Value::Array(a) => a.iter().filter_map(|h| h.as_str().map(str::to_owned)).collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// Whether a staged build may go in: built on this Mac, or on a host that's
+/// in `updateBuildHosts` now. One that doesn't say where it was built was
+/// staged before that was asked, when a check host could have built it
+/// (Daybreak 108), and one from a host taken off the list since is no longer
+/// trusted either.
+pub fn builder_trusted(staged: &BuildInfo, update_build_hosts: &[String]) -> bool {
+    match staged.built_on.as_deref() {
+        Some("") => true,
+        Some(host) => update_build_hosts.iter().any(|h| h == host),
+        None => false,
+    }
+}
+
+/// Deletes the staged bundle at `next` if its builder isn't trusted, and says
+/// why. Before every swap and every look at what's staged. A swap cut short
+/// that left the old bundle at `next` loses it here rather than to `old`,
+/// which is the same: it was going. Err when one that isn't trusted is
+/// still there (it couldn't be deleted): then nothing may be swapped in.
+pub fn drop_untrusted_staged(next: &Path, runner_json: &Path) -> Result<Option<String>, String> {
+    let Some(staged) = BuildInfo::read(next) else { return Ok(None) };
+    if builder_trusted(&staged, &update_build_hosts(runner_json)) {
+        return Ok(None);
+    }
+    let why = match &staged.built_on {
+        Some(host) => format!("the staged build {}: {host} isn't in updateBuildHosts", staged.short),
+        None => format!("the staged build {}: it doesn't say which Mac built it", staged.short),
+    };
+    match std::fs::remove_dir_all(next) {
+        _ if !next.exists() => Ok(Some(format!("dropped {why}"))),
+        Ok(()) => Err(format!("couldn't drop {why}; not swapping anything in")),
+        Err(e) => Err(format!("couldn't drop {why} ({e}); not swapping anything in")),
+    }
+}
+
 // Following main (the Swift app's `AppUpdate`): what to build, and putting a
 // staged build in the installed one's place.
 
@@ -90,22 +139,46 @@ pub fn tree_from_rev_parse(output: &str) -> String {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Action {
     Nothing,
-    /// Main's tree differs from what's running and nothing staged, being
-    /// built or known to fail matches it.
+    /// Main's tree differs from what's running, no build is staged or under
+    /// way, and this tree isn't known to fail.
     Build(String),
     /// What's staged no longer matches main, and main is what's running
     /// already: drop it.
     DropStaged,
 }
 
-pub fn decide(main_tree: &str, running: &BuildInfo, staged: Option<&BuildInfo>, building: Option<&str>, failed: Option<&str>) -> Action {
+pub fn decide(main_tree: &str, running: &BuildInfo, staged: Option<&BuildInfo>, building: Option<&str>, failed: Option<&str>, restarting: bool) -> Action {
+    if restarting || building.is_some() {
+        return Action::Nothing;
+    }
     if main_tree == running.app_tree {
         return if staged.is_some() { Action::DropStaged } else { Action::Nothing };
     }
-    if staged.is_some_and(|s| s.app_tree == main_tree) || building == Some(main_tree) || failed == Some(main_tree) {
+    // Let a staged build go in before starting another. Otherwise an idle
+    // restart can cut off the new build just after it starts.
+    if staged.is_some() || failed == Some(main_tree) {
         return Action::Nothing;
     }
     Action::Build(main_tree.to_owned())
+}
+
+/// Nearby landings become one update build. Compare the desktop tree, so a
+/// runner-only landing doesn't extend the wait. Observe during a build too:
+/// when it ends, only the newest tree is considered, with its own quiet time.
+#[derive(Default)]
+pub struct BuildDebounce {
+    observed: Option<(String, std::time::Instant)>,
+}
+
+impl BuildDebounce {
+    pub fn ready(&mut self, tree: &str, now: std::time::Instant) -> bool {
+        let (last, since) = self.observed.get_or_insert_with(|| (tree.to_owned(), now));
+        if last != tree {
+            *last = tree.to_owned();
+            *since = now;
+        }
+        now.saturating_duration_since(*since) >= std::time::Duration::from_secs(10 * 60)
+    }
 }
 
 /// Puts the staged bundle in the installed one's place in one exchange, so
@@ -270,6 +343,40 @@ pub fn should_auto_restart(m: &RestartMoment) -> bool {
     !m.active || m.idle_for >= AUTO_RESTART_IDLE_SECONDS
 }
 
+/// What a staged build's restart is waiting on just now, for the Updates
+/// panel. Mike, 13 Nov, after one sat staged with no word of why: "can it
+/// just have a little countdown number on there or something? And that gets
+/// reset when I do something?"
+#[derive(Clone, Debug, PartialEq)]
+pub enum RestartWait {
+    /// Only his input holds it: whole seconds left of the idle wait, back to
+    /// the full wait at each key, click or pointer move.
+    Countdown(u32),
+    /// Something a restart would lose or cut off, as the end of "It
+    /// switches in once ..." ("the threads have loaded").
+    Held(String),
+}
+
+/// What the restart waits on (`should_auto_restart`'s own reasons, in the
+/// same order), or none when nothing's staged or it's going now. `why_held`
+/// names what's typed or under way, asked only when that's what holds it.
+pub fn restart_wait(m: &RestartMoment, why_held: impl FnOnce() -> String) -> Option<RestartWait> {
+    if !m.staged {
+        return None;
+    }
+    if !m.loaded {
+        return Some(RestartWait::Held("the threads have loaded".to_owned()));
+    }
+    if m.has_drafts || m.held || m.other_window_input {
+        return Some(RestartWait::Held(why_held()));
+    }
+    if !m.active || m.idle_for >= AUTO_RESTART_IDLE_SECONDS {
+        return None;
+    }
+    // Rounded up, so it reads 5 while he's using the app and 1 last.
+    Some(RestartWait::Countdown((AUTO_RESTART_IDLE_SECONDS - m.idle_for.max(0.)).ceil().max(1.) as u32))
+}
+
 /// The update script's arguments, run at background priority (`taskpolicy
 /// -b`, as Mike asks of every build on his M5): throttled CPU and disk, off
 /// the cores he's using, inherited by everything it starts, the copy to a
@@ -299,6 +406,49 @@ mod tests {
         url
     }
 
+    #[test]
+    fn only_a_build_from_here_or_an_update_build_host_goes_in() {
+        let dir = temp("trusted");
+        let json = dir.join("runner.json");
+        let next = dir.join("next.app");
+        let staged = |built_on: Option<&str>| {
+            let _ = std::fs::remove_dir_all(&next);
+            bundle(&dir, "next.app", &BuildInfo { built_on: built_on.map(str::to_owned), ..build("new", "t2") });
+        };
+        // Check hosts never count, and a bundle that doesn't say goes.
+        std::fs::write(&json, r#"{"checkHosts":["tinker-desk"],"checkHost":"tinker-desk"}"#).unwrap();
+        for who in [Some("tinker-desk"), None] {
+            staged(who);
+            assert!(drop_untrusted_staged(&next, &json).unwrap().is_some(), "{who:?}");
+            assert!(!next.exists(), "{who:?}");
+        }
+        staged(Some(""));
+        assert_eq!(drop_untrusted_staged(&next, &json), Ok(None));
+        assert!(next.exists());
+        std::fs::write(&json, r#"{"checkHosts":["tinker-desk"],"updateBuildHosts":["builder"]}"#).unwrap();
+        staged(Some("builder"));
+        assert_eq!(drop_untrusted_staged(&next, &json), Ok(None));
+        staged(Some("tinker-desk"));
+        assert!(drop_untrusted_staged(&next, &json).unwrap().is_some());
+        // No runner.json, or one that can't be read: only a build here.
+        std::fs::remove_file(&json).unwrap();
+        staged(Some("builder"));
+        assert!(drop_untrusted_staged(&next, &json).unwrap().is_some());
+        // One that can't be deleted is an error, so nothing is swapped in.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            staged(Some("builder"));
+            let locked = next.join("Contents");
+            std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o555)).unwrap();
+            let held = drop_untrusted_staged(&next, &json);
+            std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+            assert!(held.is_err(), "{held:?}");
+            assert!(next.exists());
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     fn marker(url: &Path) -> Option<String> {
         std::fs::read_to_string(url.join("Contents/marker")).ok()
     }
@@ -320,16 +470,40 @@ mod tests {
     #[test]
     fn decides_whether_to_build() {
         let running = build("aaa", "t1");
-        assert_eq!(decide("t1", &running, None, None, None), Action::Nothing);
-        assert_eq!(decide("t2", &running, None, None, None), Action::Build("t2".into()));
+        assert_eq!(decide("t1", &running, None, None, None, false), Action::Nothing);
+        assert_eq!(decide("t2", &running, None, None, None, false), Action::Build("t2".into()));
         // Already staged, being built or known to fail: leave it.
-        assert_eq!(decide("t2", &running, Some(&build("bbb", "t2")), None, None), Action::Nothing);
-        assert_eq!(decide("t2", &running, None, Some("t2"), None), Action::Nothing);
-        assert_eq!(decide("t2", &running, None, None, Some("t2")), Action::Nothing);
-        // Main moved on past a failed or staged tree: build the new one.
-        assert_eq!(decide("t3", &running, Some(&build("bbb", "t2")), None, Some("t2")), Action::Build("t3".into()));
+        assert_eq!(decide("t2", &running, Some(&build("bbb", "t2")), None, None, false), Action::Nothing);
+        assert_eq!(decide("t2", &running, None, Some("t2"), None, false), Action::Nothing);
+        // A look that finishes after a newer main was read must not start
+        // another build alongside the one already running.
+        assert_eq!(decide("t3", &running, None, Some("t2"), None, false), Action::Nothing);
+        assert_eq!(decide("t2", &running, None, None, Some("t2"), false), Action::Nothing);
+        // A staged build goes in first; the new app considers the latest main.
+        assert_eq!(decide("t3", &running, Some(&build("bbb", "t2")), None, Some("t2"), false), Action::Nothing);
+        assert_eq!(decide("t3", &running, None, None, Some("t2"), false), Action::Build("t3".into()));
         // Main is back to what's running while something else is staged.
-        assert_eq!(decide("t1", &running, Some(&build("bbb", "t2")), None, None), Action::DropStaged);
+        assert_eq!(decide("t1", &running, Some(&build("bbb", "t2")), None, None, false), Action::DropStaged);
+        // During handover next has already moved into place, but the old
+        // app is still alive. Its pending git read mustn't rebuild t2.
+        assert_eq!(decide("t2", &running, None, None, None, true), Action::Nothing);
+    }
+
+    #[test]
+    fn update_builds_wait_for_the_latest_desktop_tree_to_settle() {
+        use std::time::{Duration, Instant};
+        let now = Instant::now();
+        let mut quiet = BuildDebounce::default();
+        assert!(!quiet.ready("t2", now));
+        assert!(!quiet.ready("t2", now + Duration::from_secs(599)));
+        assert!(quiet.ready("t2", now + Duration::from_secs(600)));
+        // More landings during a build collapse into the newest tree.
+        assert!(!quiet.ready("t3", now + Duration::from_secs(601)));
+        assert!(!quiet.ready("t4", now + Duration::from_secs(900)));
+        assert!(!quiet.ready("t4", now + Duration::from_secs(1499)));
+        assert!(quiet.ready("t4", now + Duration::from_secs(1500)));
+        // A busy host retry, or a landing outside desktop/, keeps its wait.
+        assert!(quiet.ready("t4", now + Duration::from_secs(1800)));
     }
 
     /// A moment that would restart: staged, loaded, nothing typed or under
@@ -346,6 +520,29 @@ mod tests {
         // Touched within the last five seconds: not yet.
         assert!(!should_auto_restart(&RestartMoment { idle_for: 4.9, ..quiet() }));
         assert!(!should_auto_restart(&RestartMoment { idle_for: 0., ..quiet() }));
+    }
+
+    #[test]
+    fn the_wait_counts_down_and_starts_again_with_input() {
+        let held = || "the message box in “Fix it” is sent or cleared".to_owned();
+        let wait = |m: RestartMoment| restart_wait(&m, held);
+        // In use: the full five. Then down to 1, and none once it's going.
+        assert_eq!(wait(RestartMoment { idle_for: 0., ..quiet() }), Some(RestartWait::Countdown(5)));
+        assert_eq!(wait(RestartMoment { idle_for: 0.4, ..quiet() }), Some(RestartWait::Countdown(5)));
+        assert_eq!(wait(RestartMoment { idle_for: 2.5, ..quiet() }), Some(RestartWait::Countdown(3)));
+        assert_eq!(wait(RestartMoment { idle_for: 4.9, ..quiet() }), Some(RestartWait::Countdown(1)));
+        assert_eq!(wait(quiet()), None);
+        assert_eq!(wait(RestartMoment { active: false, idle_for: 0., ..quiet() }), None);
+        // Whatever holds it is said instead, in front or behind.
+        for moment in [RestartMoment { has_drafts: true, ..quiet() }, RestartMoment { held: true, active: false, ..quiet() }, RestartMoment { other_window_input: true, idle_for: 0., ..quiet() }] {
+            assert_eq!(wait(moment), Some(RestartWait::Held(held())));
+        }
+        assert_eq!(wait(RestartMoment { loaded: false, has_drafts: true, ..quiet() }), Some(RestartWait::Held("the threads have loaded".into())));
+        assert_eq!(wait(RestartMoment { staged: false, idle_for: 0., ..quiet() }), None);
+        // It says a wait exactly when it isn't restarting.
+        for m in [quiet(), RestartMoment { idle_for: 1., ..quiet() }, RestartMoment { held: true, ..quiet() }, RestartMoment { active: false, ..quiet() }] {
+            assert_eq!(wait(m).is_none(), should_auto_restart(&m), "{m:?}");
+        }
     }
 
     #[test]

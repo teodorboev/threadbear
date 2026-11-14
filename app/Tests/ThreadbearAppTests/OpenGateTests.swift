@@ -118,32 +118,6 @@ final class OpenGateTests: XCTestCase {
         XCTAssertEqual(asked.count, 1)
     }
 
-    // MARK: Another Mac's copies
-
-    func testAnotherMacsProgramNeverOpens() throws {
-        let cache = folder.appendingPathComponent("remote", isDirectory: true)
-        try FileManager.default.createDirectory(at: cache, withIntermediateDirectories: true)
-        let origin = OpenGate.Origin.otherMac(name: "bruce", root: cache)
-        let profile = cache.appendingPathComponent("approval.terminal")
-        try "<plist/>".write(to: profile, atomically: true, encoding: .utf8)
-        answer = true
-        XCTAssertFalse(OpenGate.openFile(profile, origin: origin))
-        let doc = cache.appendingPathComponent("notes.md")
-        try "x".write(to: doc, atomically: true, encoding: .utf8)
-        XCTAssertTrue(OpenGate.openFile(doc, origin: origin))
-        // A file outside the cache isn't that Mac's copy of anything.
-        let mine = folder.appendingPathComponent("mine.md")
-        try "x".write(to: mine, atomically: true, encoding: .utf8)
-        XCTAssertFalse(OpenGate.openFile(mine, origin: origin))
-        // Nor is one a symlink in the cache points out at.
-        let escape = cache.appendingPathComponent("escape.md")
-        try FileManager.default.createSymbolicLink(at: escape, withDestinationURL: mine)
-        XCTAssertFalse(OpenGate.openFile(escape, origin: origin))
-        XCTAssertEqual(opened.map(\.path), [doc.path])
-        XCTAssertEqual(asked, [], "another Mac's program isn't even asked about")
-        XCTAssertEqual(refused.count, 3)
-    }
-
     // MARK: Links
 
     func testALinkToAnotherAppAsksFirst() throws {
@@ -280,21 +254,6 @@ final class OpenGateTests: XCTestCase {
         let sub = folder.appendingPathComponent("a folder", isDirectory: true)
         try FileManager.default.createDirectory(at: sub, withIntermediateDirectories: true)
         XCTAssertNil(OpenGate.look(sub)?.runs, "a folder goes to the Finder")
-
-        // From another Mac: never opened.
-        let cache = folder.appendingPathComponent("remote", isDirectory: true)
-        try FileManager.default.createDirectory(at: cache, withIntermediateDirectories: true)
-        let game = cache.appendingPathComponent("preview.love")
-        try Data("PK".utf8).write(to: game)
-        answer = true
-        XCTAssertFalse(OpenGate.openFile(game, origin: .otherMac(name: "bruce", root: cache)))
-        // Text, but going to an app that isn't known to only show it (an
-        // editor that runs JavaScript as it opens).
-        let script = cache.appendingPathComponent("payload.js")
-        try "require('child_process').execSync('touch /tmp/x')".write(to: script, atomically: true, encoding: .utf8)
-        XCTAssertNotNil(OpenGate.look(script)?.runs, "a script going to an app not known to only show it asks, here too")
-        XCTAssertFalse(OpenGate.openFile(script, origin: .otherMac(name: "bruce", root: cache)))
-        XCTAssertEqual(opened, [])
     }
 
     func testTheConvexPageCantClimbOutOfDevice() {
@@ -305,8 +264,8 @@ final class OpenGateTests: XCTestCase {
         XCTAssertNotNil(LinkPolicy.convexSignIn("https://auth.convex.dev/device/"))
     }
 
-    /// A Markdown file in the pane (this Mac's, or another Mac's copy) with
-    /// a link to another app: asked about, not handed to AppKit.
+    /// A Markdown file in the pane with a link to another app: asked
+    /// about, not handed to AppKit.
     func testAFilesLinkToAnotherAppAsksFirst() throws {
         let view = FileTextView()
         let delegate = SchemeLinkDelegate()

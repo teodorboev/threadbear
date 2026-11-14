@@ -12,9 +12,9 @@
 // work, 5 Nov).
 use crate::activity_panels::{about_button, dot, icon_button, panel_column, small_heading, system_green, system_orange, text_line};
 use crate::app::Threadbear;
-use crate::highlights::tipped;
+use crate::highlights::{tipped, tipped_as};
 use crate::{call, icons, now_ms, shell, style};
-use gpui_kit::component::spinner::Spinner;
+use crate::spinner::Spinner;
 use gpui_kit::component::{h_flex, v_flex, ActiveTheme as _, Sizable as _};
 use gpui_kit::prelude::*;
 use gpui_kit::*;
@@ -294,7 +294,9 @@ impl Threadbear {
     /// The threads running now, in the sidebar's Running order.
     fn running_threads(&self) -> Vec<ThreadSummary> {
         let wakes = inbox::wakes(&self.scheduled.list);
-        inbox::sections_ordered(self.threads.values(), now_ms(), self.sidebar.order, &wakes).into_iter().find(|s| s.key == "running").map(|s| s.rows).unwrap_or_default()
+        // Sectioned as shared pointers: only the Running rows are copied out
+        // (thread_map.rs; this panel redraws as often as the sidebar).
+        inbox::sections_ordered(self.threads.values(), now_ms(), self.sidebar.order, &wakes).into_iter().find(|s| s.key == "running").map(|s| s.rows.iter().map(|t| (**t).clone()).collect()).unwrap_or_default()
     }
 
     /// Where new threads start: this Mac unless Mike picked another.
@@ -360,7 +362,7 @@ impl Threadbear {
         if movable {
             // As wide as SF's 11 point line.3.horizontal, so the words line
             // up with the Swift card's.
-            card = card.child(tipped(div().id(SharedString::from(format!("runner-handle-{}", r.id))).flex_none().w(px(13.)).h(px(17.)).flex().items_center().justify_center().cursor_grab(), "Drag to change the order").child(icons::symbol("line.3.horizontal").with_size(px(12.)).text_color(tertiary)));
+            card = card.child(tipped_as(div().id(SharedString::from(format!("runner-handle-{}", r.id))).flex_none().w(px(13.)).h(px(17.)).flex().items_center().justify_center().cursor_grab(), "Drag to change the order", gpui_kit::Role::GenericContainer).child(icons::symbol("line.3.horizontal").with_size(px(12.)).text_color(tertiary)));
         }
         card = card
             .child(div().flex_none().w(px(22.)).h(px(17.)).flex().items_center().justify_center().child(icons::symbol(symbol).with_size(px(15.)).text_color(if state == State::Offline { tertiary } else { secondary })))
@@ -538,7 +540,7 @@ pub(crate) fn automation(app: &Entity<Threadbear>, cmd: &Value, window: &mut Win
         let center = |name: &str, window: &mut Window| -> Result<Point<Pixels>, String> {
             let tips = [format!("Show {name}'s CPU, memory and disk"), format!("Hide {name}'s details")];
             let found = window.elements().into_iter().filter(|e| e.visible() && e.label().is_some_and(|l| tips.contains(&l.to_string()))).last();
-            found.map(|e| e.bounds().center()).ok_or_else(|| format!("no card for {name} on screen"))
+            found.map(|e| e.visible_bounds().center()).ok_or_else(|| format!("no card for {name} on screen"))
         };
         let (a, b) = (center(from, window)?, center(onto, window)?);
         window.pointer_move(a, None, cx);

@@ -4,7 +4,7 @@ name: Decisions on the Projects page
 title: Decisions on the Projects page: every open question from a project's threads in one place, answered in a row
 added: 2026-11-10
 on: false
-reminder: a708aa86
+reminder: fb4dcba3
 ---
 
 ## What it does
@@ -13,7 +13,7 @@ Every question your threads are waiting on you for, gathered by project. On the 
 
 ## Lives in
 
-`app/Sources/ThreadbearCore/Threads/ProjectDecisions.swift` (which threads, the counts, the line on what each is doing), `decisions` in `ProjectCardStatus` (`ProjectCards.swift`); the Decisions section and its cards in `app/Sources/Threadbear/Views/ProjectDecisionsView.swift`, shown from `ProjectPage.swift`, the counts in `ProjectsHome.swift`, the folded sidebar rows in `ProjectsList.swift` (`ProjectFoldRow`) with `app/Sources/ThreadbearCore/Threads/ProjectFolds.swift` and `openProjectRows` in `AppModel.swift`; the page's tabs in `ProjectPage.swift` (`ProjectTabBar`) with `app/Sources/ThreadbearCore/Threads/ProjectTabs.swift`, `projectTabsPicked` in `AppModel.swift` and the Go menu's Show Previous Tab and Show Next Tab (`previousTab`, `nextTab` in `Shortcuts.swift`); `pickDecision`, `sendDecision` and `decisionSends` in `AppModel+ThreadActions.swift` and `AppModel.swift`. The app learns it's on from `hello`'s `experiments`. The runner keeps nothing of its own for it: thread summaries already carry their asks, the line is the thread's latest headline, and answers are an ordinary `threads.send`.
+`app/Sources/ThreadbearCore/Threads/ProjectDecisions.swift` (which threads, the counts, the line on what each is doing), `decisions` in `ProjectCardStatus` (`ProjectCards.swift`); the Decisions section and its cards in `app/Sources/Threadbear/Views/ProjectDecisionsView.swift`, shown from `ProjectPage.swift`, the counts in `ProjectsHome.swift`, the folded sidebar rows in `ProjectsList.swift` (`ProjectFoldRow`) with `app/Sources/ThreadbearCore/Threads/ProjectFolds.swift` and `openProjectRows` in `AppModel.swift`; the page's tabs in `ProjectPage.swift` (`ProjectTabBar`) with `app/Sources/ThreadbearCore/Threads/ProjectTabs.swift`, `projectTabsPicked` in `AppModel.swift` and the Go menu's Show Previous Tab and Show Next Tab (`previousTab`, `nextTab` in `Shortcuts.swift`); `pickDecision`, `sendDecision` and `decisionSends` in `AppModel+ThreadActions.swift` and `AppModel.swift`. In the GPUI app: the Decisions tab and its cards in `desktop/gpui/src/project_decisions.rs`, the tabs in `project_page.rs`, the tab rules in `desktop/core/src/projects.rs`, and `previousTab`, `nextTab` in `desktop/core/src/shortcuts.rs`. The app learns it's on from `hello`'s `experiments`. The runner keeps nothing of its own for it: thread summaries already carry their asks, the line is the thread's latest headline, and answers are an ordinary `threads.send`.
 
 ## Taking it out
 

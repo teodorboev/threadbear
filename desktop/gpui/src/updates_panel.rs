@@ -7,6 +7,7 @@
 // The app's own update (app_update.rs) is its App section, and a right-click
 // on the icon puts it in a popover beside it with Restart to Update, the quick
 // way to take one (Swift's AppUpdatePopover).
+use crate::a11y::A11yRole as _;
 use crate::activity_panels::{button_row, panel_column, push_button, small_heading, system_orange, text_button, text_line, MenuLabel};
 use crate::app::Threadbear;
 use crate::{call, icons, now_ms, shell, style};
@@ -19,15 +20,12 @@ use gpui_kit::*;
 use crate::style::px;
 use serde_json::{json, Value};
 use std::collections::HashSet;
-use std::time::Duration;
 use threadbear_core::inbox::ThreadSummary;
 use threadbear_core::new_thread::{Draft, NewThreadPicks};
 use threadbear_core::updates::{self as rules, AppSide, CliStatus, RunnerUpdates};
 use crate::tips::Tip as _;
 
 
-/// How long Copy says it copied.
-const COPIED_FOR: Duration = Duration::from_millis(1500);
 
 /// The Updates panel's state in the app (`Threadbear::updates_panel`).
 #[derive(Default)]
@@ -46,10 +44,11 @@ pub(crate) struct UpdatesPanelState {
     pub(crate) busy: HashSet<String>,
     /// Bring Them In or Let's Discuss is starting its thread.
     pub(crate) bringing_in: bool,
-    /// The launcher's command was copied a moment ago (counts the copies, so
-    /// an older one's timer leaves a newer one's word alone).
-    copied: Option<u64>,
-    copies: u64,
+    /// Port this on its way, by commit.
+    pub(crate) porting: HashSet<String>,
+    /// Reinstall now is on its way to the runner (runner.reinstall), until
+    /// its answer brings the runner's own word of it.
+    pub(crate) reinstalling: bool,
     /// The icon's right-click popover is up, and its keyboard (Return
     /// restarts, Esc puts it away).
     pub(crate) popover: bool,
@@ -63,7 +62,7 @@ impl Threadbear {
     /// has none, and `clis.list` tells which.
     pub(crate) fn updates_from_hello(&mut self, hello: &Value) {
         let panel = &mut self.updates_panel;
-        panel.clis = rules::decode_clis(&hello["clis"]);
+        panel.clis = rules::decode_clis_with(&hello["clis"], &self.logins);
         panel.clis_supported = if panel.clis.is_empty() { None } else { Some(true) };
         panel.runner = RunnerUpdates::decode(&hello["updates"]);
         panel.busy.clear();
@@ -80,7 +79,7 @@ impl Threadbear {
             this.update(cx, |t, cx| {
                 match res {
                     Ok(v) => {
-                        t.updates_panel.clis = rules::decode_clis(&v["clis"]);
+                        t.updates_panel.clis = rules::decode_clis_with(&v["clis"], &t.logins);
                         t.updates_panel.clis_supported = Some(true);
                     }
                     Err(e) if e.code == -32601 => {
@@ -98,7 +97,7 @@ impl Threadbear {
 
     /// `clis.updated`: the latest list wins.
     pub(crate) fn clis_updated(&mut self, params: &Value) {
-        self.updates_panel.clis = rules::decode_clis(&params["clis"]);
+        self.updates_panel.clis = rules::decode_clis_with(&params["clis"], &self.logins);
         self.updates_panel.clis_supported = Some(true);
     }
 
@@ -143,7 +142,7 @@ impl Threadbear {
                 t.updates_panel.busy.remove(&key);
                 match res {
                     Ok(v) => {
-                        t.updates_panel.clis = rules::decode_clis(&v["clis"]);
+                        t.updates_panel.clis = rules::decode_clis_with(&v["clis"], &t.logins);
                         t.updates_panel.clis_supported = Some(true);
                     }
                     Err(e) => {
@@ -231,7 +230,7 @@ impl Threadbear {
                 match res.map(|v| serde_json::from_value::<ThreadSummary>(v["thread"].clone())) {
                     Ok(Ok(thread)) if !thread.id.is_empty() => {
                         let id = thread.id.clone();
-                        t.threads.insert(id.clone(), thread);
+                        t.threads.insert(id.clone(), std::sync::Arc::new(thread));
                         t.open(id, window, cx);
                     }
                     Ok(_) => t.show_error("The runner didn't say what thread it made.".to_owned(), cx),
@@ -244,52 +243,138 @@ impl Threadbear {
         .detach();
     }
 
-    /// Copy: the command, to run in Terminal. The button says Copied for a
-    /// moment, as nothing else shows the click took.
-    fn copy_install_command(&mut self, command: String, cx: &mut Context<Self>) {
-        cx.write_to_clipboard(ClipboardItem::new_string(command));
-        self.updates_panel.copies += 1;
-        let n = self.updates_panel.copies;
-        self.updates_panel.copied = Some(n);
+    /// Reinstall now (or Try again): the runner reinstalls its LaunchAgent
+    /// once no thread is busy (protocol "Runner updates"). The button spins
+    /// and takes no clicks from the press until the runner says where it's
+    /// got to; an error puts it back, with the error.
+    fn reinstall_runner(&mut self, cx: &mut Context<Self>) {
+        if self.updates_panel.reinstalling {
+            return;
+        }
+        self.updates_panel.reinstalling = true;
         cx.notify();
+        let client = self.client.clone();
         cx.spawn(async move |this, cx| {
-            cx.background_executor().timer(COPIED_FOR).await;
+            let res = call(client, "runner.reinstall", json!({})).await;
             this.update(cx, |t, cx| {
-                if t.updates_panel.copied == Some(n) {
-                    t.updates_panel.copied = None;
-                    cx.notify();
+                t.updates_panel.reinstalling = false;
+                match res {
+                    Ok(v) => {
+                        if let Some(r) = t.updates_panel.runner.as_mut() {
+                            r.reinstall = rules::Reinstall::decode(&v["reinstall"]);
+                        }
+                    }
+                    // A runner from before Reinstall now: it gets it with
+                    // its next update from main, a few minutes after this app.
+                    Err(e) if e.code == -32601 => t.show_error("This runner can't reinstall itself yet. It can once it updates to main, in a few minutes; try again then.".to_owned(), cx),
+                    Err(e) => t.show_error(e.message, cx),
                 }
+                cx.notify();
             })
             .ok();
         })
         .detach();
     }
 
-    // What it shows.
-
-    /// The command for a changed launch.mjs, from the checkout the runner
-    /// follows when it says, else where the README's fork puts one.
-    fn install_command(&self) -> String {
-        let checkout = self.updates_panel.runner.as_ref().and_then(|r| r.upstream.as_ref()).and_then(|u| u.checkout.clone());
-        rules::install_command(checkout.as_deref(), &std::env::var("HOME").unwrap_or_default())
+    /// Port this: the runner starts a thread to rebuild that one change in
+    /// this app (or names the one already on it), and it opens. The button
+    /// spins and takes no clicks until then.
+    fn port_swift_change(&mut self, commit: String, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.updates_panel.porting.insert(commit.clone()) {
+            return;
+        }
+        cx.notify();
+        let client = self.client.clone();
+        cx.spawn_in(window, async move |this, cx| {
+            let res = call(client, "swiftChanges.port", json!({ "commit": commit })).await;
+            this.update_in(cx, |t, window, cx| {
+                t.updates_panel.porting.remove(&commit);
+                match res {
+                    Ok(v) => {
+                        t.take_swift_changes(&v["swiftChanges"]);
+                        // The thread itself, so it opens before the list's
+                        // own word of it arrives (open goes nowhere for a
+                        // thread it doesn't know; Windows lost that race).
+                        if let Ok(thread) = serde_json::from_value::<ThreadSummary>(v["thread"].clone()) {
+                            if !thread.id.is_empty() && !t.threads.contains_key(&thread.id) {
+                                t.threads.insert(thread.id.clone(), std::sync::Arc::new(thread));
+                            }
+                        }
+                        match v["threadId"].as_str() {
+                            Some(id) if !id.is_empty() => t.open(id.to_owned(), window, cx),
+                            _ => t.show_error("The runner didn't say what thread it made.".to_owned(), cx),
+                        }
+                    }
+                    Err(e) => t.show_error(e.message, cx),
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
     }
+
+    /// Dismiss: off the list at once, back with the error if the runner
+    /// refuses.
+    fn dismiss_swift_change(&mut self, commit: String, cx: &mut Context<Self>) {
+        let Some(runner) = self.updates_panel.runner.as_mut() else { return };
+        let before = runner.swift_changes.clone();
+        runner.swift_changes.retain(|c| c.commit != commit);
+        cx.notify();
+        let client = self.client.clone();
+        cx.spawn(async move |this, cx| {
+            let res = call(client, "swiftChanges.dismiss", json!({ "commit": commit })).await;
+            this.update(cx, |t, cx| {
+                match res {
+                    Ok(v) => t.take_swift_changes(&v["swiftChanges"]),
+                    Err(e) => {
+                        if let Some(r) = t.updates_panel.runner.as_mut() {
+                            r.swift_changes = before;
+                        }
+                        t.show_error(e.message, cx);
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// A request's answer, ahead of the `runner.updates` that follows it.
+    fn take_swift_changes(&mut self, v: &Value) {
+        if let (Some(runner), true) = (self.updates_panel.runner.as_mut(), v.is_object()) {
+            runner.swift_changes = RunnerUpdates::decode(&json!({ "swiftChanges": v })).map(|u| u.swift_changes).unwrap_or_default();
+        }
+    }
+
+    // What it shows.
 
     /// A thread's title for a link to it, or the start of its id when it
     /// isn't listed here.
-    fn thread_title(&self, id: &str) -> String {
+    pub(crate) fn thread_title(&self, id: &str) -> String {
         match self.threads.get(id) {
             Some(t) if !t.title.is_empty() => t.title.clone(),
             _ => id.chars().take(8).collect(),
         }
     }
 
-    /// `UpdatesPanel`: App, Runner, From Mike when there's a release to say
-    /// anything about, and the CLIs.
+    /// `UpdatesPanel`: a fork's own Swift changes when it has any, App,
+    /// Runner, From Mike when there's a release to say anything about, and
+    /// the CLIs.
     pub(crate) fn render_updates_panel(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let fg = style::label_text(cx);
         let line = |text: String| text_line(text, 12., fg).into_any_element();
         let app = self.render_app_update(cx);
-        let mut sections = vec![section("App", app, cx)];
+        // A fork's own Swift changes, to rebuild here, first: the one part
+        // that asks for something doing, and its buttons stay in reach in a
+        // short window (GitHub's Mac, 1024x768, missed the second row's).
+        let mut sections = Vec::new();
+        let swift = self.updates_panel.runner.as_ref().map(|r| r.swift_changes.clone()).unwrap_or_default();
+        if !swift.is_empty() {
+            sections.push(section("Not in the new app yet", self.render_swift_changes(&swift, cx), cx));
+        }
+        sections.push(section("App", app, cx));
         sections.push(section("Runner", self.render_runner_updates(cx), cx));
         let upstream = self.updates_panel.runner.as_ref().and_then(|r| r.upstream.clone());
         if let Some(text) = rules::upstream_line(upstream.as_ref()) {
@@ -343,7 +428,7 @@ impl Threadbear {
         let line = h_flex()
             .gap(px(7.))
             .items_center()
-            .when(side.building && side.staged.is_none(), |s| s.child(div().size(px(11.)).child(gpui_kit::component::spinner::Spinner::new().icon(gpui_kit::assets::IconName::LoaderCircle).color(secondary).with_size(px(11.)))))
+            .when(side.building && side.staged.is_none(), |s| s.child(div().size(px(11.)).child(crate::spinner::Spinner::new().icon(gpui_kit::assets::IconName::LoaderCircle).color(secondary).with_size(px(11.)))))
             .child(div().whitespace_nowrap().text_size(px(12.)).text_color(style::label_text(cx)).child(rules::popover_line(&side)));
         let button = match &staged {
             // Return takes it, as the popover is there for this.
@@ -420,10 +505,11 @@ impl Threadbear {
         let (build, old, launcher) = (rules::build_line(&runner), rules::old_runners_line(&runner), rules::launcher_line(&runner));
         let not_following = rules::follow_lines(&runner);
         let mut out = Vec::new();
-        if build.is_none() && old.is_none() && launcher.is_none() && not_following.is_empty() {
+        if build.is_none() && old.is_none() && launcher.is_none() && not_following.is_empty() && runner.web_runtime_problem.is_none() {
             out.push(line("The runner is up to date.".to_owned()));
         }
         out.extend(not_following.into_iter().map(line));
+        out.extend(runner.web_runtime_problem.clone().map(line));
         out.extend(build.map(line));
         if let Some(old) = old {
             out.push(line(old));
@@ -434,18 +520,17 @@ impl Threadbear {
         }
         if let Some(launcher) = launcher {
             out.push(line(launcher));
-            let command = self.install_command();
-            let copy = command.clone();
-            let copied = self.updates_panel.copied.is_some();
-            let mono = cx.theme().mono_font_family.clone();
-            out.push(
-                h_flex()
-                    .gap(px(6.))
-                    .items_center()
-                    .child(text_line(command, 11., fg).font_family(mono).flex_1().min_w_0().line_clamp(2))
-                    .child(push_button("updates-copy", if copied { "Copied" } else { "Copy" }, "Copy the command, to run in Terminal", false, false, cx, move |t, _, cx| t.copy_install_command(copy.clone(), cx)))
-                    .into_any_element(),
-            );
+            let log = runner.reinstall.as_ref().filter(|r| r.state == "failed").and_then(|r| r.log_file.clone());
+            if let Some((label, tip, on_its_way)) = rules::launcher_button(&runner) {
+                let busy = on_its_way || self.updates_panel.reinstalling;
+                out.push(
+                    h_flex()
+                        .gap(px(6.))
+                        .child(push_button("updates-reinstall", label, tip, false, busy, cx, |t, _, cx| t.reinstall_runner(cx)))
+                        .children(log.map(|file| push_button("updates-reinstall-log", "Show the Log", "Open the reinstall's output, to see why it didn't work", false, false, cx, move |_, _, cx| crate::open_gate::open_own(std::path::Path::new(&file), cx))))
+                        .into_any_element(),
+                );
+            }
         }
         out
     }
@@ -469,6 +554,38 @@ impl Threadbear {
         // Both stay put and take no clicks while the thread is on its way.
         let row = button_row(buttons, busy, cx);
         out.push(if busy { div().opacity(0.5).child(row).into_any_element() } else { row });
+        out
+    }
+
+    /// Each change: its subject, when and what, and Port this and Dismiss,
+    /// or a link to the thread already rebuilding it.
+    fn render_swift_changes(&mut self, changes: &[rules::SwiftChange], cx: &mut Context<Self>) -> Vec<AnyElement> {
+        let (fg, secondary) = (style::label_text(cx), style::secondary_text(cx));
+        let mut out = vec![text_line(rules::swift_changes_line(changes.len()), 12., fg).into_any_element()];
+        for c in changes {
+            let commit = c.commit.clone();
+            let mut row = v_flex()
+                .gap(px(3.))
+                .pt(px(2.))
+                .child(text_line(c.subject.clone(), 12., fg).line_clamp(2))
+                .child(text_line(rules::swift_change_detail(c), 11., secondary).truncate());
+            if let Some(id) = c.thread_id.clone() {
+                let title = format!("Being rebuilt in {}", self.thread_title(&id));
+                row = row.child(text_button(SharedString::from(format!("updates-swift-open-{commit}")), title, "Open the thread rebuilding this change", 11., true, false, cx, move |t, window, cx| t.open(id.clone(), window, cx)));
+            } else {
+                let busy = self.updates_panel.porting.contains(&commit);
+                let (port, dismiss) = (commit.clone(), commit.clone());
+                row = row.child(button_row(
+                    vec![
+                        push_button(SharedString::from(format!("updates-swift-port-{commit}")), "Port this", "Start a thread that rebuilds this change in the new app. It asks before changing anything.", true, busy, cx, move |t, window, cx| t.port_swift_change(port.clone(), window, cx)),
+                        push_button(SharedString::from(format!("updates-swift-dismiss-{commit}")), "Dismiss", "Leave this change out of the new app and off this list", true, false, cx, move |t, _, cx| t.dismiss_swift_change(dismiss.clone(), cx)),
+                    ],
+                    false,
+                    cx,
+                ));
+            }
+            out.push(row.into_any_element());
+        }
         out
     }
 
@@ -553,7 +670,7 @@ impl Threadbear {
         let current = cli.policy.clone();
         let app = cx.entity().downgrade();
         let words = format!("Updates: {}", rules::policy_title(&cli.policy));
-        let holder = div().id(SharedString::from(format!("updates-policy-{}", cli.provider))).flex_none().test_support().aria_label(tip).tip(tip);
+        let holder = div().id(SharedString::from(format!("updates-policy-{}", cli.provider))).flex_none().test_support().a11y_role(Role::GenericContainer).aria_label(tip).tip(tip);
         if busy {
             // Taking no other choice until the runner has this one.
             return holder.opacity(0.5).child(MenuLabel::new(SharedString::from(format!("updates-policy-{provider}-label")), words, 11., style::label_text(cx))).into_any_element();
@@ -583,15 +700,30 @@ impl Threadbear {
 
     /// What the panel says, a line each, in the Swift app's dump shape.
     pub(crate) fn updates_dump(&self, cx: &App) -> Value {
-        let mut lines = vec!["# App".to_owned(), rules::app_line(&self.app_side()), "# Runner".to_owned()];
+        let mut lines = Vec::new();
+        let swift = self.updates_panel.runner.as_ref().map(|r| r.swift_changes.as_slice()).unwrap_or_default();
+        if !swift.is_empty() {
+            lines.push("# Not in the new app yet".to_owned());
+            lines.push(rules::swift_changes_line(swift.len()));
+            for c in swift {
+                lines.push(format!("  {} ({})", c.subject, rules::swift_change_detail(c)));
+                lines.push(match &c.thread_id {
+                    Some(id) => format!("  > Being rebuilt in {}", self.thread_title(id)),
+                    None if self.updates_panel.porting.contains(&c.commit) => "  [Port this: starting] [Dismiss]".to_owned(),
+                    None => "  [Port this] [Dismiss]".to_owned(),
+                });
+            }
+        }
+        lines.extend(["# App".to_owned(), rules::app_line(&self.app_side()), "# Runner".to_owned()]);
         match &self.updates_panel.runner {
             Some(runner) => {
                 let (build, old, launcher) = (rules::build_line(runner), rules::old_runners_line(runner), rules::launcher_line(runner));
                 let not_following = rules::follow_lines(runner);
-                if build.is_none() && old.is_none() && launcher.is_none() && not_following.is_empty() {
+                if build.is_none() && old.is_none() && launcher.is_none() && not_following.is_empty() && runner.web_runtime_problem.is_none() {
                     lines.push("The runner is up to date.".to_owned());
                 }
                 lines.extend(not_following);
+                lines.extend(runner.web_runtime_problem.clone());
                 lines.extend(build);
                 if let Some(old) = old {
                     lines.push(old);
@@ -599,7 +731,10 @@ impl Threadbear {
                 }
                 if let Some(launcher) = launcher {
                     lines.push(launcher);
-                    lines.push(format!("  $ {} [Copy]", self.install_command()));
+                    if let Some((label, _, on_its_way)) = rules::launcher_button(runner) {
+                        let busy = on_its_way || self.updates_panel.reinstalling;
+                        lines.push(format!("  [{label}{}]", if busy { ": busy" } else { "" }));
+                    }
                 }
             }
             None => lines.extend(rules::runner_lines(None)),
@@ -643,22 +778,35 @@ fn section(title: &'static str, content: Vec<AnyElement>, cx: &App) -> AnyElemen
 /// The automation's `updates` (the Swift app's): `show` opens or closes the
 /// panel; with nothing, whether the icon has its dot, its tooltip, and what
 /// the panel says about the app and the runner. `preview` makes up the app's
-/// own update first (`staged`, `building`, `failed`, `waiting` or `none`), as
+/// own update first (`staged`, `building`, `settling`, `failed`, `waiting` or `none`), as
 /// the Swift app's; this app has no right-click popover (`rightClick`).
 pub(crate) fn automation(app: &Entity<Threadbear>, cmd: &Value, window: &mut Window, cx: &mut App) -> Result<Value, String> {
     // What a restart onto an update leaves for the next launch, put back as
     // that launch does (app_update.rs, `restore_after_update`): a scripted
     // app never restarts itself.
+    // {"restartState": true}: what a restart onto an update would leave
+    // for the next launch now (app_update.rs, `restore_state`).
+    if cmd["restartState"].as_bool() == Some(true) {
+        let state = app.update(cx, |t, cx| t.restore_state(false, cx));
+        return Ok(json!(format!("ok {state}")));
+    }
     if let Some(saved) = cmd.get("restore").filter(|v| v.is_object()) {
         app.update(cx, |t, cx| {
+            // {"fresh": true}: as a new launch would be, with no thread's
+            // place remembered and no thread kept loaded, so only what was
+            // saved can put a thread back where it was.
+            if cmd["fresh"].as_bool() == Some(true) {
+                crate::rows::forget_scroll_memories();
+                t.kept.retain(cx, |_| false);
+            }
             t.settings.saved.update_restore = Some(saved.clone());
             t.restore_after_update(cx);
         });
         return Ok(json!("ok"));
     }
     if let Some(state) = cmd["preview"].as_str() {
-        if !["staged", "building", "failed", "waiting", "none"].contains(&state) {
-            return Err("preview is staged, building, failed, waiting or none".into());
+        if !["staged", "building", "settling", "failed", "waiting", "no-builder", "none"].contains(&state) {
+            return Err("preview is staged, building, settling, failed, waiting, no-builder or none".into());
         }
         app.update(cx, |t, cx| t.preview_update(state, cx));
     }

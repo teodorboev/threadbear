@@ -18,6 +18,7 @@ pub(crate) fn path() -> Option<PathBuf> {
 
 /// From the app's start, before the connection's first line.
 pub(crate) fn start() {
+    threadbear_core::wire::set_logger(|message| threadbear_client::log::write("decode", message));
     let Some(path) = path() else { return };
     // Owner-only, as every file the app writes (private_file_source.rs).
     let opened = path.parent().map_or(Ok(()), threadbear_core::private_file::dir).and_then(|()| threadbear_client::log::open(&path, threadbear_core::private_file::append));

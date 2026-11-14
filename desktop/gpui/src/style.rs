@@ -4,7 +4,7 @@
 #![allow(dead_code)] // Filled in ahead of the views that use each value.
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::*;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 // The window's zoom (TextZoom in Theme.swift): ⌘= and ⌘- scale everything
 // together, like a browser's zoom. Every point size in the window goes through
@@ -174,6 +174,210 @@ pub(crate) fn install_window_colours(cx: &mut App) {
         changed.colors.popover = Some(hex(popover));
         *config = Rc::new(changed);
     }
+    refresh_system_accent(cx);
+    refresh_system_contrast(cx);
+    refresh_system_clock();
+}
+
+/// Use AppKit's effective accessibility appearance where available, and
+/// strengthen its semantic colours for the other look. Cache both palettes.
+#[derive(Clone, PartialEq)]
+struct SystemContrast {
+    enabled: bool,
+    revision: u64,
+    light: [Hsla; 4],
+    dark: [Hsla; 4],
+    normal_kit: [[Option<SharedString>; 6]; 2],
+}
+impl Global for SystemContrast {}
+
+static CLOCK_24H: AtomicBool = AtomicBool::new(false);
+
+/// Cached for wait tips, which draw once per visible row each frame.
+pub(crate) fn uses_24_hour_clock() -> bool {
+    CLOCK_24H.load(Ordering::Relaxed)
+}
+
+/// The Mac's hour cycle, including its 24-hour override. Read on launch,
+/// return to the front and opening the picker, never while drawing rows.
+pub(crate) fn refresh_system_clock() {
+    #[cfg(target_os = "macos")]
+    {
+        use objc2_foundation::{NSDateFormatter, NSLocale, NSString};
+        let pattern = NSDateFormatter::dateFormatFromTemplate_options_locale(&NSString::from_str("j"), 0, Some(&NSLocale::currentLocale()));
+        CLOCK_24H.store(pattern.is_some_and(|p| p.to_string().contains(['H', 'k'])), Ordering::Relaxed);
+    }
+}
+
+pub(crate) type ReadingStyleKey = (bool, u64, u32);
+
+/// A system appearance can replace the contrast colours without changing
+/// the app's fixed light/dark look or the Increase Contrast switch.
+pub(crate) fn reading_style_key(cx: &App) -> ReadingStyleKey {
+    (cx.theme().is_dark(), cx.try_global::<SystemContrast>().map_or(0, |s| s.revision), zoom_percent())
+}
+
+pub(crate) fn increase_contrast(cx: &App) -> bool {
+    cx.try_global::<SystemContrast>().is_some_and(|s| s.enabled)
+}
+
+pub(crate) fn refresh_system_contrast(cx: &mut App) {
+    #[cfg(target_os = "macos")]
+    {
+        let enabled = system_increase_contrast();
+        let Some((light, dark)) = system_contrast_colours(false, enabled).zip(system_contrast_colours(true, enabled)) else { return };
+        if cx.try_global::<SystemContrast>().is_some_and(|s| s.enabled == enabled && s.light == light && s.dark == dark) { return; }
+        let normal_kit = cx.try_global::<SystemContrast>().map(|s| s.normal_kit.clone()).unwrap_or_else(|| {
+            let theme = gpui_kit::component::Theme::global(cx);
+            [&theme.light_theme, &theme.dark_theme].map(|t| {
+                let c = &t.colors;
+                [c.foreground.clone(), c.sidebar_foreground.clone(), c.muted_foreground.clone(), c.border.clone(), c.input.clone(), c.sidebar_border.clone()]
+            })
+        });
+        let first = cx.try_global::<SystemContrast>().is_none();
+        let revision = cx.try_global::<SystemContrast>().map_or(1, |s| s.revision.wrapping_add(1));
+        cx.set_global(SystemContrast { enabled, revision, light, dark, normal_kit: normal_kit.clone() });
+        if first && !enabled { return; }
+        // Kit controls (inputs, calendars and menus) use these tokens rather
+        // than the transcript's style functions. Resolve both from AppKit.
+        use gpui_kit::component::Theme;
+        use std::rc::Rc;
+        let theme = Theme::global_mut(cx);
+        let mode = theme.mode;
+        let hex = |c: Hsla| -> SharedString {
+            let c = Rgba::from(c);
+            format!("#{:02x}{:02x}{:02x}{:02x}", (c.r * 255.).round() as u8, (c.g * 255.).round() as u8, (c.b * 255.).round() as u8, (c.a * 255.).round() as u8).into()
+        };
+        for ((config, colours), normal) in [(&mut theme.light_theme, light), (&mut theme.dark_theme, dark)].into_iter().zip(normal_kit) {
+            let mut changed = (**config).clone();
+            let [foreground, sidebar_foreground, muted_foreground, border, input, sidebar_border] = if enabled {
+                [0, 0, 1, 3, 3, 3].map(|i| Some(hex(colours[i])))
+            } else { normal };
+            changed.colors.foreground = foreground;
+            changed.colors.sidebar_foreground = sidebar_foreground;
+            changed.colors.muted_foreground = muted_foreground;
+            changed.colors.border = border;
+            changed.colors.input = input;
+            changed.colors.sidebar_border = sidebar_border;
+            *config = Rc::new(changed);
+        }
+        Theme::change(mode, None, cx);
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = cx;
+}
+
+#[cfg(target_os = "macos")]
+fn system_increase_contrast() -> bool {
+    // A scripted app can show the two looks without changing Mike's setting.
+    #[cfg(feature = "automation")]
+    match std::env::var("THREADBEAR_INCREASE_CONTRAST").as_deref() {
+        Ok("on") => return true,
+        Ok("off") => return false,
+        _ => {}
+    }
+    objc2_app_kit::NSWorkspace::sharedWorkspace().accessibilityDisplayShouldIncreaseContrast()
+}
+
+#[cfg(target_os = "macos")]
+#[allow(deprecated)]
+fn system_contrast_colours(dark: bool, contrast: bool) -> Option<[Hsla; 4]> {
+    use objc2_app_kit::{NSApplication, NSAppearance, NSAppearanceNameAqua, NSAppearanceNameDarkAqua, NSAppearanceNameAccessibilityHighContrastAqua, NSAppearanceNameAccessibilityHighContrastDarkAqua, NSColor, NSColorSpace};
+    use objc2::MainThreadMarker;
+    use objc2_foundation::NSArray;
+    unsafe {
+        let name = if dark { NSAppearanceNameDarkAqua } else { NSAppearanceNameAqua };
+        let mut appearance = NSAppearance::appearanceNamed(name)?;
+        // High-contrast names are for matching only. Apple's SDK explicitly
+        // forbids passing them to appearanceNamed (older macOS returns nil).
+        let native = contrast && MainThreadMarker::new().is_some_and(|mtm| {
+            let effective = NSApplication::sharedApplication(mtm).effectiveAppearance();
+            let names = NSArray::from_slice(&[NSAppearanceNameAccessibilityHighContrastDarkAqua, NSAppearanceNameAccessibilityHighContrastAqua, NSAppearanceNameDarkAqua, NSAppearanceNameAqua]);
+            let wanted = if dark { NSAppearanceNameAccessibilityHighContrastDarkAqua } else { NSAppearanceNameAccessibilityHighContrastAqua };
+            if effective.bestMatchFromAppearancesWithNames(&names).is_some_and(|n| &*n == wanted) {
+                appearance = effective;
+                true
+            } else { false }
+        });
+        let previous = NSAppearance::currentAppearance();
+        NSAppearance::setCurrentAppearance(Some(&appearance));
+        let resolve = |color: objc2::rc::Retained<NSColor>| -> Option<Hsla> {
+            let c = color.colorUsingColorSpace(&NSColorSpace::sRGBColorSpace())?;
+            Some(srgb(c.redComponent() as f32, c.greenComponent() as f32, c.blueComponent() as f32, c.alphaComponent() as f32))
+        };
+        let colours = [NSColor::labelColor(), NSColor::secondaryLabelColor(), NSColor::tertiaryLabelColor(), NSColor::separatorColor()].map(resolve);
+        NSAppearance::setCurrentAppearance(previous.as_deref());
+        let mut colours = [colours[0]?, colours[1]?, colours[2]?, colours[3]?];
+        if contrast && !native {
+            // The system only exposes its current effective look. Keep the
+            // other look, and automation's preview, readable without changing
+            // system preferences or constructing an unsupported appearance.
+            for (colour, minimum) in colours.iter_mut().zip([0.95, 0.75, 0.6, 0.5]) {
+                colour.a = colour.a.max(minimum);
+            }
+        }
+        Some(colours)
+    }
+}
+
+fn contrast_colour(cx: &App, index: usize, fallback: Hsla) -> Hsla {
+    match cx.try_global::<SystemContrast>().filter(|s| s.enabled) {
+        Some(s) => if cx.theme().is_dark() { s.dark[index] } else { s.light[index] },
+        None => fallback,
+    }
+}
+
+#[derive(Clone, Copy, PartialEq)]
+struct SystemAccent { light: Rgba, dark: Rgba }
+impl Global for SystemAccent {}
+
+/// System Settings can change the accent while this app is behind it. Read
+/// it at launch and on return, once for both appearances, rather than ask
+/// AppKit for every button in every frame.
+pub(crate) fn refresh_system_accent(cx: &mut App) {
+    #[cfg(target_os = "macos")]
+    {
+        use gpui_kit::component::Theme;
+        use std::rc::Rc;
+        let Some((light, dark)) = system_control_accent(false).zip(system_control_accent(true)) else { return };
+        let accent = SystemAccent { light, dark };
+        if cx.try_global::<SystemAccent>() == Some(&accent) { return; }
+        cx.set_global(accent);
+        let theme = Theme::global_mut(cx);
+        let mode = theme.mode;
+        for (config, color) in [(&mut theme.light_theme, light), (&mut theme.dark_theme, dark)] {
+            let hex: SharedString = format!("#{:02x}{:02x}{:02x}", (color.r * 255.).round() as u8, (color.g * 255.).round() as u8, (color.b * 255.).round() as u8).into();
+            let mut changed = (**config).clone();
+            changed.colors.primary = Some(hex.clone());
+            changed.colors.ring = Some(hex);
+            let shade = |toward: f32| -> SharedString {
+                let mix = |c: f32| ((c * 0.9 + toward * 0.1) * 255.).round() as u8;
+                format!("#{:02x}{:02x}{:02x}", mix(color.r), mix(color.g), mix(color.b)).into()
+            };
+            changed.colors.primary_hover = Some(shade(1.));
+            changed.colors.primary_active = Some(shade(0.));
+            *config = Rc::new(changed);
+        }
+        Theme::change(mode, None, cx);
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = cx;
+}
+
+#[cfg(target_os = "macos")]
+#[allow(deprecated)]
+fn system_control_accent(dark: bool) -> Option<Rgba> {
+    use objc2_app_kit::{NSAppearance, NSAppearanceNameAqua, NSAppearanceNameDarkAqua, NSColor, NSColorSpace};
+    unsafe {
+        let name = if dark { NSAppearanceNameDarkAqua } else { NSAppearanceNameAqua };
+        let appearance = NSAppearance::appearanceNamed(name)?;
+        let previous = NSAppearance::currentAppearance();
+        NSAppearance::setCurrentAppearance(Some(&appearance));
+        let color = NSColor::controlAccentColor().colorUsingColorSpace(&NSColorSpace::sRGBColorSpace());
+        NSAppearance::setCurrentAppearance(previous.as_deref());
+        let color = color?;
+        Some(srgb_rgba(color.redComponent() as f32, color.greenComponent() as f32, color.blueComponent() as f32))
+    }
 }
 
 /// NSColor.windowBackgroundColor in the light and dark looks. On the Mac it's
@@ -235,7 +439,7 @@ pub fn card_background(cx: &App) -> Hsla {
 }
 
 pub fn card_border(cx: &App) -> Hsla {
-    pick(cx, white(0.12), black(0.12))
+    contrast_colour(cx, 3, pick(cx, white(0.12), black(0.12)))
 }
 
 pub fn code_background(cx: &App) -> Hsla {
@@ -251,15 +455,15 @@ pub fn hover_fill(cx: &App) -> Hsla {
 }
 
 pub fn hairline(cx: &App) -> Hsla {
-    pick(cx, white(0.1), black(0.1))
+    contrast_colour(cx, 3, pick(cx, white(0.1), black(0.1)))
 }
 
 pub fn faint_text(cx: &App) -> Hsla {
-    pick(cx, white(0.36), black(0.45))
+    contrast_colour(cx, 1, pick(cx, white(0.36), black(0.45)))
 }
 
 pub fn quiet_text(cx: &App) -> Hsla {
-    pick(cx, white(0.55), black(0.6))
+    contrast_colour(cx, 1, pick(cx, white(0.55), black(0.6)))
 }
 
 pub fn button_fill(cx: &App) -> Hsla {
@@ -267,7 +471,7 @@ pub fn button_fill(cx: &App) -> Hsla {
 }
 
 pub fn button_edge(cx: &App) -> Hsla {
-    pick(cx, white(0.08), black(0.18))
+    contrast_colour(cx, 3, pick(cx, white(0.08), black(0.18)))
 }
 
 /// The composer's card: a lighter fill on dark, white on light (ComposerView.card).
@@ -292,7 +496,7 @@ pub fn chip_hover_fill(cx: &App) -> Hsla {
 
 /// The hairline between chips (ChipDivider).
 pub fn chip_divider(cx: &App) -> Hsla {
-    pick(cx, white(0.12), black(0.12))
+    contrast_colour(cx, 3, pick(cx, white(0.12), black(0.12)))
 }
 
 /// The Needs you orange (Theme.needsYou): systemOrange on dark, a deeper
@@ -328,29 +532,29 @@ pub fn over_background(color: Hsla, cx: &App) -> Hsla {
 
 /// NSColor.labelColor: body text.
 pub fn label_text(cx: &App) -> Hsla {
-    pick(cx, white(0.85), black(0.85))
+    contrast_colour(cx, 0, pick(cx, white(0.85), black(0.85)))
 }
 
 /// NSColor.secondaryLabelColor: a table's headers, quoted text.
 pub fn secondary_label(cx: &App) -> Hsla {
-    pick(cx, white(0.55), black(0.5))
+    contrast_colour(cx, 1, pick(cx, white(0.55), black(0.5)))
 }
 
 /// NSColor.tertiaryLabelColor, and `Theme.faintIcon`'s dark value: work line
 /// icons and chevrons, the "⏎" on the Allow button.
 pub fn tertiary_label(cx: &App) -> Hsla {
-    pick(cx, white(0.25), black(0.25))
+    contrast_colour(cx, 2, pick(cx, white(0.25), black(0.25)))
 }
 
 /// `Theme.faintIcon`: work line icons and chevrons.
 pub fn faint_icon(cx: &App) -> Hsla {
-    pick(cx, white(0.25), black(0.36))
+    contrast_colour(cx, 2, pick(cx, white(0.25), black(0.36)))
 }
 
 /// The pane's row icons (`Theme.faintIcon`): a notch brighter here, as
 /// Lucide's thin strokes read fainter than SF Symbols.
 pub fn pane_icon(cx: &App) -> Hsla {
-    pick(cx, white(0.4), black(0.42))
+    contrast_colour(cx, 1, pick(cx, white(0.4), black(0.42)))
 }
 
 /// `Theme.answerRowsFill`.
@@ -368,9 +572,11 @@ fn srgb(r: f32, g: f32, b: f32, a: f32) -> Hsla {
     Hsla::from(Rgba { r, g, b, a })
 }
 
-/// macOS's default blue, as NSColor.controlAccentColor is for most people. The
-/// app doesn't follow the system's accent yet (foundation.theme).
+/// NSColor.controlAccentColor on a Mac, the existing blue elsewhere.
 pub fn control_accent(cx: &App) -> Hsla {
+    if let Some(accent) = cx.try_global::<SystemAccent>() {
+        return Hsla::from(if cx.theme().is_dark() { accent.dark } else { accent.light });
+    }
     pick(cx, srgb(0.04, 0.52, 1.0, 1.0), srgb(0.0, 0.48, 1.0, 1.0))
 }
 
@@ -438,7 +644,11 @@ pub fn sidebar_hover(cx: &App) -> Hsla {
 
 /// The open thread's row, brighter than a hover so the two read apart.
 pub fn sidebar_selected(cx: &App) -> Hsla {
-    primary_opacity(cx, 0.08)
+    sidebar_selection(cx, true)
+}
+
+pub fn sidebar_selection(cx: &App, active: bool) -> Hsla {
+    primary_opacity(cx, if active { 0.08 } else { 0.06 })
 }
 
 /// Theme.failed.
@@ -448,7 +658,7 @@ pub fn failed(cx: &App) -> Hsla {
 
 /// `.secondary` text (secondaryLabelColor).
 pub fn secondary_text(cx: &App) -> Hsla {
-    pick(cx, white(0.55), black(0.5))
+    contrast_colour(cx, 1, pick(cx, white(0.55), black(0.5)))
 }
 
 /// `SidebarMetrics.corner`: the rails' lit square.
@@ -658,5 +868,43 @@ mod group_hover_text_source_tests {
             }
         }
         assert!(bad.is_empty(), "use style::group_hover_text, so the colour reaches the text:\n{}", bad.join("\n"));
+    }
+}
+
+#[cfg(all(test, feature = "automation"))]
+mod contrast_tests {
+    use super::{label_text, quiet_text, faint_text, hairline, sidebar_selection, SystemContrast, black};
+    use gpui_kit::TestAppContext;
+
+    #[gpui_kit::test]
+    fn contrast_changes_reading_colours_and_restores_the_regular_palette(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        cx.update(|cx| {
+            let regular = (label_text(cx), quiet_text(cx), faint_text(cx), hairline(cx));
+            let colours = [black(1.), black(0.85), black(0.65), black(0.6)];
+            cx.set_global(SystemContrast { enabled: true, revision: 1, light: colours, dark: colours, normal_kit: Default::default() });
+            assert_eq!(label_text(cx), colours[0]);
+            assert_eq!(quiet_text(cx), colours[1]);
+            assert_eq!(faint_text(cx), colours[1]);
+            assert_eq!(hairline(cx), colours[3]);
+            let key = super::reading_style_key(cx);
+            cx.global_mut::<SystemContrast>().revision += 1;
+            assert_ne!(super::reading_style_key(cx), key, "a new palette invalidates cached text even with the same look and contrast flag");
+            cx.global_mut::<SystemContrast>().enabled = false;
+            assert_eq!((label_text(cx), quiet_text(cx), faint_text(cx), hairline(cx)), regular);
+            assert_eq!(sidebar_selection(cx, true).a, 0.08);
+            assert_eq!(sidebar_selection(cx, false).a, 0.06);
+        });
+    }
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod native_contrast_tests {
+    #[test]
+    fn native_palette_resolves_both_looks_with_contrast_requested() {
+        for dark in [false, true] {
+            let colours = super::system_contrast_colours(dark, true).expect("supported AppKit appearance and semantic colours");
+            assert!(colours.iter().all(|c| c.a > 0.));
+        }
     }
 }

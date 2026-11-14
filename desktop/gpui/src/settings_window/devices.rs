@@ -5,14 +5,15 @@
 // screen or the link handed to the browser: the link is drawn into the code and
 // dropped, never kept, logged or put in the dump. The words and the code are
 // threadbear_core::devices.
+use crate::a11y::A11yRole as _;
 use super::{row_with, section, SettingsWindow};
 use crate::app::Threadbear;
-use crate::highlights::tipped;
+use crate::highlights::{tipped, tipped_as};
 use crate::push_button::PushButton;
 use crate::{call, icons, style};
 use gpui_kit::base::TestSupportExt as _;
 use gpui_kit::component::dialog::Dialog;
-use gpui_kit::component::spinner::Spinner;
+use crate::spinner::Spinner;
 use gpui_kit::component::{h_flex, v_flex, ActiveTheme as _, Sizable as _, StyledExt as _, WindowExt as _};
 use gpui_kit::prelude::*;
 use gpui_kit::*;
@@ -327,7 +328,7 @@ impl SettingsWindow {
                 }
             });
             // Its name for the specs, as each browser's Revoke has the same tip.
-            let revoke = div().id(SharedString::from(format!("settings-revoke-holder-{}", device.id))).test_support().aria_label(format!("Revoke {}", device.title())).flex_none().child(revoke);
+            let revoke = div().id(SharedString::from(format!("settings-revoke-holder-{}", device.id))).test_support().a11y_role(Role::GenericContainer).aria_label(format!("Revoke {}", device.title())).flex_none().child(revoke);
             rows.push(row_with(label.into_any_element(), revoke.into_any_element(), cx));
         }
         section("settings-devices-paired", "Paired", rules::PAIRED_ABOUT, rules::PAIRED_ASK, rows, cx)
@@ -348,7 +349,7 @@ impl SettingsWindow {
             .child(div().when(busy, |s| s.opacity(0.)).child(button))
             .when(busy, |s| {
                 // Over the button, so it can't be pressed twice.
-                s.child(tipped(div().id(SharedString::from(format!("{id}-spinner"))).absolute().inset_0().flex().items_center().justify_center().occlude(), tip).child(Spinner::new().with_size(px(12.)).color(secondary)))
+                s.child(tipped_as(div().id(SharedString::from(format!("{id}-spinner"))).absolute().inset_0().flex().items_center().justify_center().occlude(), tip, gpui_kit::Role::ProgressIndicator).child(Spinner::new().with_size(px(12.)).color(secondary)))
             })
             .into_any_element()
     }
@@ -403,7 +404,7 @@ fn code_sheet(qr: Option<Qr>, secondary: Hsla, closed: WeakEntity<SettingsWindow
         Some(qr) => div()
             .id("settings-pairing-code")
             .test_support()
-            .aria_label("Pairing code")
+            .role(Role::Image).aria_label("Pairing code")
             .p(px(10.))
             .rounded(px(10.))
             .bg(white())
@@ -511,7 +512,7 @@ pub(crate) fn automation(app: &Entity<Threadbear>, cmd: &Value, cx: &mut App) ->
         .update(cx, |_, window, cx| -> Result<(), String> {
             window.render_frame(cx);
             let found = window.elements().into_iter().filter(|e| e.visible() && e.label().is_some_and(|l| l.to_string() == target)).last().ok_or_else(|| format!("no control {target:?} in Settings"))?;
-            let at = found.bounds().center();
+            let at = found.visible_bounds().center();
             window.pointer_move(at, None, cx);
             window.pointer_down(at, MouseButton::Left, cx);
             window.pointer_up(at, MouseButton::Left, cx);

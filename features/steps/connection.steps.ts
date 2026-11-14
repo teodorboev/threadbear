@@ -2,6 +2,21 @@ import assert from 'node:assert/strict';
 import { Given, Then, When } from '@cucumber/cucumber';
 import type { ThreadbearWorld } from '../support/world.ts';
 
+When("the runner's next list includes malformed fields and rows", async function (this: ThreadbearWorld) {
+  const d = await this.app.dump();
+  const id = this.thread(d, 'Morning brief')?.id;
+  assert.ok(id);
+  await this.app.do({ cmd: 'mock', method: 'summaryList', params: { value: { threads: [
+    { id, title: 'Recovered morning brief', cwd: '/tmp', status: 'idle', contextTokens: 'wrong type', sample: [] },
+    false,
+    { id: 42 },
+  ] } } });
+});
+
+Then('the sidebar shows the recovered thread title', async function (this: ThreadbearWorld) {
+  await this.until('the readable thread from the new list', (d) => Boolean(this.thread(d, 'Recovered morning brief')));
+});
+
 When('the runner restarts', async function (this: ThreadbearWorld) {
   await this.app.do({ cmd: 'mock', method: 'restart', params: {} });
 });

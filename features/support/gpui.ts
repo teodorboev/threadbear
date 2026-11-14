@@ -35,6 +35,19 @@ function specShell(): NodeJS.ProcessEnv {
   return { SHELL: '/bin/zsh', ZDOTDIR: zdotdir };
 }
 
+/** The folders `keepEvidence` makes: its ISO time, then mkdtemp's six characters. */
+const KEPT_NAME = /^\d{4}-\d\d-\d\dT\d\d-\d\d-\d\d-\d{3}Z-[A-Za-z0-9]{6}$/;
+
+/**
+ * What the app printed, less each panic's message. Rust's own panic hook,
+ * which runs after the app's (crash_reporting.rs), prints the message as it
+ * was, and it can hold any text the app had; the kept record's is scrubbed,
+ * and `evidence` shows that one instead.
+ */
+export function printed(output: string): string {
+  return output.replace(/(panicked at [^\n]*\n)[\s\S]*?(?=\nnote: |\n\n|\nthreadbear: |$)/g, '$1(its message is left out here: see the panic record)');
+}
+
 async function waitForFile(file: string, what: string, ms: number): Promise<void> {
   const until = Date.now() + ms;
   while (!fs.existsSync(file)) {
@@ -47,10 +60,13 @@ export class GpuiDriver implements Driver {
   readonly name = 'gpui' as const;
   private home = '';
   private children: ChildProcess[] = [];
+  private commands = new WeakMap<ChildProcess, string>();
   private socket?: net.Socket;
   private token = '';
   private buffer = '';
-  private waiting: ((line: string) => void)[] = [];
+  private waiting: { reply: (line: string) => void; fail: (e: Error) => void }[] = [];
+  /** The folders `evidence` kept copies in, one per failure worth keeping. */
+  readonly keptEvidence: string[] = [];
   private log = '';
 
   private appProcess?: ChildProcess;
@@ -60,7 +76,13 @@ export class GpuiDriver implements Driver {
     // A process group of its own: `dbus-run-session`'s bus and the portals it
     // starts are grandchildren that outlive a plain kill, and the cloud box
     // ended up with thousands of them (9 Nov, "can't spawn worker thread").
-    const c = spawn(cmd, args, { env: { ...process.env, ...env }, stdio: ['ignore', 'pipe', 'pipe'], detached: process.platform !== 'win32' });
+    // Register before exec, so even KILL of the measurement worker leaves the
+    // perf reaper enough to stop an app that has been reparented.
+    const registry = process.platform === 'win32' ? undefined : process.env.THREADBEAR_PERF_CHILDREN;
+    const c = spawn(registry ? 'perl' : cmd,
+      registry ? [path.join(root, 'scripts/perf-children.pl'), '--child', registry, cmd, ...args] : args,
+      { env: { ...process.env, ...env }, stdio: ['ignore', 'pipe', 'pipe'], detached: process.platform !== 'win32' });
+    this.commands.set(c, cmd);
     c.stdout?.on('data', (d) => (this.log += d));
     c.stderr?.on('data', (d) => (this.log += d));
     this.children.push(c);
@@ -110,7 +132,7 @@ export class GpuiDriver implements Driver {
       // A server: a virtual screen, and a session bus of its own for the
       // desktop settings and portals the app asks for.
       this.display ??= `:${100 + (process.pid % 400)}`;
-      if (!this.children.some((c) => c.spawnargs[0] === 'Xvfb')) {
+      if (!this.children.some((c) => this.commands.get(c) === 'Xvfb')) {
         this.child('Xvfb', [this.display, '-screen', '0', '1400x900x24'], {});
         await sleep(400);
       }
@@ -128,22 +150,30 @@ export class GpuiDriver implements Driver {
     this.socket?.destroy();
     this.waiting = [];
     this.buffer = '';
-    this.socket = await new Promise<net.Socket>((resolve, reject) => {
+    const socket = await new Promise<net.Socket>((resolve, reject) => {
       const s = net.connect(port, '127.0.0.1', () => resolve(s));
       s.once('error', reject);
     });
-    this.socket.setEncoding('utf8');
+    this.socket = socket;
+    socket.setEncoding('utf8');
     // An app that quits (a scenario's `quit`) closes its end: for the step
     // waiting on it to notice, not a crash of the whole run.
-    this.socket.on('error', () => {});
-    this.socket.on('data', (chunk: string) => {
+    socket.on('error', () => {});
+    socket.on('data', (chunk: string) => {
       this.buffer += chunk;
       let at: number;
       while ((at = this.buffer.indexOf('\n')) >= 0) {
         const line = this.buffer.slice(0, at);
         this.buffer = this.buffer.slice(at + 1);
-        this.waiting.shift()?.(line);
+        this.waiting.shift()?.reply(line);
       }
+    });
+    // A command waiting when the app's end closes gets no answer ever: fail
+    // it now, with what's known, rather than at its timeout. Only this
+    // socket's: a relaunch's old one closes after the new one is up.
+    socket.on('close', () => {
+      if (this.socket !== socket) return;
+      for (const w of this.waiting.splice(0)) w.fail(new Error('the app closed its automation connection without answering'));
     });
   }
 
@@ -156,7 +186,9 @@ export class GpuiDriver implements Driver {
     }
   }
 
-  async relaunch(): Promise<void> {
+  /** Quits the app and opens it again on the same runner; `between` runs
+   * while it's closed (a spec changing what it remembers, say). */
+  async relaunch(between?: () => void): Promise<void> {
     this.socket?.destroy();
     this.socket = undefined;
     const old = this.appProcess;
@@ -166,6 +198,7 @@ export class GpuiDriver implements Driver {
       await Promise.race([gone, sleep(4000)]);
       this.children = this.children.filter((c) => c !== old);
     }
+    between?.();
     await this.launchApp();
   }
 
@@ -190,22 +223,118 @@ export class GpuiDriver implements Driver {
     return this.appProcess?.pid;
   }
 
-  private ask(body: Record<string, unknown>, timeoutSeconds: number): Promise<Record<string, unknown>> {
-    return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error(`${body.cmd} timed out. The app said:\n${this.log.slice(-2000)}`)), timeoutSeconds * 1000);
-      this.waiting.push((line) => {
-        clearTimeout(timer);
-        resolve(JSON.parse(line) as Record<string, unknown>);
+  /** One command's answer. A command that can't be answered (no connection,
+   * the connection closing, the time running out) rejects with what the app
+   * left behind: see `evidence`. */
+  private async ask(body: Record<string, unknown>, timeoutSeconds: number): Promise<Record<string, unknown>> {
+    try {
+      return await new Promise((resolve, reject) => {
+        const socket = this.socket;
+        if (!socket || socket.destroyed) return reject(new Error('there is no connection to the app'));
+        const timer = setTimeout(() => reject(new Error(`timed out after ${timeoutSeconds}s`)), timeoutSeconds * 1000);
+        this.waiting.push({
+          reply: (line) => {
+            clearTimeout(timer);
+            resolve(JSON.parse(line) as Record<string, unknown>);
+          },
+          fail: (e) => {
+            clearTimeout(timer);
+            reject(e);
+          },
+        });
+        socket.write(`${JSON.stringify({ ...body, token: this.token })}\n`);
       });
-      this.socket?.write(`${JSON.stringify({ ...body, token: this.token })}\n`);
-    });
+    } catch (e) {
+      throw new Error(`${body.cmd}: ${(e as Error).message}\n\n${await this.evidence(true)}`);
+    }
   }
 
   async do(cmd: Record<string, unknown>, timeoutSeconds = 30): Promise<string> {
     if (cmd.cmd === 'click' || cmd.cmd === 'label-point') await this.settle();
     const r = await this.ask(cmd, timeoutSeconds);
-    if (r.error) throw new Error(`${cmd.cmd}: ${r.error as string}`);
+    if (r.error) throw new Error(`${cmd.cmd}: ${r.error as string}${await this.evidenceFor(r)}`);
     return typeof r.result === 'string' ? r.result : JSON.stringify(r.result ?? '');
+  }
+
+  /**
+   * What goes under an error the app answered with. One that says it never
+   * ran the command (`unanswered`, or an older build's "the app stopped") gets
+   * everything, kept; an ordinary refusal ("no button called X", which specs
+   * poll for) only the panics, if the app has kept any.
+   */
+  private async evidenceFor(r: Record<string, unknown>): Promise<string> {
+    if (r.unanswered || r.error === 'the app stopped') return `\n\n${await this.evidence(true)}`;
+    return this.panics().length ? `\n\n${await this.evidence(false)}` : '';
+  }
+
+  /** The panics the app's hook kept beside its automation file (crash_reporting.rs), oldest first. */
+  private panics(): string[] {
+    const dir = path.join(this.home, 'crashes');
+    try {
+      return fs.readdirSync(dir).filter((n) => n.startsWith('panic-') && n.endsWith('.json')).sort().map((n) => path.join(dir, n));
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * Why a command failed, as far as the driver can see, bounded so a failure
+   * message stays readable: whether the app's process is still running or how
+   * it ended, the newest panics its hook kept (already scrubbed of the app's
+   * text, crash_report.rs), the end of its log (command names, never their
+   * words) and of what it printed. The spec's temp folder goes at teardown,
+   * panics and log with it, so `keep` copies them to a private folder first
+   * and names it (TB_SPEC_EVIDENCE, or tb-spec-evidence in the temp folder).
+   * A terminal test on the cloud box once got only "the app stopped" (13 Nov).
+   */
+  async evidence(keep: boolean): Promise<string> {
+    const p = this.appProcess;
+    const state = !p ? 'The app never started.'
+      : p.exitCode !== null ? `The app (pid ${p.pid}) exited with code ${p.exitCode}.`
+      : p.signalCode !== null ? `The app (pid ${p.pid}) was killed by ${p.signalCode}.`
+      : `The app (pid ${p.pid}) is still running.`;
+    const parts = [state];
+    const panics = this.panics();
+    for (const file of panics.slice(-3)) {
+      try {
+        const r = JSON.parse(fs.readFileSync(file, 'utf8')) as { message?: string; location?: string; main_thread?: boolean; frames?: unknown[] };
+        const frames = (r.frames ?? []).slice(0, 8).map((f) => `    ${typeof f === 'string' ? f : JSON.stringify(f)}`.slice(0, 200));
+        parts.push([`It panicked${r.main_thread ? ' on its main thread' : ''} at ${r.location || 'an unknown place'}: ${(r.message ?? '').slice(0, 500)}`, ...frames].join('\n'));
+      } catch {
+        parts.push(`A panic record it kept couldn't be read: ${path.basename(file)}`);
+      }
+    }
+    if (panics.length > 3) parts.push(`(and ${panics.length - 3} older panics)`);
+    const log = (await this.appLog()).trimEnd().split('\n').slice(-25).join('\n').slice(-2500);
+    if (log) parts.push(`The end of its log:\n${log}`);
+    const said = printed(this.log).trimEnd().slice(-2500);
+    if (said) parts.push(`The end of what it printed:\n${said}`);
+    if (keep && this.home) {
+      const dir = this.keepEvidence(panics);
+      if (dir) parts.push(`Kept in ${dir}`);
+    }
+    return parts.join('\n\n');
+  }
+
+  /** Copies the panics, app log and output out of the temp folder that teardown removes. Keeps the newest 20 runs' worth. */
+  private keepEvidence(panics: string[]): string | undefined {
+    try {
+      const root = process.env.TB_SPEC_EVIDENCE ?? path.join(fs.realpathSync(os.tmpdir()), 'tb-spec-evidence');
+      fs.mkdirSync(root, { recursive: true, mode: 0o700 });
+      const dir = fs.mkdtempSync(path.join(root, `${new Date().toISOString().replace(/[:.]/g, '-')}-`));
+      if (panics.length) fs.mkdirSync(path.join(dir, 'crashes'), { mode: 0o700 });
+      for (const file of panics) fs.copyFileSync(file, path.join(dir, 'crashes', path.basename(file)));
+      const log = path.join(this.home, 'app.log');
+      if (fs.existsSync(log)) fs.copyFileSync(log, path.join(dir, 'app.log'));
+      fs.writeFileSync(path.join(dir, 'output.txt'), printed(this.log).slice(-64_000), { mode: 0o600 });
+      this.keptEvidence.push(dir);
+      // Only this driver's folders: TB_SPEC_EVIDENCE may be a folder with other things in it.
+      const runs = fs.readdirSync(root).filter((n) => KEPT_NAME.test(n)).sort();
+      for (const old of runs.slice(0, Math.max(0, runs.length - 20))) fs.rmSync(path.join(root, old), { recursive: true, force: true });
+      return dir;
+    } catch {
+      return undefined;
+    }
   }
 
   /**
@@ -227,7 +356,7 @@ export class GpuiDriver implements Driver {
 
   async dump(): Promise<Dump> {
     const r = await this.ask({ cmd: 'dump' }, 30);
-    if (r.error) throw new Error(`dump: ${r.error as string}\n${this.log.slice(-3000)}`);
+    if (r.error) throw new Error(`dump: ${r.error as string}${(await this.evidenceFor(r)) || `\n${this.log.slice(-3000)}`}`);
     return r.result as Dump;
   }
 

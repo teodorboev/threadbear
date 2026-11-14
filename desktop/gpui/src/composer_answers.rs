@@ -72,7 +72,7 @@ impl Composer {
                         div()
                             .id(("answer-chip-remove", index))
                             .test_support()
-                            .aria_label(TAKE_BACK)
+                            .role(Role::Button).aria_label(TAKE_BACK)
                             .cursor_pointer()
                             .child(gpui_kit::component::Icon::from(gpui_kit::assets::IconName::X).with_size(px(10.)).text_color(secondary))
                             .tip(TAKE_BACK)

@@ -2,6 +2,7 @@ import { Given, Then, When } from '@cucumber/cucumber';
 import assert from 'node:assert/strict';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { setTimeout as delay } from 'node:timers/promises';
 import type { ThreadbearWorld } from '../support/world.ts';
 
 // A tiny real picture, for the steps that need a file (the runner reads it).
@@ -11,12 +12,21 @@ When('I type {string} in the composer', async function (this: ThreadbearWorld, t
   await this.app.do({ cmd: 'type', text });
 });
 
+When('I leave the composer untouched for {int} seconds', async function (seconds: number) {
+  assert(seconds > 0 && seconds <= 30, 'The idle-composer check must be bounded.');
+  await delay(seconds * 1000);
+});
+
 When('I press Return', async function (this: ThreadbearWorld) {
   await this.app.do({ cmd: 'return' });
 });
 
 When('I press Shift-Return', async function (this: ThreadbearWorld) {
   await this.app.do({ cmd: 'return', shift: true });
+});
+
+When('I press Option-Return', async function (this: ThreadbearWorld) {
+  await this.app.do({ cmd: 'return', option: true });
 });
 
 When('I send {string}', async function (this: ThreadbearWorld, text: string) {
@@ -66,6 +76,28 @@ When('I paste the picture into the composer', async function (this: ThreadbearWo
 // A point in the thread's transcript on both apps' windows.
 When('I drop the picture on the transcript', async function (this: ThreadbearWorld) {
   await this.app.do({ cmd: 'drop', path: samplePicture, x: 650, y: 300 });
+});
+
+// Any file but a picture goes in as its path in backticks.
+const sampleFile = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'support', 'driver.ts');
+
+When('I drop a file on the first letter of the composer\'s words', async function (this: ThreadbearWorld) {
+  await this.app.do({ cmd: 'drop', path: sampleFile, boxOffset: 0 });
+});
+
+When('I drop a file at byte {int} of the composer\'s words', async function (this: ThreadbearWorld, offset: number) {
+  await this.app.do({ cmd: 'drop', path: sampleFile, boxOffset: offset });
+});
+
+Then('the composer has the dropped file between {string} and {string}', async function (this: ThreadbearWorld, before: string, after: string) {
+  const prefix = before.replace(/\\n/g, '\n');
+  const suffix = after.replace(/\\n/g, '\n');
+  const wanted = `${prefix}${/\s$/.test(prefix) ? '' : ' '}\`${sampleFile}\` ${suffix}`;
+  await this.until(`the path between ${JSON.stringify(prefix)} and ${JSON.stringify(suffix)}`, (d) => d.composer.text === wanted);
+});
+
+Then('the composer starts with the dropped file\'s path, then {string}', async function (this: ThreadbearWorld, rest: string) {
+  await this.until(`the path, then "${rest}"`, (d) => d.composer.text.trim() === `\`${sampleFile}\` ${rest}`);
 });
 
 Then('the composer holds {int} picture(s)', async function (this: ThreadbearWorld, count: number) {
@@ -142,3 +174,4 @@ Then('the composer holds the link to the thread {string}', async function (this:
   const t = await this.until(`a thread called "${title}"`, (d) => this.thread(d, title));
   await this.until(`the link to "${title}" in the composer`, (d) => d.composer.text === `[${title}](thread:${t.id})`);
 });
+

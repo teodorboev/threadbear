@@ -838,8 +838,8 @@ enum RowRenderer {
             let note = Theme.text(Theme.smallFont, color: Theme.faintText, line: TypeScale.scaled(17))
             output.append(NSAttributedString(string: "Output shortened", attributes: note))
             // The whole of it is kept in a file (blobPath): a file link, so
-            // it opens like any other, fetched first in another runner's
-            // thread.
+            // it opens like any other (another runner's thread says where
+            // it's kept).
             if let blob = tool.result?.blobPath, !blob.isEmpty {
                 output.append(NSAttributedString(string: " · ", attributes: note))
                 var link = note

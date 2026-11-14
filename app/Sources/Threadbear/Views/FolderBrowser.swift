@@ -63,7 +63,7 @@ struct FolderBrowser: NSViewRepresentable {
             source = { [weak app] folder in
                 guard let app else { throw RPCError.disconnected(nil) }
                 let client = try await app.openClient(for: thread.id)
-                return try await client.listFolder(path: folder, runnerId: app.viaRelay(thread.id) ? thread.runnerId : nil)
+                return try await client.listFolder(path: folder, runnerId: thread.runnerId)
             }
         } else {
             source = { folder in try await Task.detached(priority: .userInitiated) { try FolderListing.read(folder) }.value }

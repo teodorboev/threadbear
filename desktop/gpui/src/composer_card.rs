@@ -14,7 +14,7 @@ use gpui_kit::*;
 use crate::style::px;
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use threadbear_core::composer::{self, OWN_ANSWER};
 use threadbear_core::reducer::{Ask, AskNote, AsksCard, RowContent};
 use crate::tips::Tip as _;
@@ -78,6 +78,8 @@ struct PageSlide {
 
 /// How long the slide takes (CardDeck.duration).
 const SLIDE: Duration = Duration::from_millis(180);
+/// The crossfade in its place with Reduce Motion on.
+const FADE: Duration = Duration::from_millis(120);
 
 /// Easing out, as Core Animation's `.easeOut` does it near enough.
 fn ease_out(t: f32) -> f32 {
@@ -245,7 +247,7 @@ impl Composer {
         let input = cx.new(|cx| TextareaState::new(window, cx).placeholder("Say something else…").auto_grow(1, 8).submit_on_enter(true));
         // Its words are only here until they're sent: an update's restart
         // waits for them (unsent.rs).
-        crate::unsent::watch(&input, cx);
+        crate::unsent::watch(&input, "a card's Something else box", cx);
         // What was answered before (a refused send put back), its pictures
         // as chips again.
         if !existing.is_empty() {
@@ -376,9 +378,24 @@ impl Composer {
 
     /// The card, over a line, at the top of the box.
     pub(crate) fn render_card(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let card = self.open_card(cx)?;
+        let card = self.open_card(cx);
+        let settle = self.card_arrival.saw(self.thread_id.as_deref(), card.as_ref().map(|c| c.seq), cx.reduce_motion());
+        let card = card?;
         self.sync_card(&card);
-        let body = if card.is_done() { self.render_done_card(&card, cx) } else { self.render_asks_card(&card, window, cx) };
+        let body = if card.is_done() { self.render_done_card(&card, settle.filter(|_| !cx.reduce_motion()), window, cx) } else { self.render_asks_card(&card, window, cx) };
+        // Arriving while he's watching, it comes up from a touch below as it
+        // fades in (`ComposerCard`'s arriving card, Mike picked it 13 Nov).
+        let body = match settle {
+            Some(at) => {
+                let elapsed = at.elapsed();
+                let (fade, below) = threadbear_core::juice::card_settle(elapsed, cx.reduce_motion());
+                if threadbear_core::juice::card_settling(elapsed, cx.reduce_motion()) {
+                    window.request_animation_frame();
+                }
+                div().relative().top(px(below)).opacity(fade).child(body).into_any_element()
+            }
+            None => body,
+        };
         // Under half the window (ComposerCardHost.maxHeight), for the card
         // itself: its padding comes on top, as the Swift box adds it outside.
         let max_height = gpui_kit::px((f32::from(window.viewport_size().height) * 0.45).max(style::zoomed(200.))) + px(18.);
@@ -389,15 +406,24 @@ impl Composer {
 
     /// RowRenderer.doneText: Done, with Archive at the right, and the agent's
     /// follow-ups under "Or carry on", each a row with a tick and a "?".
-    fn render_done_card(&mut self, card: &AsksCard, cx: &mut Context<Self>) -> AnyElement {
+    fn render_done_card(&mut self, card: &AsksCard, drawing: Option<Instant>, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let mut column = v_flex().w_full();
         let this = cx.entity().downgrade();
+        // Arriving, its tick draws itself on; then it's the tick as ever.
+        let green = style::tick_green(cx);
+        let tick = match drawing.filter(|at| at.elapsed() < threadbear_core::juice::TICK_DRAW_END) {
+            Some(at) => {
+                window.request_animation_frame();
+                drawn_tick(threadbear_core::juice::tick_drawn(at.elapsed()), green).into_any_element()
+            }
+            None => crate::icons::tall_checkmark().with_size(px(16.)).text_color(green).into_any_element(),
+        };
         column = column.child(
             h_flex()
                 .w_full()
                 .h(px(metrics::PAGED_HEADING))
                 .justify_between()
-                .child(card_title(crate::icons::tall_checkmark().with_size(px(16.)).text_color(style::tick_green(cx)).into_any_element(), 2.5, "Done", cx))
+                .child(card_title(tick, 2.5, "Done", cx))
                 .child(card_button(("done-archive", 0usize), "Archive", ButtonLook::Plain, "Archive this thread", cx).on_click({
                     let this = this.clone();
                     move |_, window, cx| {
@@ -452,7 +478,7 @@ impl Composer {
                 // fills sit 6 apart.
                 column = column.child(
                     h_flex()
-                        .id(("follow-up", index))
+                        .id(("follow-up", index)).role(Role::Button)
                         .w_full()
                         .items_start()
                         .mt(px(if index == 0 { 3. } else { 6. }))
@@ -471,7 +497,7 @@ impl Composer {
                         .child(div().flex_1().min_w_0().text_size(px(style::size::BODY)).line_height(px(style::size::BODY_LINE)).text_color(style::label_text(cx)).child(follow_up.clone()))
                         .child(
                             div()
-                                .id(("follow-up-explain", index))
+                                .id(("follow-up-explain", index)).role(Role::Button)
                                 .flex_none()
                                 .mx(px(8.))
                                 .size(px(22.))
@@ -531,7 +557,8 @@ impl Composer {
                         this.update(cx, |this, cx| this.set_page(page.saturating_sub(1), cx));
                     }
                 }))
-                .child(page_counter(page, card.asks.len(), self.card.slide.filter(|s| s.to == page), cx))
+                // With Reduce Motion the number changes where it is (ComposerCardHost).
+                .child(page_counter(page, card.asks.len(), self.card.slide.filter(|s| s.to == page && !cx.reduce_motion()), cx))
                 .child(pager_arrow("›", page + 1 < card.asks.len(), "Next ask", ("page-next", 0usize), cx, move |_, _, cx| {
                     if let Some(this) = this_next.upgrade() {
                         this.update(cx, |this, cx| this.set_page(page + 1, cx));
@@ -542,7 +569,7 @@ impl Composer {
         }
         right = right.child(
             div()
-                .id("card-collapse")
+                .id("card-collapse").role(Role::Button)
                 .flex_none()
                 .size(px(metrics::TOGGLE))
                 .flex()
@@ -577,6 +604,7 @@ impl Composer {
             // height; only the page showing is drawn, and it goes last so
             // it's the one on top for the pointer.
             let slide = self.card.slide.filter(|s| s.to == page && s.from < card.asks.len());
+            let reduce = cx.reduce_motion();
             let mut pages = div().w_full().grid().grid_cols(1).overflow_hidden();
             for (index, ask) in card.asks.iter().enumerate().filter(|(i, _)| *i != page).chain(card.asks.iter().enumerate().filter(|(i, _)| *i == page)) {
                 let body = v_flex().w_full().child(self.render_ask(index, ask, numbered, window, cx));
@@ -585,6 +613,13 @@ impl Composer {
                     // The two asks sliding like a deck (CardDeck): the next
                     // pushes in from the right as the old goes off left, and
                     // back the other way.
+                    // Reduce Motion: one page fades into the other where it
+                    // is, in 0.12 s, as the Swift card's layers do.
+                    Some(s) if reduce && (index == s.from || index == s.to) => {
+                        let (from, to) = if index == s.to { (0., 1.) } else { (1., 0.) };
+                        let id = ElementId::NamedInteger("card-fade".into(), s.serial * 1000 + index as u64);
+                        cell.child(body.with_animation(id, Animation::new(FADE), move |el, t| el.opacity(from + (to - from) * t)))
+                    }
                     Some(s) if index == s.from || index == s.to => {
                         let forward = s.to > s.from;
                         let (start, end) = if index == s.to { (if forward { 1. } else { -1. }, 0.) } else { (0., if forward { -1. } else { 1. }) };
@@ -625,7 +660,7 @@ impl Composer {
     /// appearance and text size, as its sizes are zoomed when it's built
     /// (see `rows::reading_style`).
     fn card_reading_style(&mut self, cx: &App) -> gpui_kit::base::TextViewStyle {
-        let key = (cx.theme().is_dark(), style::zoom_percent());
+        let key = crate::style::reading_style_key(cx);
         match &self.card_style {
             Some((k, style)) if *k == key => style.clone(),
             _ => {
@@ -662,11 +697,6 @@ pub(crate) trait AskHost: Sized + 'static {
     fn ask_answer_box(&mut self, ask: usize, window: &mut Window, cx: &mut Context<Self>) -> Entity<TextareaState>;
     /// Return in an ask's box; `command` is ⌘Return.
     fn ask_box_return(&mut self, ask: usize, command: bool, window: &mut Window, cx: &mut Context<Self>);
-    /// Where an ask's command is run from (card_run.rs): its thread and that
-    /// thread's runner. None shows the command with no Run.
-    fn ask_run_target(&self, _cx: &App) -> Option<crate::card_run::RunTarget> {
-        None
-    }
     /// The box's text field, given its chips and paste where a host takes
     /// pictures in it (the composer's card does).
     fn ask_box_field(&mut self, _ask: usize, field: Textarea, _cx: &mut Context<Self>) -> Textarea {
@@ -712,11 +742,6 @@ pub(crate) trait AskHost: Sized + 'static {
         // A quiet line of its own, 2 under the paragraph.
         if let Some(place) = ask.where_.as_deref().filter(|w| !w.is_empty()) {
             block = block.child(div().pl(indent).mt(px(metrics::ASK_AFTER)).text_size(px(style::size::SMALL)).line_height(px(metrics::WHERE_LINE)).text_color(style::faint_text(cx)).child(place.to_owned()));
-        }
-        // A command it carries, whole, with Run (card_run.rs).
-        if let Some(run) = &ask.run {
-            let target = self.ask_run_target(cx);
-            block = block.child(crate::card_run::render_run(index, run, indent, target, cx));
         }
         let this = cx.entity().downgrade();
         let half = (metrics::BUTTON_LINE - metrics::BUTTON_HEIGHT) / 2.;
@@ -859,7 +884,7 @@ pub(crate) trait AskHost: Sized + 'static {
             let note = (!own).then(|| ask.option_notes.get(n).cloned()).flatten().filter(|s| !s.is_empty());
             rows = rows.child(
                 h_flex()
-                    .id(("answer-row", index * 100 + n))
+                    .id(("answer-row", index * 100 + n)).role(Role::Button)
                     .w_full()
                     .items_start()
                     .gap(px(8.))
@@ -941,12 +966,6 @@ impl AskHost for Composer {
         self.answer_box_return(ask, command, window, cx);
     }
 
-    fn ask_run_target(&self, cx: &App) -> Option<crate::card_run::RunTarget> {
-        let pane = self.pane.upgrade()?;
-        let pane = pane.read(cx);
-        Some(crate::card_run::RunTarget { client: Some(pane.client_handle()), thread: pane.summary.id.clone(), app: self.app.clone() })
-    }
-
     /// Pictures pasted in an ask's box go in as chips where the cursor is,
     /// as in the composer (AskAnswerBox, Mike 1 Nov).
     fn ask_box_field(&mut self, ask: usize, field: Textarea, cx: &mut Context<Self>) -> Textarea {
@@ -998,7 +1017,7 @@ impl AskHost for Composer {
                 let group: SharedString = format!("answer-picture-{ask}-{n}").into();
                 row = row.child(
                     div()
-                        .id(("answer-picture", ask * 100 + n))
+                        .id(("answer-picture", ask * 100 + n)).role(Role::Button)
                         .group(group.clone())
                         .relative()
                         .cursor_pointer()
@@ -1015,7 +1034,7 @@ impl AskHost for Composer {
             row.into_any_element()
         });
         let add = div()
-            .id(("answer-add-pictures", ask))
+            .id(("answer-add-pictures", ask)).role(Role::Button)
             .flex_none()
             .size(px(22.))
             .mb(px((style::size::BODY_LINE - 22.) / 2.))
@@ -1038,23 +1057,42 @@ impl AskHost for Composer {
 }
 
 impl Composer {
+    pub(crate) fn native_paste_target(&self, window: &Window, cx: &App) -> Option<Entity<TextareaState>> {
+        std::iter::once(&self.input).chain(self.card.inputs.values())
+            .find(|input| input.read(cx).focus_handle(cx).is_focused(window)).cloned()
+    }
+
     /// Files dropped on the thread: on a Something else box they're that
     /// answer's, anywhere else the message's (ComposerDropView, AskAnswerBox).
     pub(crate) fn take_dropped_paths(&mut self, paths: Vec<std::path::PathBuf>, at: Point<Pixels>, window: &mut Window, cx: &mut Context<Self>) {
-        // On a paged card only the page showing has a box in sight; the
-        // others keep where they were last drawn.
+        let target = self.box_under(at, cx).unwrap_or_else(|| self.input.clone());
+        self.caret_to_drop(&target, at, cx);
+        self.take_drop_in(&target, paths, window, cx);
+    }
+
+    /// The box a point is over: an open card's Something else box, or the
+    /// message box itself. On a paged card only the page showing has a box
+    /// in sight; the others keep where they were last drawn.
+    pub(crate) fn box_under(&self, at: Point<Pixels>, cx: &App) -> Option<Entity<TextareaState>> {
         let shown = self.open_card(cx).filter(|c| !self.card.collapsed && is_paged(c)).map(|_| self.card.page);
-        let over = self
-            .card
+        self.card
             .inputs
             .iter()
             .filter(|(ask, _)| shown.is_none_or(|page| page == **ask) && !self.card.collapsed)
             .find(|(ask, _)| self.card.box_bounds.get(**ask).is_some_and(|b| b.contains(&at)))
-            .map(|(_, input)| input.clone());
-        match over {
-            Some(input) => self.take_paths_in(&input, paths, window, cx),
-            None => self.take_paths(paths, window, cx),
+            .map(|(_, input)| input.clone())
+            .or_else(|| self.input.read(cx).input_bounds().contains(&at).then(|| self.input.clone()))
+    }
+
+    /// Let go over a box's words, a drop goes in where it was let go, as the
+    /// Swift box's `characterIndexForInsertion` puts it; anywhere else over
+    /// the thread it goes where the cursor already is, as a paste does.
+    pub(crate) fn caret_to_drop(&self, target: &Entity<TextareaState>, at: Point<Pixels>, cx: &mut App) {
+        if !target.read(cx).input_bounds().contains(&at) {
+            return;
         }
+        let offset = target.read(cx).offset_for_point(at);
+        target.update(cx, |t, cx| t.set_selected_range(offset..offset, cx));
     }
 }
 
@@ -1193,10 +1231,6 @@ impl Composer {
                 crate::chips::show_card(None);
                 window.refresh();
             }
-            ["run", a, _] => {
-                let run = card.asks.get(a.parse::<usize>().map_err(|_| "bad ask")?).and_then(|ask| ask.run.clone()).ok_or("no command on that ask")?;
-                crate::card_run::press_ask(self, &run, cx)?;
-            }
             _ => return Err(format!("unknown card action {action}")),
         }
         Ok(())
@@ -1232,9 +1266,6 @@ impl Composer {
                 let picked = self.card.picks.get(&(i as i64));
                 let mark = if picked.is_some() { "[x]" } else { "[ ]" };
                 lines.push(format!("{mark} {}. {}", i + 1, ask.action));
-                if let Some(run) = &ask.run {
-                    lines.push(format!("    $ {}", run.command));
-                }
             }
         }
         if let Some((title, detail)) = peek {
@@ -1374,6 +1405,88 @@ fn button_shadow() -> Vec<BoxShadow> {
 /// The card's button (AskButtonStyle): a rounded box with a soft shadow, the
 /// picked one in the accent with white words, the agent's pick with an
 /// accent edge, the rest a raised grey.
+/// Which card the box last showed, for one that arrives while the thread's
+/// on screen to settle in: not one that was there when the thread opened.
+#[derive(Default)]
+pub(crate) struct CardArrival {
+    thread: Option<String>,
+    seq: Option<i64>,
+    since: Option<Instant>,
+    /// The card settling in now, and when it arrived.
+    arrived: Option<(i64, Instant)>,
+    /// The last card seen arriving, for the dump.
+    pub(crate) last: Option<i64>,
+}
+
+impl CardArrival {
+    /// Notes the card showing now; says when it arrived, while it's settling
+    /// or drawing its tick.
+    pub(crate) fn saw(&mut self, thread: Option<&str>, seq: Option<i64>, reduce: bool) -> Option<Instant> {
+        let now = Instant::now();
+        if self.thread.as_deref() != thread || self.since.is_none() {
+            // A thread just opened: its card was already there.
+            *self = CardArrival { thread: thread.map(str::to_owned), seq, since: Some(now), arrived: None, last: None };
+            return None;
+        }
+        if self.seq != seq {
+            self.seq = seq;
+            // Not in the first moment after opening, while its events load.
+            let settled_in = self.since.is_some_and(|since| now.duration_since(since) > Duration::from_millis(600));
+            self.arrived = seq.filter(|_| settled_in).map(|seq| (seq, now));
+            if let Some((seq, _)) = self.arrived {
+                self.last = Some(seq);
+            }
+        }
+        let (seq_now, at) = self.arrived?;
+        let going = threadbear_core::juice::card_settling(at.elapsed(), reduce) || at.elapsed() < threadbear_core::juice::TICK_DRAW_END;
+        (Some(seq_now) == seq && going).then_some(at)
+    }
+}
+
+/// The done card's tick, drawn `t` of the way along (0 to 1): the tall
+/// checkmark's own two strokes (icons.rs), 16 across, painted so far.
+fn drawn_tick(t: f32, colour: Hsla) -> impl IntoElement {
+    canvas(
+        |_, _, _| {},
+        move |bounds, _, window, _| {
+            let k = f32::from(bounds.size.width) / 24.;
+            let at = |x: f32, y: f32| point(bounds.origin.x + gpui_kit::px(x * k), bounds.origin.y + gpui_kit::px(y * k));
+            let points = [(4., 13.5), (9., 19.), (20., 3.5)];
+            let lengths: Vec<f32> = points.windows(2).map(|w| ((w[1].0 - w[0].0) as f32).hypot(w[1].1 - w[0].1)).collect();
+            let mut left = t.clamp(0., 1.) * lengths.iter().sum::<f32>();
+            if left <= 0. {
+                return;
+            }
+            let width = 2. * k;
+            let mut path = PathBuilder::stroke(gpui_kit::px(width));
+            path.move_to(at(points[0].0, points[0].1));
+            let mut ends = vec![points[0]];
+            for (i, length) in lengths.iter().enumerate() {
+                let (a, b) = (points[i], points[i + 1]);
+                let u = (left / length).min(1.);
+                let end = (a.0 + (b.0 - a.0) * u, a.1 + (b.1 - a.1) * u);
+                path.line_to(at(end.0, end.1));
+                ends.push(end);
+                left -= length;
+                if left <= 0. {
+                    break;
+                }
+            }
+            if let Ok(path) = path.build() {
+                window.paint_path(path, colour);
+            }
+            // Round caps and joins: a dot at each point reached.
+            for (x, y) in ends {
+                let c = at(x, y);
+                let dot = Bounds { origin: point(c.x - gpui_kit::px(width / 2.), c.y - gpui_kit::px(width / 2.)), size: size(gpui_kit::px(width), gpui_kit::px(width)) };
+                window.paint_quad(fill(dot, colour).corner_radii(gpui_kit::px(width / 2.)));
+            }
+        },
+    )
+    .size(px(16.))
+    .flex_none()
+}
+
 pub(crate) fn card_button(id: impl Into<ElementId>, title: &str, look: ButtonLook, tip: &'static str, cx: &App) -> Stateful<Div> {
     let (fill, text, edge) = match look {
         ButtonLook::Picked => (style::control_accent(cx), gpui_kit::white(), gpui_kit::transparent_black()),

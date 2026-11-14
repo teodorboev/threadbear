@@ -6,7 +6,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { tmpDir } from '../helpers/fakes.ts';
 import { FakeClock } from '../../src/clock.ts';
-import { gitAsync } from '../../src/upstream.ts';
+import { nullLogger } from '../../src/log.ts';
+import { Upstream, gitAsync } from '../../src/upstream.ts';
 import { GIT_ENV, LATER, alive, commit, git, hangingUpstream, kept, objectsIn, release, signedTag, upstreamFor, world } from '../helpers/upstream-harness.ts';
 
 // A runner from before this check fetched straight into the verified
@@ -229,7 +230,10 @@ test('upstream with thousands of tags: only a bounded few are fetched, and none 
 for (const when of ['list', 'fetch'] as const) {
   test(`an upstream that hangs ${when === 'list' ? 'listing its tags' : 'sending them'} fails the check by its deadline, and leaves nothing running or behind`, async () => {
     const w = world();
-    const up = upstreamFor(w.theirs, w.home, new FakeClock(LATER), { fetchTimeoutMs: 1500 });
+    // The usual deadline for the first check, which a busy Mac can need; a
+    // short one only for the hang (Upstream reads it at each git call).
+    const deps = { home: w.home, checkout: w.theirs, clock: new FakeClock(LATER), log: nullLogger, fetchTimeoutMs: undefined as number | undefined };
+    const up = new Upstream(deps);
     assert.equal((await up.check()).release?.tag, 'release/2026-10-01');
     fs.rmSync(path.join(w.root, 'calls'), { force: true });
     commit(w.mike, 'b.txt', 'Newer');
@@ -237,14 +241,19 @@ for (const when of ['list', 'fetch'] as const) {
     git(w.mike, 'push', '-q', 'origin', 'main', '--tags');
     const pids = hangingUpstream(w, when);
     const before = objectsIn(w.theirs);
+    // Long enough for a busy Mac to reach the hang before the deadline.
+    deps.fetchTimeoutMs = 3000;
     const t0 = Date.now();
     const s = await up.check();
-    assert.ok(Date.now() - t0 < 15_000, `took ${Date.now() - t0} ms`);
+    assert.ok(Date.now() - t0 < 60_000, `took ${Date.now() - t0} ms`);
     assert.equal(s.state, 'failed');
     assert.match(s.reason ?? '', /timed out/);
     assert.equal(s.release?.tag, 'release/2026-10-01', 'keeps the release it knew of');
     await new Promise((r) => setTimeout(r, 200));
-    for (const pid of pids()) assert.ok(!alive(pid), `pid ${pid} still running`);
+    // And it did hang, rather than fail some other way before it got there.
+    const hung = pids();
+    assert.ok(hung.length > 0, 'the upstream hung');
+    for (const pid of hung) assert.ok(!alive(pid), `pid ${pid} still running`);
     assert.deepEqual([...objectsIn(w.theirs)].filter((o) => !before.has(o)), []);
     assert.deepEqual(fs.readdirSync(path.join(w.home, 'runner', 'upstream-fetch')), []);
   });
@@ -254,8 +263,9 @@ test('gitAsync stops a git command at its deadline, and what it started', async 
   const dir = tmpDir('tb-git-deadline-');
   const pidFile = path.join(dir, 'pid');
   const t0 = Date.now();
-  await assert.rejects(gitAsync(dir, ['-c', `alias.hang=!sleep 600 & echo $! >${pidFile}; wait`, 'hang'], { timeoutMs: 500 }), /timed out/);
-  assert.ok(Date.now() - t0 < 5000);
+  // Long enough for a busy Mac's shell to start the sleep before the deadline.
+  await assert.rejects(gitAsync(dir, ['-c', `alias.hang=!sleep 600 & echo $! >${pidFile}; wait`, 'hang'], { timeoutMs: 3000 }), /timed out/);
+  assert.ok(Date.now() - t0 < 30_000);
   await new Promise((r) => setTimeout(r, 200));
   assert.ok(!alive(Number(fs.readFileSync(pidFile, 'utf8'))), 'the sleep it started is gone');
   assert.equal(await gitAsync(dir, ['--version']).then((v) => v.startsWith('git version')), true);

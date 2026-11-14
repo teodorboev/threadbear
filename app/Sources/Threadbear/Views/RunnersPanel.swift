@@ -161,12 +161,6 @@ private struct RunnerCard: View {
                         .padding(.bottom, zoomed(2))
                         .transition(.opacity)
                 }
-                if !paired {
-                    Text("Not paired with this Mac")
-                        .font(.system(size: zoomed(11)))
-                        .foregroundStyle(.tertiary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
                 if !running.isEmpty {
                     VStack(alignment: .leading, spacing: zoomed(1)) {
                         ForEach(running.prefix(Self.shownThreads), id: \.id) { thread in
@@ -234,12 +228,6 @@ private struct RunnerCard: View {
 
     private var isDefault: Bool {
         runner.isSelf ? app.defaultRunnerId == nil : app.defaultRunnerId == runner.id
-    }
-
-    /// Its threads open from here: through Convex, or with the direct link
-    /// on, once this Mac has the runner's token.
-    private var paired: Bool {
-        runner.isSelf || !app.directRemoteLink || app.remoteRunners.first { $0.id == runner.id }?.tokenFile != nil
     }
 
     private func dotColor(_ state: RunnersText.State) -> Color {
@@ -356,7 +344,7 @@ private struct RunnersAbout: View {
     var body: some View {
         VStack(alignment: .leading, spacing: zoomed(8)) {
             Text("The machines your threads run on, as your backend last heard from each. A runner that hasn't checked in for 3 minutes shows as offline. Updating means an old release is finishing its threads before handing over.")
-            Text("The code on the right is the commit each one runs. Click a running thread to open it. A runner that isn't paired with this Mac lists its threads, but they open only once you run `tb pair` there.")
+            Text("The code on the right is the commit each one runs. Click a running thread to open it.")
             Text("The star is where new threads start, which you can change in Settings > Runners. A runner is added or renamed on its own machine, so ask an agent to do it.")
         }
         .font(.system(size: zoomed(12)))

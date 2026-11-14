@@ -54,7 +54,7 @@ pub(crate) fn why_button(row: &ProjectRow, p: Palette, cx: &mut Context<SidePane
     let tip = format!("Why it's in {}", row.project.title);
     let open_id = project_id.clone();
     div()
-        .id(SharedString::from(format!("hl-why-{project_id}")))
+        .id(SharedString::from(format!("hl-why-{project_id}"))).role(Role::Button)
         .size(px(14.))
         .flex()
         .items_center()
@@ -149,7 +149,7 @@ impl SidePane {
             let (add2, remove2) = (add.clone(), remove.clone());
             let id2 = thread_id.clone();
             app.update(cx, |t, cx| {
-                if let Some(summary) = t.threads.get_mut(&id2) {
+                if let Some(summary) = t.threads.get_mut(&id2).map(std::sync::Arc::make_mut) {
                     let list = summary.projects.get_or_insert_with(Vec::new);
                     list.retain(|m| !remove2.contains(&m.id));
                     for id in &add2 {
@@ -170,7 +170,7 @@ impl SidePane {
                     if let Some(app) = t.app.upgrade() {
                         let id2 = thread_id.clone();
                         app.update(cx, |t, cx| {
-                            if let Some(summary) = t.threads.get_mut(&id2) {
+                            if let Some(summary) = t.threads.get_mut(&id2).map(std::sync::Arc::make_mut) {
                                 summary.projects = before;
                             }
                             cx.notify();

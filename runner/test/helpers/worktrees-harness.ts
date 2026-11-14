@@ -11,6 +11,7 @@ import { execFileSync, spawn } from 'node:child_process';
 import { makeHarness, tmpDir, type Harness } from './fakes.ts';
 import { git, gitLimits, land, type LandTarget } from '../../src/worktrees.ts';
 import { PATIENCE_MS } from './patience.ts';
+export { holdUntil } from './patience.ts';
 import { PatchTrust } from '../../src/patch-trust.ts';
 
 // Commits need a name, and Mike's own git config (signing, hooks) mustn't
@@ -99,6 +100,15 @@ export function slowWorktreeRemoval(): () => void {
   return () => { process.env.PATH = before; };
 }
 
+// Every tb CLI a test started, killed with everything under it when the
+// test file's process exits, however the test ended.
+const started = new Set<number>();
+process.on('exit', () => {
+  for (const pid of started) {
+    try { process.kill(-pid, 'SIGKILL'); } catch { /* already gone */ }
+  }
+});
+
 export function runTb(args: string[], cwd: string, env: Record<string, string | undefined>): Promise<{ code: number | null; out: string }> {
   return startTb(args, cwd, env).done;
 }
@@ -111,12 +121,20 @@ export function startTb(args: string[], cwd: string, env: Record<string, string 
   delete full.THREADBARE_THREAD_ID;
   Object.assign(full, env);
   for (const [k, v] of Object.entries(env)) if (v === undefined) delete full[k];
-  const p = spawn(process.execPath, [TB, ...args], { cwd, env: full, stdio: ['ignore', 'pipe', 'pipe'] });
+  // A process group of its own, so the exit hook above reaches its check too.
+  const p = spawn(process.execPath, [TB, ...args], { cwd, env: full, stdio: ['ignore', 'pipe', 'pipe'], detached: true });
+  if (p.pid) started.add(p.pid);
   let out = '';
   p.stdout.on('data', (d) => (out += d));
   p.stderr.on('data', (d) => (out += d));
   const done = new Promise<{ code: number | null; out: string }>((resolve) => {
-    p.on('exit', (code) => resolve({ code, out }));
+    // Forgotten as soon as it exits, so the hook never signals a group id
+    // that may have been reused. A check it leaves behind gives up by
+    // itself (holdUntil).
+    p.on('exit', (code) => {
+      started.delete(p.pid!);
+      resolve({ code, out });
+    });
   });
   return { child: p, done, output: () => out };
 }

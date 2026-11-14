@@ -262,28 +262,7 @@ pub struct Ask {
     pub option_notes: Vec<String>,
     pub suggested: Option<usize>,
     pub links: Vec<AskLink>,
-    /// A command the card offers to run (docs/protocol.md, "Run on the card").
-    pub run: Option<AskRun>,
     pub ticked: bool,
-}
-
-/// An ask's command, run once from the card by its button (`AskRun`). The
-/// runner sets `buttonId` as the card is made; `running` and `failed`
-/// mirror the button for clients that don't see it.
-#[derive(Clone, Debug, PartialEq, Default)]
-pub struct AskRun {
-    pub command: String,
-    pub button_id: Option<String>,
-    pub cwd: Option<String>,
-    pub running: Option<bool>,
-    pub failed: Option<String>,
-}
-
-impl AskRun {
-    pub fn decode(v: &Value) -> Option<AskRun> {
-        let c = v.as_object()?;
-        Some(AskRun { command: c.get("command")?.as_str()?.to_owned(), button_id: string(c, "buttonId"), cwd: string(c, "cwd"), running: boolean(c, "running"), failed: string(c, "failed") })
-    }
 }
 
 impl Ask {
@@ -311,7 +290,6 @@ impl Ask {
             option_notes,
             suggested,
             links: lossy(c, "links", AskLink::decode),
-            run: c.get("run").and_then(AskRun::decode),
             ticked: boolean(c, "ticked").unwrap_or(false),
         })
     }
@@ -1543,7 +1521,10 @@ impl Event {
         let thread_id = string(c, "threadId").unwrap_or_default();
         let turn_id = string(c, "turnId");
         let type_ = string(c, "type").unwrap_or_default();
-        let payload = decode_payload(&type_, c).unwrap_or(EventPayload::Unknown);
+        let payload = decode_payload(&type_, c).unwrap_or_else(|_| {
+            crate::wire::dropped::<EventPayload>("event payload");
+            EventPayload::Unknown
+        });
         Some(Event { seq, ts, thread_id, turn_id, type_, payload })
     }
 }
@@ -1783,4 +1764,18 @@ fn swift_number(value: f64) -> String {
     }
     let plain = format!("{value}");
     plain.strip_suffix(".0").map(str::to_owned).unwrap_or(plain)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Run on the card was taken out (14 Nov 2026), but a card an older
+    // runner made can still carry `run`: the ask reads as if it didn't.
+    #[test]
+    fn an_ask_with_an_old_run_still_decodes() {
+        let ask = Ask::decode(&json!({ "action": "Backfill prod?", "options": ["Yes", "No"], "run": { "command": "npm run migrate", "buttonId": "b7k2abcd" } })).unwrap();
+        assert_eq!(ask.action, "Backfill prod?");
+        assert_eq!(ask.options, vec!["Yes".to_owned(), "No".to_owned()]);
+    }
 }

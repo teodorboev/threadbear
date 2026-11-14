@@ -240,7 +240,6 @@ class ThreadViewModel(private val model: AppModel, val threadId: String) : ViewM
     /** The card of asks (by its asksSeq) and the done card (by the reply's seq) answered from here. */
     val answeredAsks = MutableStateFlow<Double?>(null)
     val answeredDone = MutableStateFlow<Int?>(null)
-    val pressingRuns = MutableStateFlow<Set<String>>(emptySet())
 
     private fun answerCard(cardId: String, choice: String, call: suspend (PhoneBackend) -> String) {
         val b = model.backend.value ?: return
@@ -296,22 +295,6 @@ class ThreadViewModel(private val model: AppModel, val threadId: String) : ViewM
         if (followUps.isEmpty()) return
         answeredDone.value = lastSeq
         send(AskAnswer.followUpMessage(followUps), onFailed = { answeredDone.value = null })
-    }
-
-    fun run(buttonId: String) {
-        val b = model.backend.value ?: return
-        if (buttonId in pressingRuns.value) return
-        pressingRuns.update { it + buttonId }
-        viewModelScope.launch {
-            try {
-                b.press(threadId, buttonId)
-                delay(4000)
-            } catch (e: Exception) {
-                model.report(e)
-            } finally {
-                pressingRuns.update { it - buttonId }
-            }
-        }
     }
 
     /** Until the runner has it: a refusal says why and gives the words back. */

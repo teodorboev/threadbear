@@ -22,6 +22,9 @@ pub enum Kind {
     /// answers its credentials request (docs/protocol.md, "The Convex panel")
     /// with this script, run in it before its own.
     Convex { credentials_script: String },
+    /// A local page previewed in the app (preview_rules.rs): its own page
+    /// only, in the sealed context, answered from its site.
+    Preview(crate::preview_rules::PreviewSite),
 }
 
 /// `https://a.b:8443/x` → `https://a.b:8443`: what counts as the same site

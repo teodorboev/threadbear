@@ -106,6 +106,33 @@ export function step(name, cmd, args, opts, io = {}) {
   throw new StepFailed(`${name} failed (${why}); the whole output is in ${logFile}`, logFile, r.status);
 }
 
+// What a step's log says when the network dropped under it, rather than the
+// step itself going wrong: a connection that timed out, was reset or refused,
+// or a host name that didn't resolve. On 9 Nov 2026 a fork's website upload
+// lost its connection to Convex's storage once (UND_ERR_CONNECT_TIMEOUT) and
+// failed the whole backend deploy (teodorboev's fork).
+const NETWORK_DROP = /fetch failed|UND_ERR_CONNECT_TIMEOUT|UND_ERR_SOCKET|ETIMEDOUT|ECONNRESET|ECONNREFUSED|EAI_AGAIN|ENOTFOUND|ENETUNREACH|EHOSTUNREACH|socket hang up/;
+export function networkDropped(text) {
+  return NETWORK_DROP.test(text);
+}
+
+// step, with up to two more goes when its log says the network dropped. Only
+// for steps that are safe to run again (npm ci, a Convex deploy, an upload),
+// which is every step of deploy-backend.mjs. Anything else fails at once.
+// io.sleep is for tests.
+export function stepRetryingNetwork(name, cmd, args, opts, io = {}, { tries = 3, waitMs = 15_000 } = {}) {
+  const { say = console.log, sleep = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms) } = io;
+  for (let i = 1; ; i++) {
+    try {
+      return step(name, cmd, args, opts, io);
+    } catch (e) {
+      if (!(e instanceof StepFailed) || i >= tries || !networkDropped(tail(e.logFile, 200))) throw e;
+      say(`  the network dropped; trying again in ${waitMs / 1000}s (${i + 1} of ${tries})`);
+      sleep(waitMs);
+    }
+  }
+}
+
 // The check hosts in a runner.json, as check.sh reads them: "checkHosts" (a
 // list) over "checkHost", each a plain ssh host name. Empty when there's none.
 export function checkHostsFrom(json) {
@@ -164,30 +191,6 @@ export function remoteChecks(hosts, root, opts, io = {}) {
     run(`${name}, again`);
     say(`The second run passed (first run's output: ${e.logFile})`);
     return true;
-  }
-}
-
-// A step whose output says the network dropped (a connection timed out or
-// was reset, DNS didn't answer). On 9 Nov the website upload's connection to
-// Convex's storage timed out once and failed the whole backend deploy.
-const NETWORK_DROP = /fetch failed|UND_ERR_CONNECT_TIMEOUT|UND_ERR_SOCKET|ETIMEDOUT|ECONNRESET|ECONNREFUSED|EAI_AGAIN|ENOTFOUND|ENETUNREACH|EHOSTUNREACH|socket hang up/;
-export function networkDropped(text) {
-  return NETWORK_DROP.test(text);
-}
-
-// step, with two more goes when it failed because the network dropped. Only
-// for steps that are safe to run again (an upload, a deploy). io.sleep for
-// tests.
-export function stepRetryingNetwork(name, cmd, args, opts, io = {}, { tries = 3, waitMs = 15_000 } = {}) {
-  const { say = console.log, sleep = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms) } = io;
-  for (let i = 1; ; i++) {
-    try {
-      return step(name, cmd, args, opts, io);
-    } catch (e) {
-      if (!(e instanceof StepFailed) || i >= tries || !networkDropped(tail(e.logFile, 200))) throw e;
-      say(`  the network dropped; trying again in ${waitMs / 1000}s (try ${i + 1} of ${tries})`);
-      sleep(waitMs);
-    }
   }
 }
 

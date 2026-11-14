@@ -10,10 +10,9 @@ final class PanePreviewTitleTests: XCTestCase {
         XCTAssertEqual(preview.barTip, "/Users/me/repo/docs/plan.md")
     }
 
-    func testAnotherMacsFileShowsItsPathThereNotTheCachedCopy() {
-        var preview = PanePreview(target: .file("/cache/abc123/plan.md"), title: "plan", from: .highlights)
+    func testAnotherMacsFileShowsItsPathThere() {
+        var preview = PanePreview(target: .remote(path: "/Users/mike/repo/plan.md", failed: "This file is kept on bruce."), title: "plan", from: .highlights)
         preview.away = "bruce"
-        preview.remotePath = "/Users/mike/repo/plan.md"
         XCTAssertEqual(preview.barTitle, "plan.md")
         XCTAssertEqual(preview.barTip, "/Users/mike/repo/plan.md on bruce")
     }

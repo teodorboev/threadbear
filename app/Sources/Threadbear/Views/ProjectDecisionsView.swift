@@ -275,12 +275,8 @@ final class DecisionAsksHost: NSView, TranscriptThreadHost, RowCellDelegate {
     }
 
     func askPicturesAllowed(_ card: AsksCard) -> Bool {
-        guard let app, let thread, thread.asksSeq == card.seq else { return false }
-        if let why = app.picturesRefusal(for: thread) {
-            app.errorMessage = why
-            return false
-        }
-        return true
+        guard app != nil, let thread else { return false }
+        return thread.asksSeq == card.seq
     }
 
     func askImportPicture(_ card: AsksCard, url: URL) async -> ImageRef? {

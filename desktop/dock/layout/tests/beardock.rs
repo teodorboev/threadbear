@@ -461,3 +461,22 @@ fn group_frames_share_each_split_less_its_gaps() {
     assert_eq!(frames["a"], Rect::new(0., 0., 1001., 401.));
     assert!(!frames.contains_key("b"));
 }
+
+// Not from the Swift tests: Threadbear's Pin swaps a panel for its pinned copy.
+#[test]
+fn rename_keeps_a_panels_place_selection_window_and_hidden_title() {
+    let mut l = DockLayout::new(h("root", vec![g("mid", &["transcript"]), gs("right", &["highlights", "convex"], "convex")], &[0.6, 0.4]), ["convex".to_string()], vec![DockFloat::new("worktrees", Rect::new(0., 0., 300., 200.), None, None)]);
+    l.rename("convex", "pin:convex");
+    assert_eq!(l.group("right").unwrap().panels, vec!["highlights".to_string(), "pin:convex".to_string()]);
+    assert_eq!(l.group("right").unwrap().selected, "pin:convex");
+    assert!(l.hidden_titles.contains("pin:convex") && !l.hidden_titles.contains("convex"));
+    l.rename("worktrees", "pin:worktrees");
+    assert!(l.is_floating("pin:worktrees") && !l.contains("worktrees"));
+    // Back again, and nothing when the new id's already open or the old one isn't.
+    l.rename("pin:convex", "convex");
+    assert_eq!(l.group("right").unwrap().panels, vec!["highlights".to_string(), "convex".to_string()]);
+    let before = l.clone();
+    l.rename("convex", "highlights");
+    l.rename("nowhere", "elsewhere");
+    assert_eq!(l, before);
+}

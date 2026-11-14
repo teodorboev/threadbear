@@ -1060,8 +1060,6 @@ struct AppDump: Encodable {
                     lines.append(app.runnerStatsAsked ? "  Waiting for its figures. An older runner doesn't send them." : "  Asking for its figures…")
                 }
             }
-            let paired = r.isSelf || !app.directRemoteLink || app.remoteRunners.first { $0.id == r.id }?.tokenFile != nil
-            if !paired { lines.append("  Not paired with this Mac") }
             let on = RunnersText.running(on: r, in: running)
             lines += on.prefix(6).map { "  > " + ($0.title.isEmpty ? "Untitled" : $0.title) }
             if on.count > 6 { lines.append("  and \(on.count - 6) more") }
@@ -1268,7 +1266,7 @@ struct AppDump: Encodable {
         }
         let preview: String? = app.panePreview[thread.id].map { preview in
             switch preview.target {
-            case .file(let path): "file \(path)" + (preview.editing ? " (editing)" : "") + (preview.away.map { " (from \($0)\(preview.cut ? ", cut" : ""))" } ?? "")
+            case .file(let path): "file \(path)" + (preview.editing ? " (editing)" : "") + (preview.away.map { " (from \($0))" } ?? "")
             case .folder(let path): "folder \(path)" + (preview.away.map { " (from \($0))" } ?? "") + (FolderPaneView.current.map { " " + $0.summary } ?? "")
             case .page(let url): "page \(url.absoluteString)"
             case .remote(let path, let failed): "fetching \(path)" + (failed.map { " (failed: \($0))" } ?? "")

@@ -22,6 +22,9 @@ pub(crate) enum EditItem {
     Cut,
     Copy,
     Paste,
+    /// Words only, as the Mac's own; the message box takes it
+    /// (composer_spelling.rs), and it's greyed elsewhere.
+    PasteAndMatchStyle,
     Delete,
     SelectAll,
 }
@@ -34,6 +37,7 @@ impl EditItem {
             EditItem::Cut => "Cut",
             EditItem::Copy => "Copy",
             EditItem::Paste => "Paste",
+            EditItem::PasteAndMatchStyle => "Paste and Match Style",
             EditItem::Delete => "Delete",
             EditItem::SelectAll => "Select All",
         }
@@ -47,6 +51,7 @@ impl EditItem {
             EditItem::Cut => Box::new(input::Cut),
             EditItem::Copy => Box::new(input::Copy),
             EditItem::Paste => Box::new(input::Paste),
+            EditItem::PasteAndMatchStyle => Box::new(crate::composer_spelling::PasteAndMatchStyle),
             EditItem::Delete => Box::new(input::Delete),
             EditItem::SelectAll => Box::new(input::SelectAll),
         }
@@ -62,7 +67,7 @@ impl EditItem {
             EditItem::Copy => Some(OsAction::Copy),
             EditItem::Paste => Some(OsAction::Paste),
             EditItem::SelectAll => Some(OsAction::SelectAll),
-            EditItem::Delete => None,
+            EditItem::Delete | EditItem::PasteAndMatchStyle => None,
         }
     }
 
@@ -76,6 +81,7 @@ impl EditItem {
             EditItem::Cut => if mac { "⌘X" } else { "Ctrl+X" },
             EditItem::Copy => if mac { "⌘C" } else { "Ctrl+C" },
             EditItem::Paste => if mac { "⌘V" } else { "Ctrl+V" },
+            EditItem::PasteAndMatchStyle => if mac { "⌥⇧⌘V" } else { "Ctrl+Shift+V" },
             EditItem::SelectAll => if mac { "⌘A" } else { "Ctrl+A" },
             EditItem::Delete => return None,
         })
@@ -110,6 +116,8 @@ pub(crate) fn install(main: &mut Window, cx: &mut App) {
         with_front_window(cx, |window| window.zoom_window());
     });
     cx.on_action(|_: &crate::shell::BringAllToFront, cx| bring_all_to_front(cx));
+    let paste_plain = if cfg!(target_os = "macos") { "alt-shift-cmd-v" } else { "ctrl-shift-v" };
+    cx.bind_keys([KeyBinding::new(paste_plain, crate::composer_spelling::PasteAndMatchStyle, None)]);
 }
 
 fn with_front_window(cx: &mut App, f: impl FnOnce(&mut Window)) {
@@ -153,7 +161,7 @@ pub(crate) fn close_window(window: &mut Window, cx: &mut App) {
 
 /// The window's own NSWindow, as an object to send to.
 #[cfg(target_os = "macos")]
-fn ns_window(window: &Window) -> Option<objc2::rc::Retained<objc2_app_kit::NSWindow>> {
+pub(crate) fn ns_window(window: &Window) -> Option<objc2::rc::Retained<objc2_app_kit::NSWindow>> {
     use objc2_app_kit::NSView;
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
     let handle = HasWindowHandle::window_handle(window).ok()?;

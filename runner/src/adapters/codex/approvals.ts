@@ -292,6 +292,12 @@ export type ApprovalsDeps = {
   runsAsCode(file: string): CodeWrite;
   callTool(params: DynamicToolCallParams, o: { fromChild: boolean; signal: AbortSignal }): Promise<DynamicToolCallResponse>;
   now(): number;
+  // Whether the thread is on Full access now. Codex still asks in Full when
+  // the turn started before the switch to it (its policy is fixed per turn)
+  // or a subagent's thread runs on config.toml's own policy: Full answers
+  // those itself, as a Claude thread on Full never asks (Ian, 13 Nov: a
+  // GPT-6.1-Sol thread on Full access showed Allow and Deny for a command).
+  fullAccess?(): boolean;
 };
 
 type Pending = { method: string; abort: AbortController };
@@ -376,10 +382,12 @@ export class CodexApprovals {
     this.deps.reply(id, result);
   }
 
+  // Every card here is one Full access answers itself (fullAccess), so a
+  // switch to Full while it shows allows it (ToolApprovalRequest.fullAllows).
   private ask(id: RequestId, method: string, req: Omit<ToolApprovalRequest, 'signal'>, answer: (a: ToolApprovalAnswer) => unknown): void {
     const p = this.open(id, method);
     this.deps
-      .requestApproval({ ...req, signal: p.abort.signal })
+      .requestApproval({ ...req, signal: p.abort.signal, fullAllows: true })
       .catch((e: unknown): ToolApprovalAnswer => {
         this.deps.log.warn('approval request failed', { threadId: this.deps.label, method, error: String(e) });
         return { decision: 'expired' };
@@ -401,7 +409,7 @@ export class CodexApprovals {
     const stdin = (p.kind ?? 'command') === 'writeStdin';
     const cwd = p.cwd || this.deps.cwd();
     const rule = stdin || network ? null : ruleFor(p, cwd);
-    if (commandAllowed(p, this.deps.rules(), cwd)) {
+    if (this.deps.fullAccess?.() || commandAllowed(p, this.deps.rules(), cwd)) {
       this.deps.reply(id, { decision: 'accept' });
       return;
     }
@@ -430,7 +438,7 @@ export class CodexApprovals {
     // A patch to a file that runs as code asks every time, past an "Always
     // allow", as does one whose files weren't seen (code-writes.ts).
     const code = this.runsAsCode(paths);
-    if (!code && known && hasRule(this.deps.rules(), FILE_CHANGE_RULE)) {
+    if (this.deps.fullAccess?.() || (!code && known && hasRule(this.deps.rules(), FILE_CHANGE_RULE))) {
       this.deps.reply(id, { decision: 'accept' });
       return;
     }
@@ -453,6 +461,10 @@ export class CodexApprovals {
     const requested: Record<string, unknown> = {};
     if (p.permissions?.network) requested.network = p.permissions.network;
     if (p.permissions?.fileSystem) requested.fileSystem = p.permissions.fileSystem;
+    if (this.deps.fullAccess?.()) {
+      this.deps.reply(id, { permissions: requested, scope: 'turn' });
+      return;
+    }
     const card = cardInput({ permissions: requested, cwd: p.cwd, reason: p.reason }, ['permissions', 'cwd']);
     if (card.tooLong) return this.tooLong(id, card.tooLong, { permissions: {}, scope: 'turn' });
     this.ask(
@@ -575,7 +587,7 @@ export class CodexApprovals {
       reason: p.reason,
     };
     const cwd = p.cwd || this.deps.cwd();
-    if (commandAllowed(asV2, this.deps.rules(), cwd)) {
+    if (this.deps.fullAccess?.() || commandAllowed(asV2, this.deps.rules(), cwd)) {
       this.deps.reply(id, { decision: 'approved' });
       return;
     }
@@ -601,7 +613,7 @@ export class CodexApprovals {
     const paths = changes.map(([f]) => f);
     const moves = changes.flatMap(([, c]) => [(c as { move_path?: unknown })?.move_path, (c as { kind?: { move_path?: unknown } })?.kind?.move_path]).filter((x): x is string => typeof x === 'string' && x !== '');
     const code = this.runsAsCode([...paths, ...moves]);
-    if (!code && hasRule(this.deps.rules(), FILE_CHANGE_RULE)) {
+    if (this.deps.fullAccess?.() || (!code && hasRule(this.deps.rules(), FILE_CHANGE_RULE))) {
       this.deps.reply(id, { decision: 'approved' });
       return;
     }

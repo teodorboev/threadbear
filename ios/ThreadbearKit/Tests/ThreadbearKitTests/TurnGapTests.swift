@@ -32,6 +32,7 @@ import Testing
             case .tools: "tools"
             case .worked: "worked"
             case let .gap(gap): gap.label
+            case let .note(note): "note\(note.seq)"
             }
         }
     }

@@ -139,7 +139,9 @@ cd threadbear
 
 Setup checks your Mac, logs you in to Convex, makes a Convex project in your
 account and deploys the backend and website to it, then builds and installs
-the runner and the Mac app. If something goes wrong, fix it and run setup
+the runner and the Mac app. Messages go to that deployment; tool output stays on
+your Mac until you pair a phone or add a machine, when Threadbear offers to send
+that too (scrubbed first, not a guarantee) so they can show it. If something goes wrong, fix it and run setup
 again: it only does what's missing. `./threadbear setup --dry-run` shows what
 it would do first.
 

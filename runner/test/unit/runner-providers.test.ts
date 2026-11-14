@@ -226,6 +226,49 @@ test('a folder move on a released Codex session resumes there on the next turn',
   assert.equal(notes(h, thread.id).at(-1), `Moved to ${path.resolve(other)}. The session carries on there.`);
 });
 
+test('lowering access in the same call as a login change still reaches the running Codex turn', () => {
+  const h = codexHarness();
+  const { thread } = h.runner.create({ text: 'x', accountId: 'codex-main', permissionMode: 'full' });
+  const s = h.codex.last;
+  s.init('019a-3', 'gpt-6.1-sol');
+  h.runner.update({ threadId: thread.id, permissionMode: 'ask', accountId: 'claude-3' });
+  assert.deepEqual(s.modes, ['ask'], 'the old session is lowered now, not left on Full till it goes');
+});
+
+test('switching to Full allows the cards Full would not have asked, says so, and leaves the rest', async () => {
+  const h = codexHarness();
+  const { thread } = h.runner.create({ text: 'x', accountId: 'codex-main', permissionMode: 'ask' });
+  const s = h.codex.last;
+  s.init('019a-3', 'gpt-6.1-sol');
+  const signal = new AbortController().signal;
+  const cmd = s.sink.requestApproval({ toolUseId: 't1', name: 'shell', title: 'touch b.txt', input: { command: 'touch b.txt' }, canAlwaysAllow: true, signal, fullAllows: true });
+  let other: string | undefined;
+  void s.sink.requestApproval({ toolUseId: 't2', name: 'mcp__threadbear__delete_thread', title: 'Delete', input: {}, canAlwaysAllow: false, signal }).then((a) => (other = a.decision));
+  h.runner.update({ threadId: thread.id, permissionMode: 'full' });
+  assert.equal((await cmd).decision, 'allow');
+  const resolved = h.events(thread.id).filter((e) => e.type === 'approval.resolved');
+  assert.deepEqual(resolved.map((e) => [e.decision, e.message]), [['allow', 'Allowed by Full access']]);
+  await tick();
+  assert.equal(other, undefined, 'delete_thread still waits for Mike');
+});
+
+test('raising to Full in the same call as a login change reaches the running Codex turn too', () => {
+  const h = codexHarness();
+  const { thread } = h.runner.create({ text: 'x', accountId: 'codex-main', permissionMode: 'ask' });
+  const s = h.codex.last;
+  s.init('019a-3', 'gpt-6.1-sol');
+  h.runner.update({ threadId: thread.id, permissionMode: 'full', accountId: 'claude-3' });
+  assert.deepEqual(s.modes, ['full']);
+});
+
+test('Plan first to Full on a running Codex turn still says the turn keeps planning till it ends', () => {
+  const h = codexHarness();
+  const { thread } = h.runner.create({ text: 'x', accountId: 'codex-main', permissionMode: 'plan' });
+  h.codex.last.init('019a-3', 'gpt-6.1-sol');
+  h.runner.update({ threadId: thread.id, permissionMode: 'full' });
+  assert.equal(notes(h, thread.id).at(-1), 'Full access applies from the next turn. This turn carries on as it started.');
+});
+
 // ------------------------------------------------------------ next-turn note
 
 test('a Codex settings change during a turn says it applies from the next turn', () => {
@@ -243,6 +286,10 @@ test('a Codex settings change during a turn says it applies from the next turn',
   );
   assert.deepEqual(s.modes, ['ask']);
   assert.deepEqual(s.models, ['gpt-6-luna']);
+  // Full counts at once: the runner answers what the turn asks.
+  h.runner.update({ threadId: thread.id, permissionMode: 'full' });
+  assert.match(notes(h, thread.id).at(-1)!, /^Full access allows what this turn asks from now on\. Its sandbox opens from the next turn/);
+  h.runner.update({ threadId: thread.id, permissionMode: 'ask' });
   // Between turns there's nothing to say.
   s.result();
   const before = notes(h, thread.id).length;

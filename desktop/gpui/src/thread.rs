@@ -5,6 +5,7 @@ use crate::composer::Composer;
 use crate::rows::list::{transcript_list, TranscriptList};
 use crate::{call, RT};
 use gpui_kit::component::{v_flex, ActiveTheme as _};
+use gpui_kit::component::WindowExt as _;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 // The zoom-aware px (style.rs), in place of GPUI's.
@@ -212,6 +213,8 @@ enum SendStep {
 
 pub struct ThreadPane {
     client: Arc<Client>,
+    /// Its transcript and box on their way in as it opens (open_motion.rs).
+    pub(crate) entering: crate::open_motion::Entering,
     /// The app, from the composer as the pane's made: never read from the
     /// composer later, as a send comes from inside the composer's own update.
     pub(crate) app: WeakEntity<crate::app::Threadbear>,
@@ -297,6 +300,7 @@ impl ThreadPane {
             timing: LoadTiming::default(),
             stale: false,
             kept_zoom: None,
+            entering: Default::default(),
             _subs: vec![scrolled],
         };
         // Messages still on their way to it from before it was last open.
@@ -341,6 +345,7 @@ impl ThreadPane {
             timing: LoadTiming::default(),
             stale: false,
             kept_zoom: None,
+            entering: Default::default(),
             _subs: vec![],
         };
         pane._subs.extend(crate::rich_boxes::watch(cx));
@@ -368,12 +373,23 @@ impl ThreadPane {
         (self.loaded, self.subagent_missing, self.load_failed.clone(), self.feed.model().rows().len())
     }
 
+    pub(crate) fn can_rewind(&self, cx: &App) -> bool {
+        let fallback = || threadbear_core::composer::can_rewind(&self.summary.provider);
+        let Some(app) = self.app.upgrade() else { return fallback() };
+        let app = app.read(cx);
+        let logins = match self.summary.runner_id.as_deref() {
+            Some(runner) => app.remote.logins.get(runner),
+            None => Some(&app.logins),
+        };
+        logins.map_or_else(fallback, |l| l.can_rewind(&self.summary.provider))
+    }
+
     /// The pencil by one of Mike's messages (`editMessage`): its words and
     /// pictures go into the composer, and sending replaces it.
     pub(crate) fn edit_message(&mut self, row_id: &str, window: &mut Window, cx: &mut Context<Self>) {
         let Some(row) = self.feed.model().item(row_id).cloned() else { return };
         let RowContent::User(message) = &row.content else { return };
-        if !message.editable || !threadbear_core::composer::can_rewind(&self.summary.provider) {
+        if !message.editable || !self.can_rewind(cx) {
             return;
         }
         let (seq, text, images) = (row.seq, message.text.clone(), message.images.clone());
@@ -529,7 +545,7 @@ impl ThreadPane {
             let prepared = cx.background_executor().spawn(async move { prepare(v, Some(root)) }).await;
             // A pane let go while it read (evicted, pane_cache.rs) stops
             // here: subscribing for it would leave a subscription nobody ends.
-            let Ok(after_seq) = this
+            let Ok((after_seq, relay_seen)) = this
                 .update(cx, |this, cx| {
                     let Prepared { mut model, buttons, at_start: _, bytes, decode_ms, fold_ms } = prepared;
                     this.timing.request_ms = request_ms;
@@ -566,7 +582,7 @@ impl ThreadPane {
                     this.load_older_if_near_top(cx);
                     this.timing.ready_ms = Some(this.timing.since());
                     cx.notify();
-                    this.feed.accepted_seq()
+                    (this.feed.accepted_seq(), this.feed.relay_seen())
                 })
             else {
                 return;
@@ -576,7 +592,11 @@ impl ThreadPane {
             if this.update(cx, |_, _| ()).is_err() {
                 return;
             }
-            let sub = call(client, "threads.subscribe", json!({ "threadId": id, "afterSeq": after_seq })).await;
+            let mut params = json!({ "threadId": id, "afterSeq": after_seq });
+            if let Some(seen) = relay_seen {
+                params["relaySeen"] = json!(seen);
+            }
+            let sub = call(client, "threads.subscribe", params).await;
             this.update(cx, |this, cx| match sub.ok().and_then(|v| EventsPage::decode(&v)) {
                 Some(page) => {
                     let action = this.feed.finish_subscribe(page.events, &page.in_progress);
@@ -671,14 +691,18 @@ impl ThreadPane {
             return self.load(cx);
         }
         self.feed.begin_subscribe();
-        let (client, id, after_seq) = (self.client.clone(), self.summary.id.clone(), self.feed.accepted_seq());
+        let (client, id, after_seq, relay_seen) = (self.client.clone(), self.summary.id.clone(), self.feed.accepted_seq(), self.feed.relay_seen());
         cx.spawn(async move |this, cx| {
             after_unsubscribe(&id).await;
             // Let go while it waited: no subscription for a pane that's gone.
             if this.update(cx, |_, _| ()).is_err() {
                 return;
             }
-            let sub = call(client, "threads.subscribe", json!({ "threadId": id, "afterSeq": after_seq })).await;
+            let mut params = json!({ "threadId": id, "afterSeq": after_seq });
+            if let Some(seen) = relay_seen {
+                params["relaySeen"] = json!(seen);
+            }
+            let sub = call(client, "threads.subscribe", params).await;
             this.update(cx, |this, cx| match sub.ok().and_then(|v| EventsPage::decode(&v)) {
                 Some(page) => {
                     crate::reply_buttons::fold(&page.events, &this.summary.id);
@@ -964,7 +988,9 @@ impl ThreadPane {
         self.show_outbox(cx);
         self.scroller.update(cx, |s, cx| s.scroll_to_end(cx));
 
-        let mut params = json!({ "threadId": thread_id, "text": text });
+        // The runner it's shown on (null for this Mac's), so this Mac's
+        // runner refuses it rather than passing it to any other (Daybreak 113).
+        let mut params = json!({ "threadId": thread_id, "text": text, "runnerId": self.summary.runner_id });
         if !images.is_empty() {
             params["images"] = json!(images.iter().map(crate::composer::image_ref_json).collect::<Vec<_>>());
         }
@@ -1182,6 +1208,31 @@ impl ThreadPane {
         }
     }
 
+    /// Its first page is in (a handover waits for the open thread's).
+    pub(crate) fn is_loaded(&self) -> bool {
+        self.loaded
+    }
+
+    /// Still bringing older pages in to get back to a remembered place.
+    pub(crate) fn restoring_place(&self) -> bool {
+        self.rows.pending_restore.is_some()
+    }
+
+    /// Where the outgoing app had this thread scrolled to as it handed over.
+    pub(crate) fn take_handed_memory(&mut self, memory: crate::rows::ScrollMemory, cx: &mut Context<Self>) {
+        if !self.loaded {
+            return;
+        }
+        // The place it was still paging back to is the old one now
+        // (Codex's second look).
+        self.rows.pending_restore = None;
+        if memory.pinned {
+            self.scroller.update(cx, |s, cx| s.scroll_to_end(cx));
+        } else {
+            self.restore_memory(Some(memory), cx);
+        }
+    }
+
     /// `captureMemory`: pinned to the bottom, or the row at the top of the
     /// view and how far down it the view starts (a row part scrolled off the
     /// top has a negative offset, as the Swift app measures it).
@@ -1381,7 +1432,7 @@ impl ThreadPane {
 
     /// A work link in a reply: opens the step's group, scrolls to the step and
     /// lights it up for a moment (`openThreadLink`).
-    pub(crate) fn open_work_link(&mut self, quote: &str, row_id: &str, _window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn open_work_link(&mut self, quote: &str, row_id: &str, window: &mut Window, cx: &mut Context<Self>) {
         let model = self.feed.model();
         // A link with no step behind it beeps, as the Swift app's does, so
         // the click doesn't look as if it was missed.
@@ -1395,8 +1446,17 @@ impl ThreadPane {
                 self.apply(change, cx);
             }
         }
+        // A third of the way down the view, not at its very top, so what led
+        // up to the step is in sight too (`openThreadLink`).
         if let Some(index) = self.feed.model().index_of(&step) {
             self.scroller.update(cx, |s, cx| s.scroll_to_row(index, px(0.), cx));
+            let scroller = self.scroller.clone();
+            window.on_next_frame(move |_, cx| {
+                scroller.update(cx, |s, cx| {
+                    let down = s.viewport().size.height / 3.;
+                    s.back_up(down, cx);
+                });
+            });
             self.light_row(step, cx);
         }
     }
@@ -1478,10 +1538,10 @@ impl ThreadPane {
                 }
                 #[cfg(feature = "automation")]
                 if let RowContent::Assistant(item) = &row.content {
-                    if let Some(labels) = crate::reply_buttons::dump_labels(&item.text) {
+                    if let Some(labels) = crate::reply_buttons::dump_labels(&item.text, &self.summary.id) {
                         out["buttons"] = json!(labels);
                     }
-                    if let Some(drafts) = crate::draft_boxes::dump(&item.text) {
+                    if let Some(drafts) = crate::draft_boxes::dump(&item.text, &self.summary.id) {
                         out["drafts"] = drafts;
                     }
                     // Its ```mermaid and ```html boxes (rich_boxes.rs).
@@ -1498,7 +1558,7 @@ impl ThreadPane {
                 out
             })
             .collect();
-        json!({ "threadId": self.summary.id, "state": self.load_state(), "atBottom": scroller.at_bottom(), "hasMoreAbove": self.has_more_above(), "spinner": !self.loaded && self.error.is_none() && self.load_failed.is_none(), "timing": self.timing_json(), "rows": rows })
+        json!({ "threadId": self.summary.id, "state": self.load_state(), "error": self.error, "atBottom": scroller.at_bottom(), "hasMoreAbove": self.has_more_above(), "spinner": !self.loaded && self.error.is_none() && self.load_failed.is_none(), "timing": self.timing_json(), "rows": rows })
     }
 
     /// The Swift dump's names, a failure with its message.
@@ -1623,6 +1683,8 @@ impl Render for ThreadPane {
             });
         }
         let loading = !self.loaded && self.error.is_none() && self.load_failed.is_none();
+        // Coming in as it opens, once it has its rows (open_motion.rs).
+        let entering = self.entering.transcript(self.loaded, window);
         let theme = cx.theme();
         let (muted, danger, bg) = (theme.muted_foreground, theme.danger, theme.background);
         self.rows.list_width = f32::from(self.scroller.read(cx).viewport().size.width);
@@ -1647,21 +1709,69 @@ impl Render for ThreadPane {
                 })
                 .drag_over::<ExternalPaths>(|s, _, _, cx| s.bg(crate::style::accent(cx).opacity(0.06)).border_2().border_color(crate::style::accent(cx)))
                 // A thread from the sidebar goes into the message as its chip.
-                .on_drop(move |drag: &crate::composer_inline::DraggedThread, window, cx| thread_drop.update(cx, |c, cx| c.take_thread_drop(drag, window, cx)))
+                .on_drop(move |drag: &crate::composer_inline::DraggedThread, window, cx| {
+                    let at = window.mouse_position();
+                    thread_drop.update(cx, |c, cx| c.take_thread_drop(drag, at, window, cx));
+                })
                 .drag_over::<crate::composer_inline::DraggedThread>(|s, _, _, cx| s.bg(crate::style::accent(cx).opacity(0.06)).border_2().border_color(crate::style::accent(cx)))
                 // A file or picture dragged from inside the app (file_drag.rs)
-                // is a dropped file too: GPUI only hands the system its drag
-                // once it's out of the window.
+                // is a dropped file too, but only let go over a box: one let
+                // go anywhere else over the thread is a drag out that changed
+                // its mind, and shouldn't land in the message (`takesDropFromThread`
+                // turns this app's own drags away; the box still takes them).
+                // GPUI only hands the system its drag once it's out of the window.
                 .on_drop(move |file: &crate::file_drag::DraggedFile, window, cx| {
                     let Some(real) = file.still_grabbed() else { return };
                     let at = window.mouse_position();
-                    file_drop.update(cx, |c, cx| c.take_dropped_paths(vec![real], at, window, cx));
+                    file_drop.update(cx, |c, cx| {
+                        if c.box_under(at, cx).is_some() {
+                            c.take_dropped_paths(vec![real], at, window, cx);
+                        }
+                    });
                 })
                 .drag_over::<crate::file_drag::DraggedFile>(|s, _, _, cx| s.bg(crate::style::accent(cx).opacity(0.06)).border_2().border_color(crate::style::accent(cx)))
         });
         v_flex()
             .relative()
             .size_full()
+            // This pane is cached. A platform drag changes App's drag state,
+            // not the pane, so typing could leave its drop layer unmounted
+            // for the whole drag. Hear the first move even over selectable
+            // text, and redraw only when the drag state changes.
+            .child(canvas(|_, _, _| {}, {
+                let pane = cx.weak_entity();
+                let composer = self.composer.downgrade();
+                let accepts_drop = self.subagent_id.is_none();
+                move |bounds, _, window, _| {
+                    let moved = pane.clone();
+                    window.on_mouse_event(move |_: &MouseMoveEvent, phase, _, cx| {
+                        if phase.capture() && cx.has_active_drag() != dragging_file {
+                            moved.update(cx, |_, cx| cx.notify()).ok();
+                        }
+                    });
+                    let released = pane.clone();
+                    let composer = composer.clone();
+                    window.on_mouse_event(move |event: &MouseUpEvent, phase, window, cx| {
+                        // A native drop belongs to the thread even when a
+                        // selectable text hitbox has taken the hover. Capture
+                        // its real pasteboard before GPUI's bubbling handlers,
+                        // while the source file and its access grant exist.
+                        if accepts_drop && phase.capture() && event.button == MouseButton::Left && bounds.contains(&event.position) && !window.has_active_dialog(cx) && !window.has_active_sheet(cx) {
+                            if let Some(composer) = composer.upgrade().filter(|composer| composer.read(cx).can_take_pictures(cx)) {
+                                if let Some(paths) = crate::composer_media::read(true) {
+                                    composer.update(cx, |c, cx| c.take_dropped_paths(paths, event.position, window, cx));
+                                    cx.stop_active_drag(window);
+                                    cx.stop_propagation();
+                                }
+                            }
+                        }
+                        if phase.capture() && dragging_file {
+                            let released = released.clone();
+                            window.defer(cx, move |_, cx| { released.update(cx, |_, cx| cx.notify()).ok(); });
+                        }
+                    });
+                }
+            }).absolute().inset_0())
             // ⌘C on words selected in a reply: HTML with their links beside
             // the words (selection_bar.rs). Ahead of the kit's own copy, which
             // has the words alone.
@@ -1685,24 +1795,25 @@ impl Render for ThreadPane {
                 Some(message) if !self.loaded && self.subagent_missing => s.child(div().flex_1().flex().items_center().justify_center().text_size(px(13.)).text_color(muted).child(message)),
                 Some(message) if !self.loaded => s.child(self.render_load_failure(message, cx)),
                 _ if self.loaded && self.subagent_id.is_some() && self.feed.model().rows().is_empty() => s.child(div().flex_1().flex().items_center().justify_center().text_size(px(13.)).text_color(muted).child("Nothing yet.")),
-                _ => s.child(
+                _ => s.child(crate::open_motion::transcript_frame(
                     div()
                         .relative()
-                        .flex_1()
-                        .min_h_0()
+                        .size_full()
                         .child(transcript_list(&self.scroller, bg, cx.processor(|this, ix: usize, window, cx| this.render_item(ix, window, cx)), cx))
                         // A small spinner in the middle of where the transcript
                         // will be, and no words, from the moment it's opened
                         // (DetailView's `ProgressView().controlSize(.small)`
                         // over the transcript while `.loading`).
-                        .when(loading, |s| s.child(div().absolute().inset_0().flex().items_center().justify_center().child(self.spinner(16., cx))))
+                        .when(loading, |s| s.child(div().absolute().inset_0().flex().items_center().justify_center().child(self.spinner(16., cx).transcript_loader())))
                         // Where an archive's page starts from (archive_flight.rs); a sub-agent's never flies.
                         .when(self.subagent_id.is_none(), |s| s.child(crate::archive_flight::transcript_mark(cx.entity_id()))),
-                ),
+                    entering,
+                )),
             })
             // A sub-agent can't be written to: it takes its brief from the
             // agent that started it.
-            .when(self.subagent_id.is_none(), |s| s.child(self.composer.clone()))
+            // Dropping from the new-thread page, when it was started there.
+            .when(self.subagent_id.is_none(), |s| s.child(self.entering.wrap_box(self.composer.clone().into_any_element())))
             .children(drop_layer)
             // The card of a link the pointer's resting on (reply_links.rs), and
             // the bar over selected words (selection_bar.rs).

@@ -18,3 +18,11 @@ Feature: Reading what a sub-agent did
     Given the runner has no record of the sub-agent "Check the Docker layer cache" of "Why is the build slow on CI?"
     When I open the sub-agent "Check the Docker layer cache" of "Why is the build slow on CI?"
     Then the app says it has no record of that sub-agent
+
+  @sidebar.subagents @header.subagent
+  Scenario: A finished sub-agent I am reading stays in the Inbox
+    When I open the sub-agent "Find the commit that slowed the build" of "Why is the build slow on CI?"
+    And the runner finishes the sub-agents of "Why is the build slow on CI?"
+    Then the "Inbox" section lists "Why is the build slow on CI?"
+    And the row "Why is the build slow on CI?" lists the sub-agent "Find the commit that slowed the build"
+    And the transcript shows the sub-agent's brief "Find which commit made the CI build slow."

@@ -5,6 +5,11 @@ import type { ThreadbearWorld } from '../support/world.ts';
 
 const opened = new WeakMap<ThreadbearWorld, string>();
 
+When('the runner finishes the sub-agents of {string}', async function (this: ThreadbearWorld, title: string) {
+  const t = await this.until(`the thread ${title}`, (d) => this.thread(d, title));
+  await this.app.do({ cmd: 'mock', method: 'finishSubagents', params: { threadId: t.id } });
+});
+
 When('I open the sub-agent {string} of {string}', async function (this: ThreadbearWorld, title: string, thread: string) {
   const t = await this.until(`"${thread}" listing "${title}"`, (d) => {
     const row = this.thread(d, thread);

@@ -531,6 +531,30 @@ test("a thread in a project gets its folders' patches, and their actions run in 
   assert.equal(run.text.trim(), fs.realpathSync(app));
 });
 
+test("a patch's when sees the thread's projects and title: joining a project with no folders, or a rename, reads it again", async () => {
+  const { h, misc, projects, create } = setup();
+  fs.mkdirSync(path.join(misc, '.threadbear/patches'), { recursive: true });
+  fs.writeFileSync(path.join(misc, '.threadbear/patches/at.ts'), `export default { panels: [
+    { title: "AT runs", url: "http://127.0.0.1:1/", when: ({ thread }) => thread.projects.some((p) => p.title === "Acceptance testing") },
+    { title: "Draft", url: "http://127.0.0.1:2/", when: ({ thread }) => thread.title.startsWith("Draft") },
+  ] };`);
+  const { thread } = create();
+  await tick();
+  await h.runner.patchesIdle();
+  const panels = () => (h.runner.get(thread.id).panels ?? []).map((p) => p.title).filter((t) => t === 'AT runs' || t === 'Draft');
+  assert.deepEqual(panels(), []);
+  projects.create({ title: 'Acceptance testing', threadIds: [thread.id], by: 'mike' });
+  h.runner.get(thread.id);
+  await tick(6);
+  await h.runner.patchesIdle();
+  assert.deepEqual(panels(), ['AT runs']);
+  h.runner.update({ threadId: thread.id, title: 'Draft notes' });
+  h.runner.get(thread.id);
+  await tick(6);
+  await h.runner.patchesIdle();
+  assert.deepEqual(panels(), ['AT runs', 'Draft']);
+});
+
 // ----------------------------------------------------------- the librarian
 
 test('the librarian looks after the first turn: makes a project and files the thread', async () => {
@@ -1340,7 +1364,7 @@ test('a thread another is waiting on gets a look soon after any turn, and its me
     models: (p) => {
       if (!p.prompt.includes('Hibernating threads waiting until this thread has done something')) return reply({ projects: [], new: null, state: {}, why: 'x' });
       assert.match(p.prompt, new RegExp(`- ${waiter.slice(0, 8)} "Write the plan": until it reports the I/O saving`));
-      return reply({ projects: [], new: null, state: {}, met: { [waiter.slice(0, 8)]: 'It posted the saving', nothere1: 'x' }, why: 'Measured' });
+      return reply({ projects: [], new: null, state: {}, met: { [waiter.slice(0, 8)]: { met: true, why: 'It posted the saving' }, nothere1: { met: true, why: 'x' } }, why: 'Measured' });
     },
   });
   const { h, create, librarian, finish } = s;
@@ -1360,23 +1384,25 @@ test('a thread another is waiting on gets a look soon after any turn, and its me
   assert.match(librarian.status().recent[0].text, /Woke Write the plan/);
 });
 
-test('a met with no reason, or for a waiter in a private folder, wakes nothing', async () => {
+test('a met that is false, a bare reason, no reason, or a waiter in a private folder wakes nothing', async () => {
   let prompt = '';
   const s = setup({
     privateFolder: (cwd) => cwd.endsWith('secret'),
     models: (p) => {
       if (!p.prompt.includes('Measure the I/O saving')) return reply({ projects: [], new: null, state: {}, why: 'x' });
       prompt = p.prompt;
-      return reply({ projects: [], new: null, state: {}, met: { [open.slice(0, 8)]: false, [hidden.slice(0, 8)]: 'It posted the saving' }, why: 'x' });
+      return reply({ projects: [], new: null, state: {}, met: { [open.slice(0, 8)]: { met: false, why: 'The GPUI port has not landed' }, [bare.slice(0, 8)]: 'It posted the saving', [none.slice(0, 8)]: { met: true }, [hidden.slice(0, 8)]: { met: true, why: 'It posted the saving' } }, why: 'x' });
     },
   });
   const { h, misc, create, finish } = s;
   const secret = path.join(misc, 'secret');
   fs.mkdirSync(secret, { recursive: true });
   const open = create('Write the plan').thread.id;
+  const bare = create('Write the other plan').thread.id;
+  const none = create('Write a third plan').thread.id;
   const hidden = create('Private plan', secret).thread.id;
   const target = create('Measure the I/O saving').thread.id;
-  for (const w of [open, hidden]) {
+  for (const w of [open, bare, none, hidden]) {
     h.runner.update({ threadId: w, snoozedUntil: new Date(h.clock.now() + 86_400_000).toISOString() });
     rec(h, w).waitingOn = [{ threadId: target, title: 'Measure the I/O saving', until: 'it reports the I/O saving' }];
   }
@@ -1385,7 +1411,9 @@ test('a met with no reason, or for a waiter in a private folder, wakes nothing',
   await tick(8);
   assert.ok(prompt, 'the target was looked at');
   assert.doesNotMatch(prompt, /Private plan/);
-  assert.ok(h.runner.get(open).snoozedUntil, 'false is not a reason');
+  assert.ok(h.runner.get(open).snoozedUntil, 'a false verdict, even with a reason, is not met');
+  assert.ok(h.runner.get(bare).snoozedUntil, 'a reason with no verdict is not met');
+  assert.ok(h.runner.get(none).snoozedUntil, 'a verdict with no reason is not met');
   assert.ok(h.runner.get(hidden).snoozedUntil, 'never shown, so never met');
 });
 

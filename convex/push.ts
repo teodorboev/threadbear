@@ -242,8 +242,15 @@ export const notify = internalAction({
     // It may have been seen on the Mac in the meantime.
     if (!t || !t.needsYou) return { sent: 0, failed: 0, skipped: 'noLongerNeedsYou' };
     const alert = { ...pushText(t), threadId };
-    // A held push only goes to the phones that waited for it.
-    if (held) return await sendAlert(ctx, alert, (n) => n === 'away');
+    // A held push only goes to the phones that waited for it. He may be
+    // back at the Mac by now (a Mac that slept with him at it, its held
+    // pushes sent by sync:sendStaleHeldPushes, woke before this ran): then
+    // it's held again (Codex's review).
+    if (held) {
+      if (!t.atMac) return await sendAlert(ctx, alert, (n) => n === 'away');
+      await ctx.runMutation(internal.devices.holdPush, { threadId });
+      return { sent: 0, failed: 0, skipped: 'atMac' };
+    }
     if (!t.atMac) return await sendAlert(ctx, alert);
     await ctx.runMutation(internal.devices.holdPush, { threadId });
     const r = await sendAlert(ctx, alert, (n) => n === 'always');

@@ -14,6 +14,9 @@ import path from 'node:path';
 import { GpuiDriver } from '../support/gpui.ts';
 import { sleep } from '../support/driver.ts';
 import { assertInFront, windowFrame, work } from './real-screen.ts';
+import { ensurePerfLock } from './perf-lock.ts';
+
+await ensurePerfLock();
 
 const REVIEW = 'review_account_picker';
 const keys = path.join(work, 'keys');

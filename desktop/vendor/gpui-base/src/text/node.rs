@@ -3808,7 +3808,7 @@ impl BlockNode {
                     .w_full()
                     .min_w_0()
                     // Items breathe a little apart, less than paragraphs do.
-                    .when(ix > 0, |this| this.pt(body * 0.25))
+                    .when(ix > 0, |this| this.pt(node_cx.style.list_item_gap().map(|gap| gap.to_pixels(window.rem_size())).unwrap_or(body * 0.25)))
                     .when(*spread, |this| this.child(div()))
                     .children({
                         let mut items: Vec<Div> = Vec::with_capacity(children.len());
@@ -4023,8 +4023,9 @@ impl BlockNode {
             })
             .collect();
 
+        let natural_width = columns.iter().map(|column| column.max + column.divider).sum::<f32>() + TABLE_BORDER_PX;
         let rows = Self::render_table_rows(table, &columns, node_cx, window, cx);
-        let frame = StyleRefinement::default()
+        let mut frame = StyleRefinement::default()
             .text_size(text_size)
             .bg(style
                 .table_background()
@@ -4032,6 +4033,7 @@ impl BlockNode {
             .border_1()
             .border_color(style.border())
             .refine_style(style.table());
+        if style.table_natural_width() { frame = frame.max_w(px(natural_width)); }
         let body = if scroll {
             let scroll_handle = window
                 .use_keyed_state(

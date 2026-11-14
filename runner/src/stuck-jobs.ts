@@ -21,6 +21,7 @@ import { atomicWriteFileSync, readJsonSync } from './fsutil.ts';
 // `browserbear handoff <tab> --wait` sits silent with no CPU until he
 // presses Done (5 Nov: two nudges in a row for one). The shell's command
 // lines show it, so it's told apart from a loop that can never end.
+// So is a `tb land`, which waits its turn in the landing line (isLanding).
 //
 // Claude only: its jobs write to output files under /tmp/claude-<uid>
 // (a sub-agent's is a link to its transcript), which give the start and
@@ -91,6 +92,74 @@ export function waitsOnUserMs(commandLine: string): number | undefined {
   return (Number.isFinite(secs) && secs > 0 ? secs : HANDOFF_DEFAULT_WAIT_S) * 1000;
 }
 
+// How long a `tb land` is left to wait before it counts as stuck after all.
+// It sits silent with no CPU by design: queued for the landing lock behind
+// other threads' checks, or with its own check running on another machine
+// (docs/thread-worktrees.md, "Landing together"). On 13 Nov, with 20
+// landings queued and waits past 30 minutes, this check told a dozen
+// threads their `tb land` looked stuck. Agents stopped it and ran it again,
+// which sent them to the back of the line, and when the one stopped was
+// running the group's check, that check went with it: three checks of 11,
+// 14 and 13 branches were thrown away in half an hour, each making the
+// waits longer and the next nudge surer, and nothing landed for 35 minutes.
+// Three hours is how long a check waits for a host of its own accord
+// (scripts/check-remote.sh); git commands under it give up after five minutes.
+export const LAND_WAIT_MS = 3 * 60 * 60_000;
+
+// Whether a process is a real `tb land`: `node …/tb land`, as tb's shebang
+// runs it, at whatever priority (taskpolicy and nice exec it). Never a
+// shell whose text merely mentions it, nor node's inline code, as for
+// waitsOnUserMs: `tb land; while true; do sleep 3; done` is still judged
+// once the landing has gone. A dry run counts too: it waits in the same line.
+//
+// ps joins the arguments with spaces and the installed tb's path has one
+// (…/Application Support/Threadbear/runner/releases/<id>/bin/tb), so the
+// script is the words up to the first that ends in /tb, as long as none
+// before it is a script of its own (node other.mjs "x/tb land"). A script
+// with no extension and such arguments can't be told from a path with a
+// space; all it would get is the same three hours.
+const isFileOnDisk = (p: string): boolean => {
+  try {
+    return fs.statSync(p).isFile();
+  } catch {
+    return false;
+  }
+};
+
+export function isLanding(commandLine: string, isFile: (path: string) => boolean = isFileOnDisk): boolean {
+  const words = commandLine.trim().split(/\s+/);
+  // Node's own path can have a space too (/Users/m/My Tools/bin/node): the
+  // words up to the first that ends in /node, when the line starts with a
+  // path and none of them is a flag.
+  const node = words.findIndex((w) => /(^|\/)node$/.test(w));
+  // And not when the first word is a program by itself, which makes the
+  // rest its arguments: `/bin/bash /tmp/node /tmp/tb land` is bash running
+  // a script that happens to be called node (Codex's second look, 13 Nov).
+  if (node < 0 || (node > 0 && (!words[0].startsWith('/') || isFile(words[0]) || words.slice(0, node).some((w) => w.startsWith('-'))))) return false;
+  const first = words.findIndex((w, i) => i > node && !w.startsWith('-'));
+  if (first < 0) return false;
+  // Inline code in any of node's spellings, -eCODE included.
+  if (words.slice(node + 1, first).some((w) => /^(-[ep]|--eval\b|--print\b)/.test(w))) return false;
+  const script = words.findIndex((w, i) => i >= first && /(^|\/)tb$/.test(w));
+  if (script < 0) return false;
+  if (words.slice(first, script).some((w) => w.startsWith('-') || /\.[cm]?[jt]s$/.test(w))) return false;
+  // tb's command is its first word that isn't a flag, and `tb land` takes
+  // only flags (--dry-run, --despite-red).
+  return words.slice(script + 1).find((w) => !w.startsWith('-')) === 'land';
+}
+
+// When the landing running under a shell now started, the earliest if
+// there are several, or undefined with none. Asked at every look rather
+// than kept like a handoff's deadline: a landing that has ended leaves
+// whatever is still there (a wait loop, say) to be judged as usual, and a
+// handoff earlier in the same shell doesn't cut a landing's time short
+// (Codex's review, 13 Nov).
+function landingStarted(processes: ShellProcess[]): number | undefined {
+  let out: number | undefined;
+  for (const p of processes) if (isLanding(p.command)) out = Math.min(out ?? Infinity, p.startedAt);
+  return out;
+}
+
 // The latest a shell's waiting processes said they'd wait until, plus the grace.
 function waitDeadline(processes: ShellProcess[]): number | undefined {
   let out: number | undefined;
@@ -119,7 +188,9 @@ type Deps = { host: Host; clock: Clock; log: Logger; home: string; probe?: Probe
 type Saved = { nudged: Record<string, string> };
 const NUDGE_MEMORY_MS = 24 * 60 * 60_000;
 
-type Stuck = { task: BackgroundTask; minutes: number; commands?: string[] };
+// landing: another shell of the same thread has a tb land going, so this
+// one may only be waiting for it (a loop polling its log, say).
+type Stuck = { task: BackgroundTask; minutes: number; commands?: string[]; landing?: boolean };
 
 export function stuckJobsPath(home: string): string {
   return path.join(home, 'stuck-jobs.json');
@@ -134,6 +205,10 @@ export class StuckJobs {
   private cpu = new Map<string, number>();
   // When a job waiting on Mike (waitsOnUserMs) stops being left alone, by thread/task.
   private waitDeadline = new Map<string, number>();
+  // When the first landing seen under a job started, by thread/task: its
+  // three hours count from there, so a loop that keeps starting new
+  // landings can't put the check off for good.
+  private landingSince = new Map<string, number>();
 
   constructor(deps: Deps) {
     this.deps = deps;
@@ -175,6 +250,7 @@ export class StuckJobs {
     const live = new Set(threads.flatMap((t) => t.tasks.map((task) => key(t.threadId, task.id))));
     for (const k of this.cpu.keys()) if (!live.has(k)) this.cpu.delete(k);
     for (const k of this.waitDeadline.keys()) if (!live.has(k)) this.waitDeadline.delete(k);
+    for (const k of this.landingSince.keys()) if (!live.has(k)) this.landingSince.delete(k);
     const nudged: Record<string, string> = {};
     for (const [k, at] of Object.entries(saved.nudged)) if (now - Date.parse(at) < NUDGE_MEMORY_MS) nudged[k] = at;
 
@@ -206,6 +282,15 @@ export class StuckJobs {
           // exited and the CLI will say so, or it isn't ours to judge.
           const shell = shells.get(sessionId)?.find((s) => s.taskId === task.id);
           if (!shell) continue;
+          // A landing waiting its turn, or on its check elsewhere: left
+          // alone while one is running under it, for LAND_WAIT_MS from the
+          // first one seen.
+          const landing = landingStarted(shell.processes ?? []);
+          if (landing !== undefined) {
+            const since = this.landingSince.get(k) ?? landing;
+            this.landingSince.set(k, since);
+            if (now < since + LAND_WAIT_MS + WAIT_GRACE_MS) continue;
+          }
           // Waiting on Mike, and still within the time it said it would,
           // counted from when that process started (a script may sleep
           // first). The first wait seen sets the job's deadline, so a loop
@@ -221,8 +306,11 @@ export class StuckJobs {
           if (before === undefined || shell.cpuSeconds - before >= IDLE_CPU_SECONDS) continue;
           commands = shell.commands;
         }
+        // Another shell's, never this one's own: a landing past its three
+        // hours is the job being told about, and mustn't be told to stay.
+        const landing = (shells.get(sessionId) ?? []).some((sh) => sh.taskId !== task.id && landingStarted(sh.processes ?? []) !== undefined);
         const l = stuck.get(thread.threadId) ?? [];
-        l.push({ task, minutes, commands });
+        l.push({ task, minutes, commands, ...(landing ? { landing } : {}) });
         stuck.set(thread.threadId, l);
       }
     }
@@ -266,6 +354,12 @@ export function message(jobs: Stuck[]): string {
     ...lines,
     '',
     `Check whether ${one ? "it's" : "they're"} still doing anything useful. Stop any that are stuck (a wait loop that can never end, say) and carry on from there. If you can't tell, ask the user in end_turn.`,
+    // The probe can't tell that a quiet loop is waiting on the landing in
+    // another shell, but the agent can, and stopping the landing is the
+    // costly mistake.
+    ...(jobs.some((j) => j.landing)
+      ? ['', "A tb land in another of this thread's shells is still going: it's waiting its turn in the landing line, or on its check on another machine. Leave it running, and anything that's only waiting for it. Stopping a tb land sends it to the back of the line, and loses the check for every thread it was being checked with."]
+      : []),
   ].join('\n');
 }
 

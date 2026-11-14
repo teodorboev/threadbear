@@ -9,7 +9,7 @@ import { nullLogger } from '../../src/log.ts';
 import { tmpDir } from '../helpers/fakes.ts';
 import { cardDecisive } from '../../src/tools.ts';
 import { ALWAYS_ASK_TOOLS, NEVER_ASK_TOOLS } from '../../src/threadbear-mcp.ts';
-import { END_TURN_FULL_NAME, END_TURN_NUDGE, ONE_REPLY_END_TURN_NUDGE, ONE_REPLY_WRITE_NUDGE, oneReplyAccepted, oneReplyAlreadyWritten } from '../../src/needs.ts';
+import { END_TURN_FULL_NAME, END_TURN_NUDGE, ONE_REPLY_END_TURN_NUDGE, ONE_REPLY_WRITE_NUDGE, ARCHIVE_ADDED, oneReplyAccepted, oneReplyAlreadyWritten, REPLY_ASKS } from '../../src/needs.ts';
 
 test('"Always allow" keeps only allow rules, scoped to the session', () => {
   const { updates, rules } = alwaysAllow('Bash', [
@@ -187,6 +187,45 @@ test('Stop hook: a message sent after end_turn does not make it forget the call'
   state.close!();
 });
 
+// Thread 0222c475 (13 Nov 2026): Mike's next question landed 30 ms before the
+// end_turn for his last one, which was taken with needs "nothing". The CLI's
+// "started" frame is when a message goes to the agent, so until then a call
+// was written without it.
+test('unreadMessage: a message sent into a turn is unread until the CLI starts on it, and refused for twice at most', async () => {
+  const { session, state } = start([], {}, { mcpServersFor: () => ({ threadbear: { type: 'sdk', name: 'threadbear' } }) });
+  const life = (s: string, uuid: string) => state.frame!({ type: 'command_lifecycle', command_uuid: uuid, state: s });
+  session.send({ id: 'u1', text: 'Not yet', images: [] });
+  assert.equal(session.unreadMessage!(), false, 'not known before the CLI has sent a lifecycle frame');
+  await life('queued', 'u1');
+  await life('started', 'u1');
+  await state.frame!({ type: 'system', subtype: 'init', session_id: 's' });
+  assert.equal(session.unreadMessage!(), false, "the turn's own message has been handed over");
+  // Sent while the agent writes its end_turn: queued, not started.
+  session.send({ id: 'u2', text: 'Should we get it into production?', images: [] });
+  await life('queued', 'u2');
+  assert.equal(session.unreadMessage!(), true);
+  // The refusal hands it over; one the CLI kept back anyway is refused for
+  // once more (from Codex's review), and never a third time.
+  assert.equal(session.unreadMessage!(), true);
+  assert.equal(session.unreadMessage!(), false, 'a frame that never comes cannot keep the turn from ending');
+  // A second one behind it has refusals of its own.
+  session.send({ id: 'u3', text: 'And the redirects?', images: [] });
+  assert.equal(session.unreadMessage!(), true);
+  await life('started', 'u2');
+  assert.equal(session.unreadMessage!(), true, 'u3 is still waiting');
+  await life('started', 'u3');
+  assert.equal(session.unreadMessage!(), false);
+  // One the CLI folded in without a frame of its own: the result names it.
+  session.send({ id: 'u4', text: 'go', images: [] });
+  await state.frame!({ type: 'result', subtype: 'success', is_error: false, duration_ms: 1, session_id: 's', user_message_uuid: 'u1', user_message_uuids: ['u1', 'u4'] });
+  assert.equal(session.unreadMessage!(), false);
+  // Cancelled by Stop: nothing left to read.
+  session.send({ id: 'u5', text: 'wait', images: [] });
+  await life('cancelled', 'u5');
+  assert.equal(session.unreadMessage!(), false);
+  state.close!();
+});
+
 // Thread 46de9389 (7 Nov 2026): a background `tb land` finished just before
 // end_turn, and the agent read its notification with end_turn's result. The
 // work after that is past the card it gave, so Stop asks for another.
@@ -282,6 +321,62 @@ test('Stop hook: no nudge for a reply when end_turn said the message above is it
   await state.options.hooks.PostToolUse[0].hooks[0]({ hook_event_name: 'PostToolUse', tool_name: END_TURN_FULL_NAME });
   await state.frame!({ type: 'user', session_id: 's', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'e1', content: oneReplyAlreadyWritten(false) }] } });
   assert.deepEqual(await stop({ hook_event_name: 'Stop', stop_hook_active: false }), {});
+  state.close!();
+});
+
+// Threads 0222c475 and 7a98a6fd (Nov 2026): a reply that closed on "Say go
+// and I'll merge main into prod", or "Which do you want to start with?", under
+// an end_turn that said nothing was needed. Mike had no card to answer on.
+test('Stop hook: a reply that closes by asking, under a done card, is sent back once for the card', async () => {
+  const run = async (input: Record<string, unknown>, reply: string, oneReply = true) => {
+    const { state, outputs } = start([], {}, { mcpServersFor: () => ({ threadbear: { type: 'sdk', name: 'threadbear' } }), oneReply: () => oneReply });
+    const stop = state.options.hooks.Stop[0].hooks[0];
+    await state.frame!({ type: 'assistant', session_id: 's', message: { id: 'a', role: 'assistant', content: [{ type: 'tool_use', id: 'e1', name: END_TURN_FULL_NAME, input }] } });
+    await state.options.hooks.PostToolUse[0].hooks[0]({ hook_event_name: 'PostToolUse', tool_name: END_TURN_FULL_NAME });
+    await state.frame!({ type: 'user', session_id: 's', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'e1', content: oneReplyAccepted(input.needs === 'you') }] } });
+    await state.frame!({ type: 'assistant', session_id: 's', message: { id: 'b', role: 'assistant', content: [{ type: 'text', text: reply }] } });
+    const first = await stop({ hook_event_name: 'Stop', stop_hook_active: false });
+    const reopens = outputs.filter((o: AdapterOutput) => o.kind === 'endTurnNudge' && o.reopen).length;
+    return { first, reopens, stop, state };
+  };
+  const asked = await run({ headline: 'Ready', needs: 'nothing' }, "Yes, it's ready to go live.\n\nSay go and I'll merge main into prod.");
+  assert.equal(asked.first.decision, 'block');
+  assert.ok(asked.first.reason.startsWith(`${REPLY_ASKS} ("Say go and I'll merge main into prod.")`), asked.first.reason);
+  assert.equal(asked.reopens, 1, 'the runner is told, so the next end_turn is not a repeat');
+  // Once: the stop after the card, or after the agent decides none is needed.
+  assert.deepEqual(await asked.stop({ hook_event_name: 'Stop', stop_hook_active: true }), {});
+  asked.state.close!();
+  // The card already asks, the reply doesn't, or the session isn't one-reply.
+  for (const [input, reply, oneReply] of [
+    [{ headline: 'Ready', needs: 'you', asks: [{ question: 'Release it?' }] }, 'It is ready. Which do you want first?', true],
+    [{ headline: 'Ready', asks: [{ question: 'Release it?' }] }, 'It is ready. Which do you want first?', true],
+    [{ headline: 'Released', needs: 'nothing' }, 'It is live on convex.dev.', true],
+    [{ needs: 'nothing' }, 'It is ready. Which do you want first?', false],
+  ] as const) {
+    const quiet = await run({ ...input }, reply, oneReply);
+    assert.deepEqual([quiet.first, quiet.reopens], [{}, 0], JSON.stringify(input));
+    quiet.state.close!();
+  }
+});
+
+// From Codex's review: a repeat that only adds archive ("Added: ...") is a
+// successful result too, and took the check away with it, so the thread was
+// archived with its question unanswered.
+test('Stop hook: an end_turn repeat that only adds archive leaves the reply check on', async () => {
+  const { state, outputs } = start([], {}, { mcpServersFor: () => ({ threadbear: { type: 'sdk', name: 'threadbear' } }), oneReply: () => true });
+  const stop = state.options.hooks.Stop[0].hooks[0];
+  const endTurn = async (id: string, input: Record<string, unknown>, result: string) => {
+    await state.frame!({ type: 'assistant', session_id: 's', message: { id: `a-${id}`, role: 'assistant', content: [{ type: 'tool_use', id, name: END_TURN_FULL_NAME, input }] } });
+    await state.options.hooks.PostToolUse[0].hooks[0]({ hook_event_name: 'PostToolUse', tool_name: END_TURN_FULL_NAME });
+    await state.frame!({ type: 'user', session_id: 's', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content: result }] } });
+  };
+  await endTurn('e1', { headline: 'Ready', needs: 'nothing' }, oneReplyAccepted(false));
+  await endTurn('e2', { headline: 'Ready', needs: 'nothing', archive: true }, ARCHIVE_ADDED);
+  await state.frame!({ type: 'assistant', session_id: 's', message: { id: 'b', role: 'assistant', content: [{ type: 'text', text: 'It is ready. Which do you want to start with?' }] } });
+  const r = await stop({ hook_event_name: 'Stop', stop_hook_active: false });
+  assert.equal(r.decision, 'block');
+  assert.ok(r.reason.startsWith(REPLY_ASKS), r.reason);
+  assert.equal(outputs.filter((o: AdapterOutput) => o.kind === 'endTurnNudge' && o.reopen).length, 1);
   state.close!();
 });
 

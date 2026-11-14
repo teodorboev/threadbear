@@ -12,7 +12,6 @@ import { api } from '../../convex/_generated/api';
 import type { Id } from '../../convex/_generated/dataModel';
 import { go, threadPath, useRoute } from './route';
 import { useToken } from './token';
-import { RunCommand } from './run-command';
 import { MessageText, Pictures, picturesByRow, ToolRun, Worked, type PageMessage } from './messages';
 import { ReplyButton } from './reply-button';
 import { CommandState } from './command-state';
@@ -22,7 +21,7 @@ import { Pop } from './menu';
 import { pastedOf } from './picture-chips';
 import { Rail } from './rail';
 import { NewThread, ProjectPage, ProjectsList, RunnerPage, RunnersList, ScheduledList, SchedulePage, UsageList, UsagePage } from './pages';
-import { duration, fold, splitTurns, type Item } from './turns';
+import { duration, fold, isNote, splitTurns, type Item } from './turns';
 import { folderName, sender } from './format';
 import * as Icon from './icons';
 import { ReviewRow } from './review-row';
@@ -191,8 +190,12 @@ function ThreadView({ token, threadId }: { token: string; threadId: string }) {
     };
   }, [t?.title]);
 
-  const messages = (shown?.messages ?? []) as PageMessage[];
-  const items = useMemo(() => fold(messages, t ? busy(t) : false), [messages, t?.status]);
+  const rows = (shown?.messages ?? []) as PageMessage[];
+  const items = useMemo(() => fold(rows, t ? busy(t) : false), [rows, t?.status]);
+  // Without the login notes, which only the fold places: everything else
+  // here (links to steps, pictures, the review's place) is about what Mike
+  // and the agent said and did.
+  const messages = useMemo(() => rows.filter((m) => !isNote(m)), [rows]);
   if (!shown || !t) return <div className="pad muted">Loading…</div>;
 
   const pictures = shown.images ?? [];
@@ -235,6 +238,13 @@ function ThreadView({ token, threadId }: { token: string; threadId: string }) {
       );
     }
     const m = item.m;
+    if (item.kind === 'note') {
+      return (
+        <div key={m.seq} className="login-note">
+          {m.text}
+        </div>
+      );
+    }
     const from = sender(m);
     return (
       <Fragment key={m.seq}>
@@ -397,7 +407,6 @@ function Dock({ token, thread: t, lastSeq, onSent, onArchive }: { token: string;
               </div>
             ) : null}
           </div>
-          {a.run ? <RunCommand token={token} threadId={t.threadId} run={a.run} /> : null}
           {a.links?.length ? (
             <div className="ask-links">
               {a.links.map((l) => (

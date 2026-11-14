@@ -11,6 +11,8 @@ import {
   parseLsof,
   parsePs,
   waitsOnUserMs,
+  isLanding,
+  LAND_WAIT_MS,
   WAIT_GRACE_MS,
   type BackgroundShell,
   type Probe,
@@ -281,4 +283,178 @@ test('a loop that keeps starting handoffs is judged once the first one would hav
     await look();
   }
   assert.equal(nudges(h, thread.id).length, 1);
+});
+
+// On 13 Nov, with 20 landings queued, this check told a dozen threads their
+// waiting `tb land` looked stuck; agents stopped and re-ran them, which threw
+// away three group checks in half an hour and nothing landed for 35 minutes.
+test('a tb land waiting its turn, or on its check on another machine, is left alone for three hours', async () => {
+  const { h, probe, jobs, thread, s } = setUp();
+  const landing = { id: 'b3', type: 'local_bash', kind: 'shell' as const, description: 'Land it' };
+  s.out({ kind: 'tasks', tasks: [landing] });
+  s.result('completed');
+  const started = h.clock.now();
+  probe.files.set('b3', { startedAt: started, lastOutputAt: started });
+  // As ps shows one: the agent's shell, tb, and the lockf it waits in. The
+  // output is piped to tail, so nothing is written until it ends.
+  const shell = (cpuSeconds: number): BackgroundShell => ({
+    taskId: 'b3',
+    cpuSeconds,
+    commands: ['zsh', 'tail', 'node', 'lockf'],
+    processes: [
+      { command: "/bin/zsh -c source /x/shell-snapshots/snapshot-zsh.sh && eval 'tb land 2>&1 | tail -15'", startedAt: started },
+      { command: 'node /Users/m/Library/Application Support/Threadbear/runner/releases/20261113T003928Z-99ce1163/bin/tb land', startedAt: started },
+      { command: '/usr/bin/lockf -k /x/.git/threadbear-land.lock /x/node -e process.stdin.resume()', startedAt: started },
+    ],
+  });
+  probe.shellsBySession.set(session(h), [shell(0.1)]);
+  // Quiet and idle for two and a half hours.
+  for (let i = 0; i < 30; i++) {
+    h.clock.advance(5 * MIN);
+    await jobs.sweep();
+  }
+  assert.deepEqual(nudges(h, thread.id), []);
+  // Past three hours and the grace, something is wrong with it.
+  h.clock.advance(started + LAND_WAIT_MS + WAIT_GRACE_MS - h.clock.now());
+  await jobs.sweep();
+  probe.shellsBySession.set(session(h), [shell(0.2)]);
+  h.clock.advance(5 * MIN);
+  await jobs.sweep();
+  assert.equal(nudges(h, thread.id).length, 1);
+  // Its own landing is what's stuck: nothing tells the agent to leave it.
+  assert.match(nudges(h, thread.id)[0], /- Land it \(shell/);
+  assert.doesNotMatch(nudges(h, thread.id)[0], /Leave it running/);
+});
+
+const LAND = 'node /Users/m/Library/Application Support/Threadbear/runner/releases/20261113T003928Z-99ce1163/bin/tb land';
+
+// Asked at every look, not kept like a handoff's deadline (Codex, 13 Nov).
+test('a wait loop left behind once its landing has gone counts, and a handoff before a landing does not cut it short', async () => {
+  const { h, probe, jobs, thread, s } = setUp();
+  const job = { id: 'b4', type: 'local_bash', kind: 'shell' as const, description: 'Sign in, land, wait' };
+  s.out({ kind: 'tasks', tasks: [job] });
+  s.result('completed');
+  const started = h.clock.now();
+  probe.files.set('b4', { startedAt: started, lastOutputAt: started });
+  let cpu = 0;
+  const shell = (...processes: { command: string; startedAt: number }[]): BackgroundShell => ({
+    taskId: 'b4',
+    cpuSeconds: (cpu += 0.1),
+    commands: ['zsh', 'node'],
+    processes: [{ command: "/bin/zsh -c eval 'browserbear handoff 12 --wait --timeout 3600; tb land > /tmp/land.log 2>&1; until grep -q EXIT /tmp/land.log; do sleep 20; done'", startedAt: started }, ...processes],
+  });
+  const look = async (...processes: { command: string; startedAt: number }[]) => {
+    probe.shellsBySession.set(session(h), [shell(...processes)]);
+    h.clock.advance(5 * MIN);
+    await jobs.sweep();
+  };
+  // A handoff for the first 40 minutes: its deadline is 65 minutes in.
+  for (let i = 0; i < 8; i++) await look({ command: 'node /x/browserbear handoff 12 --wait --timeout 3600', startedAt: started });
+  // Then the landing, for two hours: well past the handoff's deadline.
+  const landed = h.clock.now();
+  for (let i = 0; i < 24; i++) await look({ command: LAND, startedAt: landed });
+  assert.deepEqual(nudges(h, thread.id), []);
+  // The landing ends and the loop never does: told at the next two looks,
+  // not three hours after the landing started.
+  await look({ command: 'sleep 20', startedAt: h.clock.now() });
+  await look({ command: 'sleep 20', startedAt: h.clock.now() });
+  assert.equal(nudges(h, thread.id).length, 1);
+  assert.doesNotMatch(nudges(h, thread.id)[0], /tb land/);
+});
+
+test('a loop that keeps starting landings is judged three hours after the first', async () => {
+  const { h, probe, jobs, thread, s } = setUp();
+  const job = { id: 'b5', type: 'local_bash', kind: 'shell' as const, description: 'Land until it lands' };
+  s.out({ kind: 'tasks', tasks: [job] });
+  s.result('completed');
+  const started = h.clock.now();
+  probe.files.set('b5', { startedAt: started, lastOutputAt: started });
+  let cpu = 0;
+  const look = async () => {
+    probe.shellsBySession.set(session(h), [{ taskId: 'b5', cpuSeconds: (cpu += 0.1), commands: ['zsh', 'node'], processes: [{ command: LAND, startedAt: h.clock.now() }] }]);
+    h.clock.advance(5 * MIN);
+    await jobs.sweep();
+  };
+  // Each look finds a landing that started five minutes ago. The first
+  // one seen (once the job has been quiet 30 minutes) started 25 minutes in.
+  for (let i = 0; i < 41; i++) await look();
+  assert.deepEqual(nudges(h, thread.id), []);
+  // Three hours and the grace after that one, it's judged: two looks to
+  // see it's idle.
+  for (let i = 0; i < 2; i++) await look();
+  assert.equal(nudges(h, thread.id).length, 1);
+});
+
+// The probe can't tie a loop polling a landing's log to the landing in
+// another shell, so that one is still told, with a word about the landing.
+test("a quiet shell beside a landing in the same thread is told to leave the landing alone", async () => {
+  const { h, probe, jobs, thread, s } = setUp();
+  const land = { id: 'b6', type: 'local_bash', kind: 'shell' as const, description: 'Land it' };
+  const poll = { id: 'b7', type: 'local_bash', kind: 'shell' as const, description: 'Wait for the landing' };
+  s.out({ kind: 'tasks', tasks: [land, poll] });
+  s.result('completed');
+  const started = h.clock.now();
+  probe.files.set('b6', { startedAt: started, lastOutputAt: started });
+  probe.files.set('b7', { startedAt: started, lastOutputAt: started });
+  const shells = (cpu: number): BackgroundShell[] => [
+    { taskId: 'b6', cpuSeconds: cpu, commands: ['zsh', 'node', 'lockf'], processes: [{ command: LAND, startedAt: started }] },
+    { taskId: 'b7', cpuSeconds: cpu, commands: ['zsh', 'sleep'], processes: [{ command: "/bin/zsh -c eval 'until grep -q EXIT /tmp/land.log; do sleep 20; done'", startedAt: started }, { command: 'sleep 20', startedAt: started }] },
+  ];
+  probe.shellsBySession.set(session(h), shells(0.1));
+  h.clock.advance(35 * MIN);
+  await jobs.sweep();
+  probe.shellsBySession.set(session(h), shells(0.3));
+  h.clock.advance(5 * MIN);
+  await jobs.sweep();
+  const told = nudges(h, thread.id);
+  assert.equal(told.length, 1);
+  assert.match(told[0], /- Wait for the landing \(shell/);
+  assert.doesNotMatch(told[0], /- Land it/);
+  assert.match(told[0], /A tb land in another of this thread's shells is still going.*Leave it running/);
+});
+
+test('which command lines are a landing', () => {
+  // As ps showed them on 13 Nov, the installed tb's path with its space included.
+  for (const line of [
+    'node /Users/m5-mike/dev/me/threadbear/runner/bin/tb land',
+    'node /Users/m5-mike/Library/Application Support/Threadbear/runner/releases/20261113T003928Z-99ce1163/bin/tb land',
+    'node ./runner/bin/tb land',
+    'node runner/bin/tb land',
+    '/opt/homebrew/bin/node /x/bin/tb land --dry-run',
+    'node /x/bin/tb --despite-red land',
+    'node --no-warnings /x/bin/tb land',
+    'node tb land',
+    // Node's own path with a space in it.
+    '/Users/m/My Tools/bin/node /x/runner/bin/tb land',
+  ]) assert.equal(isLanding(line, () => false), true, line);
+  for (const line of [
+    // Another tb command, or none.
+    'node /x/bin/tb status',
+    'node /x/bin/tb send abcd1234 land',
+    'node /x/bin/tb',
+    // Only a shell's text, a pipe's other end, or the lock it waits in.
+    "/bin/zsh -c eval 'tb land 2>&1 | tail -15'",
+    'tail -15',
+    '/usr/bin/lockf -k /x/.git/threadbear-land.lock /x/node -e process.stdin.resume()',
+    'taskpolicy -b /x/bin/tb land',
+    'env -i node /x/bin/tb land',
+    'time /x/node /x/bin/tb land',
+    // Inline node code, or another script, that only mentions it.
+    'node -e /* /x/bin/tb land */ setInterval(()=>{},1000)',
+    'node -e x /x/bin/tb land',
+    'node /x/other.mjs /y/bin/tb land',
+    'node /x/bin/tbx land',
+    'sleep 3600',
+    // Node's attached spellings of inline code (Codex's second look).
+    "node -esetInterval(()=>{},1000) /x/bin/tb land",
+    'node -pe1 /x/bin/tb land',
+    'node --eval=1 /x/bin/tb land',
+  ]) assert.equal(isLanding(line, () => false), false, line);
+  // A first word that's a program by itself runs the rest as its arguments:
+  // bash running a script called node isn't node. A path with a space in it
+  // has no file at its first word.
+  const files = (p: string) => p === '/bin/bash';
+  assert.equal(isLanding('/bin/bash /tmp/node /tmp/tb land', files), false);
+  assert.equal(isLanding('/Users/m/My Tools/bin/node /x/runner/bin/tb land', files), true);
+  assert.equal(isLanding('/bin/bash /tmp/node /tmp/tb land'), false, 'on the real disk');
 });

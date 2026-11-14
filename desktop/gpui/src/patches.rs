@@ -4,10 +4,11 @@
 // (`panels.render`), asked for when it's shown and every so often while it is.
 // A web panel's page is web_panels.rs's (`panel.web`): the side pane only
 // draws one if it's asked to anyway, as a placeholder with Open in browser.
+use crate::spinner::Spinner;
 use crate::call;
-use crate::highlights::{icon, palette, tipped, PaneRow, Palette, SidePane, OUTER_INSET};
+use crate::highlights::{icon, palette, tipped, tipped_as, PaneRow, Palette, SidePane, OUTER_INSET};
 use crate::style;
-use gpui_kit::component::{h_flex, spinner::Spinner, v_flex, ActiveTheme as _, Sizable as _, StyledExt as _};
+use gpui_kit::component::{h_flex, v_flex, ActiveTheme as _, Sizable as _, StyledExt as _};
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 // Shadows gpui's px, so sizes here follow the app's zoom (style.rs).
@@ -95,7 +96,10 @@ impl SidePane {
         cx.spawn(async move |this, cx| loop {
             let image = this
                 .update(cx, |t, cx| {
-                    let showing = t.thread(cx).is_some_and(|th| th.id == thread) && t.chosen.get(&thread) == Some(&panel);
+                    // On show in the dock, wherever it is (beside another
+                    // section counts as much as chosen), or a pinned copy of
+                    // it is (pinned_panels.rs), whichever thread's picked.
+                    let showing = (t.thread(cx).is_some_and(|th| th.id == thread) && t.dock_showing(&panel, cx)) || t.pin_showing(&thread, &panel, cx);
                     if !showing {
                         t.panels.polling.remove(&key);
                     }
@@ -107,7 +111,7 @@ impl SidePane {
                 return;
             }
             // As ImagePanel's loop: 3 s with a picture, 5 without; a list 15.
-            let kind_is_list = this.update(cx, |t, cx| t.panel_is_list(&panel, cx)).unwrap_or(false);
+            let kind_is_list = this.update(cx, |t, cx| t.panel_is_list(&thread, &panel, cx)).unwrap_or(false);
             let delay = if kind_is_list { LIST_REFRESH } else if has_image { Duration::from_secs(3) } else { Duration::from_secs(5) };
             cx.background_executor().timer(delay).await;
             if this.update(cx, |t, cx| t.fetch_panel(key.clone(), thread.clone(), panel.clone(), cx)).is_err() {
@@ -117,8 +121,29 @@ impl SidePane {
         .detach();
     }
 
-    fn panel_is_list(&self, panel_id: &str, cx: &App) -> bool {
-        self.thread(cx).is_some_and(|t| t.panels().iter().any(|p| p.id == panel_id && p.kind == "list"))
+    /// Whether a panel's rows or picture are being asked for now and then.
+    pub(crate) fn panel_polling(&self, thread_id: &str, panel_id: &str) -> bool {
+        self.panels.polling.contains(&panel_key(thread_id, panel_id))
+    }
+
+    /// Keeps a pinned panel's rows or picture coming while it shows
+    /// (pinned_panels.rs): the ordinary panel's polling stops when its
+    /// thread isn't the selected one.
+    pub(crate) fn keep_panel_fresh(&mut self, thread_id: &str, panel_id: &str, cx: &mut Context<Self>) {
+        if !self.panels.polling.contains(&panel_key(thread_id, panel_id)) {
+            self.refresh_panel(thread_id, panel_id, cx);
+        }
+    }
+
+    fn panel_is_list(&self, thread_id: &str, panel_id: &str, cx: &App) -> bool {
+        let Some(app) = self.app.upgrade() else { return false };
+        app.read(cx).threads.get(thread_id).is_some_and(|t| t.panels().iter().any(|p| p.id == panel_id && p.kind == "list"))
+    }
+
+    /// A pinned copy of the thread's panel is showing (pinned_panels.rs).
+    fn pin_showing(&self, thread_id: &str, panel_id: &str, cx: &App) -> bool {
+        let Some(app) = self.app.upgrade() else { return false };
+        app.read(cx).dock.read(cx).controller.is_showing(&threadbear_core::pinned_panels::panel(thread_id, panel_id))
     }
 
     fn fetch_panel(&mut self, key: String, thread_id: String, panel_id: String, cx: &mut Context<Self>) {
@@ -184,7 +209,19 @@ impl SidePane {
                     self.refresh_panel(&thread.id, id, cx);
                 }
                 match picture {
-                    Some(image) => div().size_full().flex().items_center().justify_center().p(px(16.)).child(img(ImageSource::Image(image)).size_full().object_fit(ObjectFit::Contain)).into_any_element(),
+                    Some(image) => {
+                        let picture = div().size_full().flex().items_center().justify_center().p(px(16.)).child(img(ImageSource::Image(image)).size_full().object_fit(ObjectFit::Contain));
+                        #[cfg(target_os = "macos")]
+                        {
+                            let opening = self.app.upgrade().is_some_and(|app| app.read(cx).busy_notes.iter().any(|(key, _)| key == "opening-simulator"));
+                            tipped(picture.id("panel-simulator-picture"), "Open Simulator")
+                                .when(!opening, |s| s.cursor_pointer().on_click(cx.listener(|_, _: &ClickEvent, _, cx| crate::open_gate::open_simulator(cx))))
+                                .when(opening, |s| s.relative().child(div().absolute().inset_0().flex().items_center().justify_center().child(Spinner::new().with_size(px(20.)))))
+                                .into_any_element()
+                        }
+                        #[cfg(not(target_os = "macos"))]
+                        { picture.into_any_element() }
+                    },
                     None => {
                         let note = self.panels.renders.get(&key).and_then(|r| r.note.clone()).unwrap_or_else(|| "Taking a screenshot…".to_owned());
                         crate::files::pane_note(&note, p).into_any_element()
@@ -288,15 +325,19 @@ impl SidePane {
         let show_headings = groups.len() > 1;
         for group in groups {
             if show_headings {
+                let project_id = group.project_id.clone();
+                let heading = div().pb(px(4.)).border_b_1().border_color(p.hairline).text_size(px(style::size::DETAIL)).font_semibold().text_color(p.secondary).child(group.title.clone().unwrap_or_else(|| "This thread's folder".to_owned()));
+                let heading = if let Some(project_id) = project_id {
+                    tipped(heading.id(SharedString::from(format!("patch-project-{project_id}"))).cursor_pointer().hover(|s| s.underline()), "Open the project")
+                        .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                            if let Some(app) = this.app.upgrade() {
+                                app.update(cx, |app, cx| app.open_project_page(&project_id, cx));
+                            }
+                        }))
+                        .into_any_element()
+                } else { heading.into_any_element() };
                 list = list.child(
-                    div()
-                        .pb(px(4.))
-                        .border_b_1()
-                        .border_color(p.hairline)
-                        .text_size(px(style::size::DETAIL))
-                        .font_semibold()
-                        .text_color(p.secondary)
-                        .child(group.title.clone().unwrap_or_else(|| "This thread's folder".to_owned())),
+                    heading,
                 );
             }
             for patch in group.patches {
@@ -345,7 +386,7 @@ impl SidePane {
                     .gap(px(8.))
                     .items_center()
                     .child(div().text_size(px(style::size::DETAIL)).text_color(needs_you).child(words::waiting_text(patch)))
-                    .child(button)
+                    .when(patch.can_trust(), |row| row.child(button))
                     .when(trusting, |s| s.child(Spinner::new().with_size(px(11.)).color(p.secondary))),
             );
             for grant in patch.grants.iter().flatten() {
@@ -408,7 +449,7 @@ impl SidePane {
     /// button stays busy until the thread's update says it's trusted, or a
     /// few seconds later in case that never comes.
     pub(crate) fn trust_patches(&mut self, patches: Vec<PatchInfo>, thread_id: String, cx: &mut Context<Self>) {
-        let files: Vec<(String, String)> = patches.iter().filter_map(|p| p.file.clone().zip(p.hash.clone())).filter(|(f, h)| !self.panels.trusting.contains(&trust_key(f, h))).collect();
+        let files: Vec<(String, String)> = patches.iter().filter(|p| p.can_trust()).filter_map(|p| p.file.clone().zip(p.hash.clone())).filter(|(f, h)| !self.panels.trusting.contains(&trust_key(f, h))).collect();
         if files.is_empty() {
             return;
         }
@@ -477,7 +518,7 @@ impl SidePane {
     pub(crate) fn render_action_chips(&mut self, thread: &ThreadSummary, room: f32, project_icons: &HashMap<String, crate::sidebar::ProjectIcon>, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
         let actions = thread.actions();
         let patches = thread.patches();
-        let waiting: Vec<PatchInfo> = patches.iter().filter(|p| p.untrusted.is_some()).cloned().collect();
+        let waiting: Vec<PatchInfo> = patches.iter().filter(|p| p.can_trust()).cloned().collect();
         if actions.is_empty() && waiting.is_empty() {
             return None;
         }
@@ -558,7 +599,7 @@ impl SidePane {
                 other => crate::patch_icons::glyph(other.symbol().unwrap_or("folder.fill"), 10., Some(p.secondary)),
             };
             let mut tab_el = shelf_tab()
-                .child(tipped(div().id(("action-shelf-badge", index)).flex().flex_none().items_center().justify_center().size(px(18.)).mx(px(2.)), badge_tip).child(badge_face))
+                .child(tipped_as(div().id(("action-shelf-badge", index)).flex().flex_none().items_center().justify_center().size(px(18.)).mx(px(2.)), badge_tip, gpui_kit::Role::Image).child(badge_face))
                 .child(hairline());
             for (group_index, group) in shelf.patches.iter().enumerate() {
                 if group_index > 0 {
@@ -590,7 +631,7 @@ impl SidePane {
             chip_tip(action),
         )
         .when(running, |s| s.child(Spinner::new().with_size(px(11.)).color(p.secondary)))
-        .when(!running, |s| s.child(crate::patch_icons::patch_icon(action.icon_file.as_deref(), &symbol, 11., Some(p.secondary))))
+        .when(!running, |s| s.child(crate::patch_icons::patch_icon(action.icon_file.as_deref(), &symbol, 11., Some(p.secondary), thread.is_remote())))
         .child(div().text_size(px(style::size::CHIP)).text_color(p.fg).whitespace_nowrap().child(action.title.clone()))
         .when_some(action.badge, |s, n| s.child(div().px(px(5.)).rounded_full().bg(style::primary_opacity(cx, 0.08)).text_size(px(style::size::SMALL)).font_weight(FontWeight::SEMIBOLD).text_color(p.secondary).child(badge_text(n))))
         .when(!running, |s| s.on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.run_action(&action2, thread_id.clone(), cx))))
@@ -632,7 +673,7 @@ impl SidePane {
 
     /// Whether the chip row has any chips, so the host can leave it out.
     pub(crate) fn has_action_chips(thread: &ThreadSummary) -> bool {
-        thread.actions.as_ref().is_some_and(|a| !a.is_empty()) || thread.patches().iter().any(|p| p.untrusted.is_some())
+        thread.actions.as_ref().is_some_and(|a| !a.is_empty()) || thread.patches().iter().any(PatchInfo::can_trust)
     }
 
     #[cfg(feature = "automation")]
@@ -712,7 +753,7 @@ fn abbreviate_home(path: &str) -> String {
 #[cfg(feature = "automation")]
 pub(crate) fn trust_command(side: &Entity<SidePane>, thread: &ThreadSummary, cmd: &Value, cx: &mut App) -> Result<Value, String> {
     let id = cmd["id"].as_str();
-    let waiting: Vec<PatchInfo> = thread.patches().into_iter().filter(|p| p.untrusted.is_some() && id.is_none_or(|i| p.id == i)).collect();
+    let waiting: Vec<PatchInfo> = thread.patches().into_iter().filter(|p| p.can_trust() && id.is_none_or(|i| p.id == i)).collect();
     if waiting.is_empty() {
         return Err("nothing waiting to be trusted".into());
     }

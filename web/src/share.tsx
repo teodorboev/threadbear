@@ -204,7 +204,7 @@ function TurnSection({ id, turn, busy, after, inText, rows }: { id: string; turn
   const items = fold(turn.messages, busy);
   const fromWork: Picture[] = [];
   const seqsOf = (item: Item<PageMessage>): number[] =>
-    item.kind === 'message' ? [item.m.seq] : item.kind === 'tools' ? item.items.map((m) => m.seq) : item.items.flatMap(seqsOf);
+    item.kind === 'message' || item.kind === 'note' ? [item.m.seq] : item.kind === 'tools' ? item.items.map((m) => m.seq) : item.items.flatMap(seqsOf);
   for (const item of items) if (item.kind === 'worked') fromWork.push(...seqsOf(item).flatMap((s) => after.get(s) ?? []));
 
   const text = (m: PageMessage) => <MessageText text={m.text} pictures={inText} seq={m.seq} rows={rows} />;

@@ -276,7 +276,9 @@ impl Composer {
 
     /// A thread let go over the box, or anywhere on the thread (ThreadDrag):
     /// its chip where the cursor is, and the cursor stays here to carry on.
-    pub(crate) fn take_thread_drop(&mut self, drag: &DraggedThread, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn take_thread_drop(&mut self, drag: &DraggedThread, at: Point<Pixels>, window: &mut Window, cx: &mut Context<Self>) {
+        let target = self.input.clone();
+        self.caret_to_drop(&target, at, cx);
         let reference = inline::thread_reference(&drag.id, &drag.title);
         self.insert_pieces(inline::draft_pieces(&reference, 0), &[], window, cx);
     }

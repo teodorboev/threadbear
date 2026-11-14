@@ -274,3 +274,28 @@ test("a button a sandboxed thread made, once allowed and pressed, still starts o
   assert.equal(out.unconfine, undefined);
   assert.equal((out.startedBy as { threadId: string }).threadId, ask.id, 'and it is started by the caller, not who it names');
 });
+
+// Codex's review of the Daybreak fix for finding 111 (13 Nov 2026): a title
+// is the renaming agent's own words, and it reaches the renamed thread's
+// agent and others' (list_threads, a new thread's same-work note), so
+// renaming a thread with more access asks, as a message to it would.
+test('renaming a thread with more access asks first; its own title, or one no higher, does not', async () => {
+  const s = setup();
+  const r = await s.withCard('deny', 'update_thread', { threadId: s.host.id, title: 'Selecting text\nSECURITY_POC' });
+  assert.equal(r.error, true);
+  assert.match(r.card.title, /^Rename "Host work", which has .* outside the sandbox/);
+  assert.equal(s.rec(s.host.id).title, 'Host work');
+  await s.withCard(null, 'update_thread', { title: 'My own name' });
+  assert.equal(s.rec(s.me.id).title, 'My own name');
+  // An Ask thread outside any sandbox: a Full one asks, another Ask one doesn't.
+  const ask = setup({ callerIn: 'host', mode: 'ask' });
+  const full = ask.h.runner.create({ text: 'Full work', accountId: 'claude-3', cwd: ask.outside, permissionMode: 'full' }).thread;
+  const denied = await ask.withCard('deny', 'update_thread', { threadId: full.id, title: 'x' });
+  assert.equal(denied.error, true);
+  assert.equal(ask.rec(full.id).title, 'Full work');
+  const fine = await ask.withCard(null, 'update_thread', { threadId: ask.host.id, title: 'Renamed' });
+  assert.equal(fine.error, false, fine.text);
+  assert.equal(ask.rec(ask.host.id).title, 'Renamed');
+  s.sched.stop();
+  ask.sched.stop();
+});

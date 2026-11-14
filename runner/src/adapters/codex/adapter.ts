@@ -481,6 +481,7 @@ export class CodexSession implements AgentSession {
       runsAsCode: (file) => runsAsCodeByName(file) || (opts.runsAsCode?.(file) ?? false),
       callTool: (params, o) => this.tools.call(params, o),
       now: this.now,
+      fullAccess: () => this.mode === 'full',
     });
     this.proc.onNotification = (method, params) => this.enqueue(() => this.route(method, params));
     this.proc.onRequest = (id, method, params) => this.enqueue(() => this.request(id, method, params));
@@ -1099,6 +1100,7 @@ export class CodexSession implements AgentSession {
     if (turn.own) r.own = true;
     else if (turn.ids.length) r.answers = turn.ids[0];
     if (answered.length || !turn.own) r.answered = answered;
+    if (turn.dropped.length) r.unreceived = [...turn.dropped];
     r.queuedTurns = this.held.length;
     this.sink.output({ kind: 'result', result: r });
   }
@@ -1178,14 +1180,14 @@ export class CodexSession implements AgentSession {
     if (turn) turn.steerQueue = [];
     if (!turn) {
       // Still starting, or held behind start: nothing reached Codex.
-      if (dropped.length) this.sink.output({ kind: 'result', result: { outcome: 'interrupted', durationMs: 0, answers: dropped[0], answered: dropped, queuedTurns: 0 } });
+      if (dropped.length) this.sink.output({ kind: 'result', result: { outcome: 'interrupted', durationMs: 0, answers: dropped[0], answered: dropped, unreceived: dropped, queuedTurns: 0 } });
       return;
     }
     if (turn.interruptRequested) {
       // A second Stop while the old turn finishes: the messages waiting
       // behind it belonged to a newer runner turn, which ends now.
       this.clearWaitTimers();
-      if (dropped.length) this.sink.output({ kind: 'result', result: { outcome: 'interrupted', durationMs: 0, answers: dropped[0], answered: dropped, queuedTurns: 0 } });
+      if (dropped.length) this.sink.output({ kind: 'result', result: { outcome: 'interrupted', durationMs: 0, answers: dropped[0], answered: dropped, unreceived: dropped, queuedTurns: 0 } });
     } else {
       turn.interruptRequested = true;
       turn.dropped.push(...dropped);

@@ -23,11 +23,11 @@
 # THREADBEAR_SWIFT_OK=1 on the commit works too). Deleting files is always
 # fine.
 #
-# In anyone else's copy it only warns, and only once WARN_FORKS is on: they
-# can't get the GPUI app yet, so steering their agents to it now would send
-# them somewhere they can't follow. Turn it on with the release that gives
-# them the GPUI app, and the overlap where they have both begins.
-WARN_FORKS=0
+# In anyone else's copy it only warns, and only while WARN_FORKS is on. It
+# came on with the release that offers them the GPUI app (the Swift app's
+# "Try the new Threadbear app", 13 Nov 2026), which began the overlap where
+# they have both.
+WARN_FORKS=1
 
 set -uo pipefail
 # No globbing anywhere: inside() splits paths on /, and a part like a[p]p

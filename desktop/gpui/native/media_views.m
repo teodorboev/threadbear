@@ -8,6 +8,8 @@
 // They read only that open file, never its path again: a film through an
 // asset whose bytes come from it (TBFileSource), with QuickTime's references
 // to other files forbidden; a PDF from its bytes, read off the main thread.
+// Office and iWork thumbnails use Quick Look on a private snapshot of that
+// descriptor, then a plain image view without links or document actions.
 // A PDF's links go back to the open gate, never to the system, from a click
 // or from its right-click menu, and a film dragged out is a copy of the open
 // file, never its path (Codex's reviews, 12 Nov).
@@ -21,6 +23,7 @@
 #import <AVKit/AVKit.h>
 #import <AppKit/AppKit.h>
 #import <PDFKit/PDFKit.h>
+#import <QuickLookThumbnailing/QuickLookThumbnailing.h>
 #include <stdbool.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -32,6 +35,7 @@ enum {
   TBStageVideo = 1,
   TBCellVideo = 2,
   TBPaneDocument = 3,
+  TBPaneQuickLook = 4,
 };
 
 // What a view is showing, for the scripted app's dump (media_view.rs's
@@ -58,6 +62,7 @@ extern void tb_media_said_changed(void);
 // named `name`, for a drag out (threadbear_core::private_file::snapshot), its
 // path written into `out`; false if it couldn't be made.
 extern bool tb_media_snapshot(int fd, const char *name, char *out, int capacity);
+extern int tb_preview_snapshot(int fd, const char *name, char *out, int capacity, uint64_t limit);
 
 // The biggest PDF read into memory to show.
 static const long long TBDocumentLimit = 256LL * 1024 * 1024;
@@ -160,6 +165,85 @@ static const long long TBDocumentLimit = 256LL * 1024 * 1024;
 }
 
 @end
+
+#ifndef TB_QUICKLOOK_WAIT_NS
+#define TB_QUICKLOOK_WAIT_NS (5 * NSEC_PER_SEC)
+#endif
+// One Quick Look worker for pane documents and PDF link hovers. Only a
+// descriptor the open gate checked enters; the system sees a private copy.
+// The caller chooses a bounded byte limit and raster size, not a pathname
+// for Quick Look to reopen. All request state/completions belong to main.
+@interface TBQuickLookThumbnail : NSObject
+@property(nonatomic, strong) TBFileSource *source;
+@property(nonatomic, strong) QLThumbnailGenerationRequest *request;
+@property(nonatomic, copy) NSString *path;
+@property(nonatomic, copy) void (^completion)(CGImageRef, NSString *);
+@property(nonatomic) BOOL accepting;
+- (void)cancel;
+@end
+
+@implementation TBQuickLookThumbnail
+- (void)dealloc {
+  if (_path) [[NSFileManager defaultManager] removeItemAtPath:_path.stringByDeletingLastPathComponent error:nil];
+}
+- (void)finish:(CGImageRef)image failure:(NSString *)failure {
+  NSAssert(NSThread.isMainThread, @"Quick Look state belongs to main");
+  if (!self.accepting) return;
+  self.accepting = NO;
+  self.request = nil;
+  self.source = nil;
+  void (^completion)(CGImageRef, NSString *) = self.completion;
+  self.completion = nil;
+  if (completion) completion(image, failure);
+}
+- (void)cancel {
+  if (!NSThread.isMainThread) { dispatch_async(dispatch_get_main_queue(), ^{ [self cancel]; }); return; }
+  QLThumbnailGenerationRequest *request = self.request;
+  [self finish:NULL failure:@"Quick Look couldn't make a preview of this document."];
+  if (request) [[QLThumbnailGenerator sharedGenerator] cancelRequest:request];
+}
+@end
+
+static TBQuickLookThumbnail *tb_quicklook_thumbnail(TBFileSource *source, NSString *name, uint64_t limit, CGSize size, uint64_t timeout, void (^completion)(CGImageRef, NSString *)) {
+  TBQuickLookThumbnail *job = [TBQuickLookThumbnail new];
+  job.source = source; job.completion = completion; job.accepting = YES;
+  dispatch_async(dispatch_get_main_queue(), ^{
+    // The worker still owns the source if this timer expires while a slow
+    // disk is copying. A late callback owns the job's private path until it
+    // finishes or is dropped, including after cancellation.
+    // Only a link hover has a deadline. A pane keeps its existing loading
+    // behavior for slow document packages until completion or view removal.
+    if (timeout) dispatch_after(dispatch_time(DISPATCH_TIME_NOW, timeout), dispatch_get_main_queue(), ^{ if (job.accepting) [job cancel]; });
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+      char snapshot[4096] = {0};
+      int copied = [source isUnchanged] ? tb_preview_snapshot(source.fd, name.UTF8String, snapshot, sizeof snapshot, limit) : 0;
+      NSString *path = copied == 1 ? [NSString stringWithUTF8String:snapshot] : nil;
+      BOOL unchanged = [source isUnchanged];
+      dispatch_async(dispatch_get_main_queue(), ^{
+        job.path = path;
+        if (!job.accepting) return;
+        if (!path || !unchanged) {
+          NSString *failure = copied == -1 ? [NSString stringWithFormat:@"it's over %llu MB, too big to show here.", (unsigned long long)(limit / (1024 * 1024))] : @"a private preview couldn't be made.";
+          [job finish:NULL failure:failure];
+          return;
+        }
+        QLThumbnailGenerationRequest *request = [[QLThumbnailGenerationRequest alloc] initWithFileAtURL:[NSURL fileURLWithPath:path] size:size scale:1 representationTypes:QLThumbnailGenerationRequestRepresentationTypeThumbnail];
+        job.request = request;
+        [[QLThumbnailGenerator sharedGenerator] generateBestRepresentationForRequest:request completionHandler:^(QLThumbnailRepresentation *thumbnail, NSError *error) {
+          (void)error;
+          dispatch_async(dispatch_get_main_queue(), ^{
+            if (!job.accepting) return;
+            CGImageRef image = thumbnail.CGImage;
+            BOOL fits = image && CGImageGetWidth(image) <= size.width && CGImageGetHeight(image) <= size.height;
+            if (fits && [job.source isUnchanged]) [job finish:image failure:nil];
+            else [job finish:NULL failure:@"Quick Look couldn't make a preview of this document."];
+          });
+        }];
+      });
+    });
+  });
+  return job;
+}
 
 // An asset whose bytes come from `source`, under a scheme of its own so
 // AVFoundation asks the source for them rather than opening a path, and
@@ -626,6 +710,37 @@ static NSData *tb_read_all(int fd, long long length) {
   return bytes;
 }
 
+// A thumbnail has no document actions, links, services or Open button.
+@interface TBQuickLookView : NSImageView
+@property(nonatomic) BOOL loading;
+@property(nonatomic) BOOL wantsHidden;
+@property(nonatomic, copy) NSString *failure;
+@property(nonatomic, strong) TBQuickLookThumbnail *thumbnail;
+@end
+
+@implementation TBQuickLookView
+- (void)dealloc { [_thumbnail cancel]; }
+@end
+
+static TBQuickLookView *tb_quicklook(int fd, long long length, NSString *file) {
+  TBQuickLookView *view = [[TBQuickLookView alloc] initWithFrame:NSZeroRect];
+  view.imageScaling = NSImageScaleProportionallyUpOrDown;
+  view.loading = YES; view.wantsHidden = YES;
+  __weak TBQuickLookView *weakView = view;
+  TBFileSource *source = [[TBFileSource alloc] initWithDescriptor:fd length:length path:file];
+  view.thumbnail = tb_quicklook_thumbnail(source, file.lastPathComponent, TBDocumentLimit, CGSizeMake(1600,1200), 0, ^(CGImageRef image, NSString *failure) {
+    TBQuickLookView *current = weakView;
+    if (!current || !current.loading) return;
+    current.loading = NO; current.thumbnail = nil;
+    if (image) {
+      current.image = [[NSImage alloc] initWithCGImage:image size:NSZeroSize];
+      current.hidden = current.wantsHidden;
+    } else { current.failure = failure; }
+    tb_media_said_changed();
+  });
+  return view;
+}
+
 // ---------------------------------------------------------------- the calls
 
 // A view for the checked file open as `fd` (`length` bytes, at the real
@@ -645,7 +760,9 @@ void *tb_media_open(void *nativeParent, int fd, long long length, const char *pa
     return NULL;
   }
   NSView *view = nil;
-  if (kind == TBPaneDocument) {
+  if (kind == TBPaneQuickLook) {
+    view = tb_quicklook(fd, length, file);
+  } else if (kind == TBPaneDocument) {
     TBDocumentView *pdf = [[TBDocumentView alloc] initWithFrame:NSZeroRect];
     pdf.links = [TBDocumentLinks new];
     pdf.links.base = file.stringByDeletingLastPathComponent;
@@ -738,6 +855,10 @@ void tb_media_set_hidden(void *nativeView, bool hidden) {
     TBDocumentView *pdf = (TBDocumentView *)view;
     pdf.wantsHidden = hidden;
     hidden = hidden || pdf.loading || pdf.failure != nil;
+  } else if ([view isKindOfClass:[TBQuickLookView class]]) {
+    TBQuickLookView *preview = (TBQuickLookView *)view;
+    preview.wantsHidden = hidden;
+    hidden = hidden || preview.loading || preview.failure != nil;
   }
   if (view.hidden != hidden) {
     view.hidden = hidden;
@@ -761,6 +882,11 @@ void tb_media_close(void *nativeView) {
     // A read still under way gives nothing to it when it's done.
     pdf.loading = NO;
     pdf.delegate = nil;
+  } else if ([view isKindOfClass:[TBQuickLookView class]]) {
+    TBQuickLookView *preview = (TBQuickLookView *)view;
+    preview.loading = NO;
+    [preview.thumbnail cancel];
+    preview.thumbnail = nil;
   }
   [view removeFromSuperview];
 }
@@ -799,6 +925,13 @@ void tb_media_state(void *nativeView, TBMediaState *out) {
       out->width = bounds.size.width;
       out->height = bounds.size.height;
     }
+  } else if ([view isKindOfClass:[TBQuickLookView class]]) {
+    TBQuickLookView *preview = (TBQuickLookView *)view;
+    out->loading = preview.loading;
+    out->failed = preview.failure != nil;
+    out->width = preview.image.size.width;
+    out->height = preview.image.size.height;
+    out->pages = preview.image ? 1 : 0;
   }
 }
 
@@ -806,6 +939,7 @@ void tb_media_state(void *nativeView, TBMediaState *out) {
 bool tb_media_failure(void *nativeView, char *buffer, int capacity) {
   NSView *view = (__bridge NSView *)nativeView;
   NSString *failure = [view isKindOfClass:[TBPlayerView class]] ? ((TBPlayerView *)view).failure : [view isKindOfClass:[TBDocumentView class]] ? ((TBDocumentView *)view).failure : nil;
+  if ([view isKindOfClass:[TBQuickLookView class]]) failure = ((TBQuickLookView *)view).failure;
   if (!failure || capacity <= 0) {
     return false;
   }
@@ -886,5 +1020,105 @@ int tb_media_menu_for_tests(const char *link, char *buffer, int capacity) {
       ((void (*)(id, SEL, id))[open.target methodForSelector:open.action])(open.target, open.action, open);
     }
     return (int)menu.numberOfItems;
+  }
+}
+
+#import <QuickLookThumbnailing/QuickLookThumbnailing.h>
+#ifndef TB_VIDEO_WAIT_NS
+#define TB_VIDEO_WAIT_NS (5 * NSEC_PER_SEC)
+#endif
+
+// Matches core::open_policy::MediaVersion, whose repr(C) anchors this
+// decoder to the exact version used as the asset key, including the gap
+// between the gate's fstat and this source's initialization.
+typedef struct {
+  uint64_t device, inode, length;
+  int64_t modified, modified_ns, changed, changed_ns;
+} TBMediaVersion;
+
+static BOOL tb_hover_version(TBFileSource *source, const TBMediaVersion *expected) {
+  if (!expected) return NO;
+  struct stat was = source.opened;
+  return was.st_dev == expected->device && was.st_ino == expected->inode && was.st_size >= 0 &&
+      (uint64_t)was.st_size == expected->length && was.st_mtimespec.tv_sec == expected->modified && was.st_mtimespec.tv_nsec == expected->modified_ns &&
+      was.st_ctimespec.tv_sec == expected->changed && was.st_ctimespec.tv_nsec == expected->changed_ns;
+}
+
+// The asset loader waits only on its worker. Main-thread delivery and all
+// cancellation/snapshot ownership come from the pane's shared job above.
+static CGImageRef tb_hover_pdf(TBFileSource *source) {
+  NSLock *lock = [NSLock new];
+  dispatch_semaphore_t ready = dispatch_semaphore_create(0);
+  __block BOOL accepting = YES;
+  __block CGImageRef raster = NULL;
+  TBQuickLookThumbnail *job = tb_quicklook_thumbnail(source, @"hover.pdf", 16 * 1024 * 1024, CGSizeMake(552,340), TB_QUICKLOOK_WAIT_NS, ^(CGImageRef image, NSString *failure) {
+    (void)failure;
+    [lock lock]; if (accepting && image) raster = CGImageRetain(image); [lock unlock];
+    dispatch_semaphore_signal(ready);
+  });
+  dispatch_semaphore_wait(ready, dispatch_time(DISPATCH_TIME_NOW,TB_QUICKLOOK_WAIT_NS));
+  [lock lock]; accepting = NO; CGImageRef image = raster; raster = NULL; [lock unlock];
+  [job cancel];
+  return image;
+}
+
+// A cancelled generator still owns its completion. Keep the descriptor
+// source and the asset alive until that callback, then break the cycle.
+@interface TBHoverVideo : NSObject
+@property(nonatomic, strong) AVAssetImageGenerator *generator;
+@property(nonatomic, strong) TBFileSource *source;
+@end
+@implementation TBHoverVideo
+@end
+
+// Called only on the background executor. Owns fd on every path. The path
+// is a name for the descriptor, never reopened. The PDF snapshot is the only
+// path handed to Quick Look; a video still forbids every external reference.
+size_t tb_media_thumbnail(int fd, long long length, const char *name, bool pdf, const TBMediaVersion *expected, unsigned char *out, size_t capacity) {
+  @autoreleasepool {
+    if (fd < 0) return 0;
+    if (!name || !out || capacity == 0 || length < 0) { close(fd); return 0; }
+    NSString *file = [NSString stringWithUTF8String:name];
+    TBFileSource *source = [[TBFileSource alloc] initWithDescriptor:fd length:length path:file];
+    if (!file || !tb_hover_version(source, expected) || ![source isUnchanged] || (pdf && length > 16 * 1024 * 1024)) return 0;
+    CGImageRef image = NULL;
+    if (pdf) {
+      image = tb_hover_pdf(source);
+    } else {
+      AVURLAsset *asset = tb_asset(source, file.lastPathComponent);
+      AVAssetImageGenerator *generator = [AVAssetImageGenerator assetImageGeneratorWithAsset:asset];
+      generator.appliesPreferredTrackTransform = YES;
+      generator.maximumSize = CGSizeMake(552, 340);
+      NSLock *lock = [NSLock new];
+      dispatch_semaphore_t ready = dispatch_semaphore_create(0);
+      __block BOOL accepting = YES;
+      __block CGImageRef frame = NULL;
+      // cancelAll is asynchronous. Retain the generator (and its asset) and
+      // the descriptor source until the final callback, even after timeout.
+      TBHoverVideo *job = [TBHoverVideo new];
+      job.generator = generator; job.source = source;
+      [generator generateCGImagesAsynchronouslyForTimes:@[[NSValue valueWithCMTime:kCMTimeZero]] completionHandler:^(CMTime requested, CGImageRef result, CMTime actual, AVAssetImageGeneratorResult status, NSError *error) {
+        (void)requested; (void)actual; (void)error;
+        TBHoverVideo * __attribute__((objc_precise_lifetime)) active = job;
+        BOOL unchanged = [active.source isUnchanged];
+        [lock lock];
+        if (accepting && unchanged && status == AVAssetImageGeneratorSucceeded && result) frame = CGImageRetain(result);
+        [lock unlock];
+        active.source = nil;
+        active.generator = nil;
+        dispatch_semaphore_signal(ready);
+      }];
+      dispatch_semaphore_wait(ready, dispatch_time(DISPATCH_TIME_NOW, TB_VIDEO_WAIT_NS));
+      [lock lock]; accepting = NO; image = frame; frame = NULL; [lock unlock];
+      [generator cancelAllCGImageGeneration];
+    }
+    if (!image) return 0;
+    if (CGImageGetWidth(image) > 552 || CGImageGetHeight(image) > 340) { CGImageRelease(image); return 0; }
+    NSBitmapImageRep *bitmap = [[NSBitmapImageRep alloc] initWithCGImage:image];
+    CGImageRelease(image);
+    NSData *png = [bitmap representationUsingType:NSBitmapImageFileTypePNG properties:@{}];
+    if (!png || png.length > capacity || ![source isUnchanged]) return 0;
+    memcpy(out, png.bytes, png.length);
+    return png.length;
   }
 }

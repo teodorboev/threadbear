@@ -515,6 +515,10 @@ impl DockController {
         self.layout.close(panel);
     }
 
+    pub fn rename(&mut self, from: &str, to: &str) {
+        self.layout.rename(from, to);
+    }
+
     pub fn set_title_hidden(&mut self, panel: &str, hidden: bool) {
         self.layout.set_title_hidden(panel, hidden);
     }

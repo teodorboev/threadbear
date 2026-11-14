@@ -53,6 +53,28 @@ test('parseCheckTimes reads check.sh lines: host, copy, steps, skips and a step 
   });
 });
 
+// The updater reads `host` as where the steps ran (update.ts,
+// passedLandCheck), so steps from a host that dropped out, or run here
+// after none could take it, mustn't be logged as a host's.
+test('parseCheckTimes: the host and steps are the last run\'s, and a run that fell back to this Mac has no host', () => {
+  const dropped = ['Checking on tinker-desk (copied in 2s; x)', 'ok    runner typecheck        1s', 'FAIL  runner unit tests      9s  /x.log'];
+  assert.deepEqual(parseCheckTimes([...dropped, 'Checking on cloud (its copy is already there)', 'ok    runner typecheck        2s', 'ok    runner unit tests    300s'].join('\n')), {
+    host: 'cloud',
+    steps: [{ name: 'runner typecheck', status: 'ok', seconds: 2 }, { name: 'runner unit tests', status: 'ok', seconds: 300 }],
+  });
+  assert.deepEqual(parseCheckTimes([...dropped, 'So the checks run on this Mac instead, at low priority.', 'ok    runner typecheck        2s', 'ok    runner unit tests    300s'].join('\n')), {
+    steps: [{ name: 'runner typecheck', status: 'ok', seconds: 2 }, { name: 'runner unit tests', status: 'ok', seconds: 300 }],
+  });
+});
+
+// check.sh's own words when no host could take a run, which the above goes by.
+test('check.sh still says when a run falls back to this Mac', () => {
+  const sh = fs.readFileSync(new URL('../../../check.sh', import.meta.url), 'utf8');
+  assert.match(sh, /^\s*echo "So the checks run on this Mac instead, at low priority\."$/m);
+  const remote = fs.readFileSync(new URL('../../../scripts/check-remote.sh', import.meta.url), 'utf8');
+  assert.equal(remote.match(/^\s*echo "Checking on \$HOST \(/gm)?.length, 2, 'both of check-remote.sh\'s lines for a run starting on a host');
+});
+
 test('parseCheckTimes copes with a copy already on the host, and with a check that prints no steps', () => {
   assert.deepEqual(parseCheckTimes('Checking on cloud (its copy is already there)\n'), { host: 'cloud', steps: [] });
   assert.deepEqual(parseCheckTimes('anything else a repo prints\nok then\n'), { steps: [] });
@@ -74,6 +96,32 @@ test('a landing logs its check, and what it prints is unchanged', async () => {
   assert.deepEqual(e.steps, [{ name: 'runner typecheck', status: 'ok', seconds: 3 }]);
   assert.ok(!Number.isNaN(Date.parse(e.at)));
   assert.equal(e.dryRun, undefined);
+  // What the runner's updater goes by (update.ts, passedLandCheck): which
+  // command it was, and that the worktree was still at that commit,
+  // unchanged, when it ended.
+  assert.equal(e.check, 'echo "ok    runner typecheck        3s"');
+  assert.equal(e.intact, true);
+});
+
+// The updater takes a passing line as proof for its commit, so a check
+// that ran on edited files mustn't leave one that says so (Codex, 13 Nov:
+// the line was written before the landing found the edit and refused).
+test('a check that passed on files changed meanwhile is logged, but not as a check of that commit', async () => {
+  for (const meanwhile of ['echo edited >> b', 'echo new > c', 'git commit -q --allow-empty -m moved']) {
+    const { main, t, log } = repo();
+    const before = sh(main, 'git rev-parse main');
+    const c = capture();
+    assert.equal(await land({ ...t, check: `${meanwhile}; echo "ok    runner typecheck   1s"; echo "ok    runner unit tests   1s"` }, c.opts), 1, meanwhile);
+    assert.match(c.err.join('\n'), /changed while the check ran/);
+    assert.equal(sh(main, 'git rev-parse main'), before);
+    const [e] = entries(log);
+    assert.equal(e.ok, true, meanwhile);
+    assert.equal(e.intact, undefined, meanwhile);
+  }
+  // A failed check and nothing a check prints can say it either.
+  const { t, log } = repo();
+  assert.equal(await land({ ...t, check: 'echo \'{"intact":true}\'; exit 1' }, capture().opts), 1);
+  assert.equal(entries(log)[0].intact, undefined);
 });
 
 test('a failed check is logged too, with its exit code, and a dry run says so', async () => {

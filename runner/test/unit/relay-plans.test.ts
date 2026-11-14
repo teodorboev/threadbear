@@ -5,7 +5,7 @@
 // work, and the other two never left that runner's row.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { relayEvents, planOutcome, type Card, type RelayRow, type RelayThreadRow } from '../../src/relay.ts';
+import { relayEvents, type Card, type RelayRow, type RelayThreadRow } from '../../src/relay.ts';
 import type { LabReviewLedger } from '../../src/protocol.ts';
 
 const T = 'thread-on-bruce';
@@ -14,7 +14,8 @@ const PLAN: RelayRow = { seq: 4, role: 'assistant', text: '# Bots\n\n1. Add a bo
 const start: RelayRow = { seq: 2, role: 'user', text: 'Plan the bots', turn: 'aaaa1111', at: at(0) };
 const idle: RelayThreadRow = { runnerId: 'bruce', status: 'idle', needs: 'you' };
 
-const outcome = (plan: RelayRow, after: RelayRow[] = []) => planOutcome([start, plan, ...after], 1);
+const outcome = (plan: RelayRow, after: RelayRow[] = []) =>
+  relayEvents(T, [start, plan, ...after], idle, [], false, 'bruce').find((e) => e.type === 'plan.resolved' && e.itemId === `relay-${plan.seq}`)?.decision;
 
 test('a plan row is a plan card, not a reply folded into the work', () => {
   const ev = relayEvents(T, [start, PLAN], idle, [], false, 'bruce');
@@ -78,4 +79,21 @@ test("another lab's review goes on its own turn's end, and no other", () => {
   assert.equal(end('cccc3333')?.review, undefined);
   // An older runner's row says no turn: not shown, rather than on the wrong card.
   assert.equal(end()?.review, undefined);
+});
+
+// Daybreak 12 Nov (finding 105): each plan copied every row after it to see
+// whether a newer plan came, quadratic in a run of plans. The newest plan is
+// found once now; relay.test.ts times the real path, where a watch holds at
+// most MAX_HELD rows.
+test('in a run of plans each but the newest was sent back', () => {
+  const plans: RelayRow[] = Array.from({ length: 2_000 }, (_, i) => ({ seq: 10 + i, role: 'assistant', text: 'p', plan: true, turn: 'aaaa1111', at: at(1) }));
+  const ev = relayEvents(T, [start, ...plans, { ...plans[0]!, seq: 5000, planDecision: 'go' }, { seq: 5001, role: 'tool', text: 'Read x', toolKind: 'read', turn: 'aaaa1111', at: at(2) }], idle, [], false, 'bruce');
+  const resolved = ev.filter((e) => e.type === 'plan.resolved');
+  assert.equal(resolved.length, plans.length + 1);
+  assert.ok(resolved.slice(0, -1).every((e) => e.decision === 'revise'));
+  // The newest says what became of it itself.
+  assert.deepEqual([resolved.at(-1)!.itemId, resolved.at(-1)!.decision], ['relay-5000', 'go']);
+  // With no decision and none after it, the newest still waits.
+  const waiting = relayEvents(T, [start, ...plans], idle, [], false, 'bruce').filter((e) => e.type === 'plan.resolved');
+  assert.equal(waiting.some((e) => e.itemId === `relay-${plans.at(-1)!.seq}`), false);
 });

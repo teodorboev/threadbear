@@ -4,6 +4,7 @@
 // sheet is for a problem or something that won't come, and it asks the other
 // runner again as the folder or login changes, so what it says can't be done
 // shows before the thread freezes.
+use crate::a11y::A11yRole as _;
 use crate::app::Threadbear;
 use crate::call;
 use crate::style::{self, size};
@@ -11,7 +12,7 @@ use gpui_kit::base::TestSupportExt as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::popover::Popover;
-use gpui_kit::component::spinner::Spinner;
+use crate::spinner::Spinner;
 use gpui_kit::component::{h_flex, v_flex, ActiveTheme as _, Disableable as _, Icon, Selectable, Sizable as _, StyledExt as _, WindowExt as _};
 use gpui_kit::prelude::*;
 use gpui_kit::*;
@@ -53,7 +54,7 @@ impl Threadbear {
             self.show_move_sheet(request, None, window, cx);
             return;
         }
-        if let Some(t) = self.threads.get_mut(&request.thread_id) {
+        if let Some(t) = self.threads.get_mut(&request.thread_id).map(std::sync::Arc::make_mut) {
             t.moving = Some(json!({ "moveId": "", "to": request.runner_id, "toName": request.runner_name, "state": "asking" }));
         }
         cx.notify();
@@ -70,7 +71,7 @@ impl Threadbear {
                 } else {
                     // The sheet comes up instead; the guess goes back until
                     // Move is pressed there.
-                    if let (Some(t), Some(before)) = (this.threads.get_mut(&thread_id), &put_back) {
+                    if let (Some(t), Some(before)) = (this.threads.get_mut(&thread_id).map(std::sync::Arc::make_mut), &put_back) {
                         if t.moving.as_ref().is_some_and(|m| m["moveId"] == "") {
                             t.moving = before.moving.clone();
                         }
@@ -88,7 +89,7 @@ impl Threadbear {
     /// at once and goes back if the runner turns it down.
     pub(crate) fn start_move(&mut self, request: MoveRequest, cwd: Option<String>, account: Option<String>, cx: &mut Context<Self>) {
         let before = self.threads.get(&request.thread_id).cloned();
-        if let Some(t) = self.threads.get_mut(&request.thread_id) {
+        if let Some(t) = self.threads.get_mut(&request.thread_id).map(std::sync::Arc::make_mut) {
             if t.moving.is_none() {
                 t.moving = Some(json!({ "moveId": "", "to": request.runner_id, "toName": request.runner_name, "state": "asking" }));
             }
@@ -107,8 +108,8 @@ impl Threadbear {
             let res = call(client, "threads.move", params).await;
             this.update(cx, |this, cx| {
                 if let Err(e) = res {
-                    this.list_error = Some(e.message);
-                    if let (Some(t), Some(before)) = (this.threads.get_mut(&thread_id), &before) {
+                    this.show_error(e.message, cx);
+                    if let (Some(t), Some(before)) = (this.threads.get_mut(&thread_id).map(std::sync::Arc::make_mut), &before) {
                         if t.moving.as_ref().is_some_and(|m| m["moveId"] == "") {
                             t.moving = before.moving.clone();
                         }
@@ -135,7 +136,7 @@ impl Threadbear {
             this.update(cx, |this, cx| {
                 this.end_note(&key, cx);
                 if let Err(e) = res {
-                    this.list_error = Some(e.message);
+                    this.show_error(e.message, cx);
                 }
                 cx.notify();
             })
@@ -460,12 +461,12 @@ impl Render for MoveSheet {
                             .child(div().text_size(px(size::LABEL)).text_color(style::secondary_text(cx)).child(if connected { format!("Asking {name}…") } else { "Waiting for this Mac's runner…".to_owned() }))
                     })
                     .child(div().flex_1())
-                    .child(div().id("move-cancel").test_support().aria_label("Close without moving it".to_owned()).child(Button::new("move-cancel-button").label("Cancel").small().outline().tooltip("Close without moving it").on_click(cx.listener(|this, _, window, cx| this.close(window, cx)))))
+                    .child(div().id("move-cancel").test_support().a11y_role(Role::GenericContainer).aria_label("Close without moving it".to_owned()).child(Button::new("move-cancel-button").label("Cancel").small().outline().tooltip("Close without moving it").on_click(cx.listener(|this, _, window, cx| this.close(window, cx)))))
                     .child(
                         div()
                             .id("move-go")
                             .test_support()
-                            .aria_label(if can_move { format!("Move it to {name} once this turn ends") } else { "Fix what's in the way first".to_owned() })
+                            .a11y_role(Role::GenericContainer).aria_label(if can_move { format!("Move it to {name} once this turn ends") } else { "Fix what's in the way first".to_owned() })
                             .child(
                                 Button::new("move-go-button")
                                     .label("Move")

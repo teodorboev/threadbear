@@ -19,10 +19,10 @@ Feature: Settings › Keyboard
     And I open Settings on "keyboard"
     And I click the key for "archive" in Settings
     Then Settings is listening for a new key for "Archive"
-    When I press the keys "cmd+k" in Settings
-    Then Settings lists "Archive: ⌘K (changed)" under Keyboard
+    When I press the keys "cmd+y" in Settings
+    Then Settings lists "Archive: ⌘Y (changed)" under Keyboard
     And Settings isn't listening for a key
-    And the "Thread" menu has "Archive" on "⌘K"
+    And the "Thread" menu has "Archive" on "⌘Y"
 
   @settings.keyboard
   Scenario: Another command's key is asked about, and can be taken from it
@@ -59,8 +59,8 @@ Feature: Settings › Keyboard
   Scenario: Reset All puts every key back as Threadbear comes
     When I open Settings on "keyboard"
     And I click the key for "archive" in Settings
-    And I press the keys "cmd+k" in Settings
-    Then Settings lists "Archive: ⌘K (changed)" under Keyboard
+    And I press the keys "cmd+y" in Settings
+    Then Settings lists "Archive: ⌘Y (changed)" under Keyboard
     When I reset all the keys in Settings
     Then Settings lists "Archive: ⌘E" under Keyboard
     And Settings has nothing to reset

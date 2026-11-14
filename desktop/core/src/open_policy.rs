@@ -546,12 +546,14 @@ pub fn still_same(path: &str, asked: &Look, app_for: &dyn Fn(&Path) -> Option<Op
 // ---------------------------------------------------------------- shown in the app
 
 /// What the app shows in a view of its own rather than handing to another
-/// app: a video in AVKit's player, a PDF in PDFKit's view (on a Mac, where
-/// those views are; elsewhere they still open in their own app).
+/// app: AVKit video, PDFKit pages or a Quick Look document thumbnail (on a
+/// Mac; elsewhere they still open in their own app).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Media {
     Video,
     Pdf,
+    /// Read-only Quick Look thumbnail of an Office or iWork document.
+    Office,
 }
 
 /// Films AVFoundation plays on every Mac this runs on: MPEG-4 and QuickTime
@@ -566,6 +568,8 @@ pub fn media_kind(path: &str) -> Option<Media> {
         Some(Media::Video)
     } else if ext == "pdf" {
         Some(Media::Pdf)
+    } else if ["key", "pages", "numbers", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "odt", "ods", "odp"].contains(&ext.as_str()) {
+        Some(Media::Office)
     } else {
         None
     }
@@ -630,6 +634,14 @@ pub fn looks_like(kind: Media, head: &[u8], len: u64) -> bool {
 pub fn looks_like_at(kind: Media, read_at: &mut dyn FnMut(u64, &mut [u8]) -> usize, len: u64) -> bool {
     match kind {
         Media::Video => film_boxes(read_at, len),
+        Media::Office => {
+            // Current Office, iWork and OpenDocument files are ZIP containers;
+            // older Office files use the compound-document header. Quick Look
+            // must still decode the document, and receives no interactive view.
+            let mut head = [0u8; 8];
+            let n = read_at(0, &mut head);
+            (n >= 4 && head.starts_with(b"PK\x03\x04")) || (n == 8 && head == *b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1")
+        }
         Media::Pdf => {
             let mut head = [0u8; 6];
             let n = read_at(0, &mut head);
@@ -721,6 +733,28 @@ fn ftyp_is_a_films(read_at: &mut dyn FnMut(u64, &mut [u8]) -> usize, at: u64, si
     (16..body.len()).step_by(4).all(|i| !PICTURE_BRANDS.iter().any(|b| brand(i) == *b))
 }
 
+/// A native thumbnail's exact filesystem version. mtime alone can be put
+/// back after a write; inode and ctime also detect replacements and edits.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct MediaVersion {
+    pub device: u64,
+    pub inode: u64,
+    pub length: u64,
+    pub modified: i64,
+    pub modified_ns: i64,
+    pub changed: i64,
+    pub changed_ns: i64,
+}
+
+pub fn media_version(meta: &std::fs::Metadata) -> Option<MediaVersion> {
+    #[cfg(unix)] {
+        use std::os::unix::fs::MetadataExt as _;
+        Some(MediaVersion { device:meta.dev(), inode:meta.ino(), length:meta.len(), modified:meta.mtime(), modified_ns:meta.mtime_nsec(), changed:meta.ctime(), changed_ns:meta.ctime_nsec() })
+    }
+    #[cfg(not(unix))] { let _=meta; None }
+}
+
 /// A file the rules have checked, held open: the view reads this, not the
 /// path again, so a file swapped in at the path afterwards (or a folder
 /// above it swapped for a link) is never what's shown.
@@ -753,11 +787,12 @@ pub fn decide_media(path: &str, origin: Origin) -> MediaVerdict {
     let given = crate::highlights::last_component(path);
     let name = if given.is_empty() { "That file" } else { given };
     let Some(kind) = media_kind(path) else {
-        return MediaVerdict::Refuse(format!("{name} isn't a video or a PDF, so it opens in its own app."));
+        return MediaVerdict::Refuse(format!("{name} isn't a document or video this pane can preview, so it opens in its own app."));
     };
     let (what, verb) = match kind {
         Media::Video => ("a video", "play it"),
         Media::Pdf => ("a PDF", "show it"),
+        Media::Office => ("an Office or iWork document", "show it"),
     };
     if origin == Origin::OtherMac {
         return MediaVerdict::Refuse(format!("{name} is on another Mac, so it can't {} here yet.", if kind == Media::Video { "play" } else { "show" }));
@@ -788,11 +823,10 @@ pub fn decide_media(path: &str, origin: Origin) -> MediaVerdict {
     let Ok(mut file) = opened else {
         return MediaVerdict::Refuse(format!("{name} changed or went while Threadbear looked at it, so it didn't {verb}."));
     };
-    let len = match file.metadata() {
-        Ok(meta) if meta.is_file() => meta.len(),
-        _ => return not_really(),
-    };
-    if !looks_like_at(kind, &mut |at, buf| read_at(&file, at, buf), len) {
+    let Ok(metadata) = file.metadata() else { return not_really() };
+    let package = metadata.is_dir() && kind == Media::Office && ["key", "pages", "numbers"].contains(&extension(&resolved).as_str());
+    let len = if metadata.is_file() { metadata.len() } else if package { 0 } else { return not_really() };
+    if !package && !looks_like_at(kind, &mut |at, buf| read_at(&file, at, buf), len) {
         return not_really();
     }
     {
@@ -863,6 +897,28 @@ pub fn is_own_scheme(url: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
+    #[test]
+    fn media_versions_catch_same_length_writes_with_restored_mtime_and_replacements() {
+        use std::fs::{self, File, FileTimes};
+        let scratch=Scratch::new("media-version");
+        let path=scratch.path("held.pdf");
+        fs::write(&path,b"first").unwrap();
+        let metadata=fs::metadata(&path).unwrap();
+        let version=media_version(&metadata);
+        std::thread::sleep(std::time::Duration::from_millis(3));
+        fs::write(&path,b"other").unwrap();
+        File::open(&path).unwrap().set_times(FileTimes::new().set_modified(metadata.modified().unwrap())).unwrap();
+        let changed=fs::metadata(&path).unwrap();
+        assert_eq!(metadata.len(),changed.len());
+        assert_eq!(metadata.modified().unwrap(),changed.modified().unwrap());
+        assert_ne!(version,media_version(&changed));
+        fs::rename(&path,scratch.path("old.pdf")).unwrap();
+        fs::write(&path,b"first").unwrap();
+        File::open(&path).unwrap().set_times(FileTimes::new().set_modified(metadata.modified().unwrap())).unwrap();
+        assert_ne!(version,media_version(&fs::metadata(&path).unwrap()));
+    }
+
     use std::fs;
 
     fn none(_: &Path) -> Option<OpeningApp> {
@@ -1331,6 +1387,55 @@ mod tests {
         assert_eq!(shows(decide_media(&old.to_string_lossy(), Origin::ThisMac)), Some(old));
         let pdf = bytes(&s, "spec.pdf", b"%PDF-1.7\n");
         assert_eq!(shows(decide_media(&pdf.to_string_lossy(), Origin::ThisMac)), Some(pdf));
+    }
+
+    #[test]
+    fn office_previews_are_checked_read_only_documents() {
+        let s = Scratch::new("office-preview");
+        for ext in ["key", "pages", "numbers", "docx", "xlsx", "pptx", "doc", "xls", "ppt", "odt", "ods", "odp"] {
+            let document = bytes(&s, &format!("review.{ext}"), b"PK\x03\x04document");
+            assert!(media_kind(&document.to_string_lossy()).is_some(), "{ext}");
+            assert_eq!(shows(decide_media(&document.to_string_lossy(), Origin::ThisMac)), Some(document.clone()), "{ext}");
+            assert!(refusal(decide_media(&document.to_string_lossy(), Origin::OtherMac)).contains("another Mac"));
+            fs::write(&document, b"#!/bin/sh\nopen -a Terminal\n").unwrap();
+            refusal(decide_media(&document.to_string_lossy(), Origin::ThisMac));
+        }
+        let legacy = bytes(&s, "legacy.doc", b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1legacy");
+        assert!(shows(decide_media(&legacy.to_string_lossy(), Origin::ThisMac)).is_some());
+        #[cfg(unix)] {
+            let payload = bytes(&s, "run.command", b"PK\x03\x04payload");
+            let link = s.path("fake.pages");
+            std::os::unix::fs::symlink(payload, &link).unwrap();
+            refusal(decide_media(&link.to_string_lossy(), Origin::ThisMac));
+        }
+    }
+
+    #[test]
+    fn an_office_preview_keeps_the_checked_file_when_its_name_is_replaced() {
+        use std::io::Read as _;
+        let s = Scratch::new("office-replaced");
+        let path = bytes(&s, "brief.docx", b"PK\x03\x04original document");
+        let MediaVerdict::Show(mut checked) = decide_media(&path.to_string_lossy(), Origin::ThisMac) else { panic!("document refused") };
+        fs::rename(&path, s.path("previous.docx")).unwrap();
+        fs::write(&path, b"#!/bin/sh\nlaunch something\n").unwrap();
+        let mut read = Vec::new();
+        checked.file.read_to_end(&mut read).unwrap();
+        assert_eq!(read, b"PK\x03\x04original document");
+        let copy = crate::private_file::snapshot(&checked.file, &s.path("previews"), "brief.docx", 256 * 1024 * 1024).unwrap();
+        assert_eq!(fs::read(copy).unwrap(), read);
+    }
+
+    #[test]
+    fn iwork_packages_are_documents_but_other_document_named_folders_are_not() {
+        let s = Scratch::new("iwork-packages");
+        for ext in ["key", "pages", "numbers"] {
+            let package = s.path(&format!("Brief.{ext}"));
+            bytes(&s, &format!("Brief.{ext}/Index/Document.iwa"), b"package data");
+            assert_eq!(shows(decide_media(&package.to_string_lossy(), Origin::ThisMac)), Some(package.clone()));
+            refusal(decide_media(&package.to_string_lossy(), Origin::OtherMac));
+        }
+        fs::create_dir(s.path("Not a package.docx")).unwrap();
+        refusal(decide_media(&s.path("Not a package.docx").to_string_lossy(), Origin::ThisMac));
     }
 
     /// What's shown is the file that was checked, held open, read from its

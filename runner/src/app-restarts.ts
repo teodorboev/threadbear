@@ -61,7 +61,9 @@ export class AppRestarts {
 
   // Sends a message to the thread when either app next comes back on a build
   // other than the one it's running now. Asking again replaces the request.
-  watch(threadId: string, text?: string): { build?: AppBuild } {
+  // `running` names each app's build, the GPUI app's first: with both
+  // connected, `build` alone was the frozen Swift app's (13 Nov).
+  watch(threadId: string, text?: string): { build?: AppBuild; running?: string } {
     const state = this.read();
     state.watching = state.watching.filter((w) => w.threadId !== threadId);
     state.watching.push({
@@ -72,8 +74,9 @@ export class AppRestarts {
       ...(state.desktopBuild ? { fromDesktopTree: state.desktopBuild.tree, fromDesktopShort: state.desktopBuild.short } : {}),
     });
     this.write(state);
-    const build = state.build ?? state.desktopBuild;
-    return build ? { build } : {};
+    const build = state.desktopBuild ?? state.build;
+    const running = [state.desktopBuild && `the GPUI app on ${state.desktopBuild.short}`, state.build && `the Swift app on ${state.build.short}`].filter(Boolean).join(', ');
+    return { ...(build ? { build } : {}), ...(running ? { running } : {}) };
   }
 
   isWatching(threadId: string): boolean {

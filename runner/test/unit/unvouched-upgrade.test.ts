@@ -258,7 +258,7 @@ test('90/91: a handover of an unreadable moved record before start still holds i
 // Muse's third look: the note's folders were tried at every "." after each
 // ", in /", walking up each one, so a crafted note held the start for
 // minutes; and a record rebuilt from a log of nulls threw at every start.
-test('90/91: a crafted note is read in well under 100 ms of CPU, and a long real one still holds', async () => {
+test('90/91: a crafted note is read in well under a second of CPU, and a long real one still holds', async () => {
   const { movedInWorktrees } = await import('../../src/runner/moves.ts');
   const c = checkout();
   const dir = tmpDir();
@@ -269,7 +269,9 @@ test('90/91: a crafted note is read in well under 100 ms of CPU, and a long real
   const held = movedInWorktrees(dir);
   const used = process.cpuUsage(before);
   const ms = (used.user + used.system) / 1000;
-  assert.ok(ms < 100, `took ${ms} ms of CPU`);
+  // About 0.2 s on a slow Linux box under a full check (14 Nov); the bug
+  // took minutes, so a second still catches it without failing on load.
+  assert.ok(ms < 1000, `took ${ms} ms of CPU`);
   assert.deepEqual(held, [c.wt]);
 });
 

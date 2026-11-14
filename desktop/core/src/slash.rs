@@ -8,21 +8,30 @@ use serde::Deserialize;
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", default)]
 pub struct SlashCommand {
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub name: String,
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub description: Option<String>,
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub argument_hint: Option<String>,
     /// "threadbear", "cli" or "skill"; anything newer counts as the CLI's.
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub source: String,
     /// Other names that run it (/usage is /cost and /stats too).
+    #[serde(default, deserialize_with = "crate::wire::optional_list")]
     pub aliases: Option<Vec<String>>,
     /// Where it was defined: "user", "project", "plugin" (with `plugin`),
     /// "claude.ai", "system", or one this app doesn't know.
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub scope: Option<String>,
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub plugin: Option<String>,
     /// Its file on the runner's machine, when the runner found it.
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub path: Option<String>,
     /// A skill that only runs as the start of a message, so the agent can't
     /// run it when one names it partway through.
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub user_only: Option<bool>,
 }
 
@@ -49,7 +58,7 @@ pub fn decode_commands(value: &serde_json::Value) -> Vec<SlashCommand> {
     value
         .get("commands")
         .and_then(|c| c.as_array())
-        .map(|list| list.iter().filter_map(|c| serde_json::from_value::<SlashCommand>(c.clone()).ok()).filter(|c| !c.name.is_empty()).collect())
+        .map(|list| list.iter().filter_map(|c| crate::wire::read::<SlashCommand>(c.clone())).filter(|c| !c.name.is_empty()).collect())
         .unwrap_or_default()
 }
 
@@ -144,6 +153,10 @@ pub fn mid_message(commands: &[SlashCommand]) -> Vec<SlashCommand> {
 
 /// Where a command came from, for the detail pane.
 pub fn origin(command: &SlashCommand, provider: &str) -> String {
+    origin_named(command, &cli_name(provider))
+}
+
+pub fn origin_named(command: &SlashCommand, name: &str) -> String {
     if command.is_threadbear() {
         return "Threadbear's own: it changes this thread's settings".to_owned();
     }
@@ -172,12 +185,12 @@ pub fn origin(command: &SlashCommand, provider: &str) -> String {
         },
         Some("claude.ai") => "Synced from claude.ai".to_owned(),
         Some("admin") => "Set up by your organisation".to_owned(),
-        Some("system") => format!("{}'s own", cli_name(provider)),
+        Some("system") => format!("{}'s own", name),
         _ => {
             if command.is_skill() {
                 "A skill".to_owned()
             } else {
-                format!("{}'s own", cli_name(provider))
+                format!("{}'s own", name)
             }
         }
     }
@@ -324,9 +337,13 @@ pub fn palette_height(window: f64, least: f64, most: f64) -> f64 {
 #[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct PaletteLayout {
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub height: Option<f64>,
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub width: Option<f64>,
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub categories: Option<f64>,
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub list: Option<f64>,
 }
 

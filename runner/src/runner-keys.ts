@@ -2,7 +2,7 @@
 // Mac, whose secrets/convex-key is the owner key, makes a key for one other
 // runner. That key acts as its runner alone on the backend, so a second Mac
 // no longer holds a copy of the key that can do everything. Straight to the
-// backend over HTTP, like tb pair it needs no runner.
+// backend over HTTP, so it needs no runner.
 //
 // The plain key is never printed (an agent running tb would have it in its
 // transcript, and a thread's transcript can command agents): it goes over
@@ -312,7 +312,7 @@ export async function runnerKeysCommand(cfg: Pick<Config, 'home' | 'sync'>, args
       return 0;
     }
     // Another Mac can't reach a backend on this Mac's 127.0.0.1, whatever key it has.
-    if (sub === 'add' && localOnly(url)) return fail(`This Mac's backend is on this Mac only (${url}, from setup --self-hosted --local), so another Mac can't reach it. To add one, put it on your tailnet first: ./threadbear setup --self-hosted --tailnet (docs/self-hosting.md).`);
+    if (sub === 'add' && localOnly(url)) return fail(`This Mac's backend is on this Mac only (${url}, from setup --self-hosted --local), so another Mac can't reach it. To add one, move it somewhere the other Mac can reach first: ./threadbear setup --self-hosted --tailnet, or --self-hosted --url and --site-url (docs/self-hosting.md).`);
     if (sub === 'add') return await add(rest[0], f, call, deps.ssh ?? realSsh, print, fail, url, cfg.sync.runnerId, cfg.sync.site);
     if (sub === 'logins') return await logins(rest, f, call, print, fail);
     // After a rotation, what the old key could have left (auditCommand).

@@ -44,7 +44,7 @@ afterEach(async () => {
   for (const d of made.splice(0)) fs.rmSync(d, { recursive: true, force: true });
 });
 
-function rig(o: { mode?: PermissionMode; agent?: AcpAgent; env?: Record<string, string>; opts?: Partial<StartSessionOptions>; deny?: boolean; answer?: (r: ToolApprovalRequest) => ToolApprovalAnswer | Promise<ToolApprovalAnswer>; on?: boolean } = {}) {
+function rig(o: { mode?: PermissionMode; agent?: AcpAgent; env?: Record<string, string>; opts?: Partial<StartSessionOptions>; deny?: boolean; answer?: (r: ToolApprovalRequest) => ToolApprovalAnswer | Promise<ToolApprovalAnswer> } = {}) {
   const root = tmp();
   made.push(root);
   const cwd = path.join(root, 'work');
@@ -77,7 +77,6 @@ function rig(o: { mode?: PermissionMode; agent?: AcpAgent; env?: Record<string, 
   const adapter = new AcpAdapter({
     agent,
     binary: () => FAKE,
-    on: () => o.on !== false,
     registry: new ProcessRegistry(path.join(root, 'run'), nullLogger),
     log: nullLogger,
     env: { PATH: process.env.PATH, FAKE_ACP_LOG: logFile, ...o.env },
@@ -269,11 +268,6 @@ test('a plain command can be always allowed, exactly', async () => {
 test('a thread in the sandbox is refused', () => {
   const r = rig({ opts: { confined: true } });
   assert.throws(() => r.start(), /runs in a sandbox, and OpenCode can't/);
-});
-
-test('with the experiment off it refuses to start', () => {
-  const r = rig({ on: false });
-  assert.throws(() => r.start(), /acpAgents experiment/);
 });
 
 test("the wrong program under the agent's name is refused", async () => {
@@ -713,6 +707,7 @@ test('Stop during the setup before a prompt: the prompt is never sent', async ()
   await done;
   assert.equal(r.log().filter((l) => l.prompt).length, before);
   assert.equal(results(r.outputs).at(-1)!.outcome, 'interrupted');
+  assert.deepEqual(results(r.outputs).at(-1)!.unreceived, ['stopme']);
 });
 
 test('Stop with a message waiting gives one result, when the turn is over', async () => {
@@ -728,6 +723,7 @@ test('Stop with a message waiting gives one result, when the turn is over', asyn
   await done;
   const [only] = results(r.outputs);
   assert.deepEqual(only.answered, ['a', 'b']);
+  assert.deepEqual(only.unreceived, ['b']);
   assert.equal(only.answers, 'a');
 });
 
@@ -746,17 +742,6 @@ test('a malformed request is cancelled, never left to hang the turn', async () =
   const replies = fakeRequest(r, s, { kind: 'edit', locations: [{ path: path.join(r.cwd, 'a') }], content: [{ type: 'diff', path: path.join(r.cwd, 'a'), oldText: 123, newText: 'x' }] });
   await until(() => r.cards.length === 1 || replies.length === 1);
   assert.ok(r.cards.length === 1 || (replies[0] as { outcome: { outcome: string } }).outcome.outcome === 'cancelled');
-});
-
-test('with the experiment turned off, a live session stops taking turns', async () => {
-  let on = true;
-  const r = rig({ mode: 'full' });
-  (r.adapter as unknown as { deps: { on: () => boolean } }).deps.on = () => on;
-  const s = r.start();
-  await ready(r, s);
-  on = false;
-  await turn(r, s, 'hello', 'off');
-  assert.match(String(results(r.outputs).at(-1)!.error), /acpAgents/);
 });
 
 test('MCP: a cancelled call closes its card', async () => {

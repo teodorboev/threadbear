@@ -10,6 +10,8 @@ extern crate gpui_fast as gpui;
 extern crate gpui_fast_platform as gpui_platform;
 
 mod a11y_disabled;
+// Public in this app's copy: its own custom buttons (Send) need it too.
+pub use a11y_disabled::A11yDisabledExt;
 mod accordion;
 pub mod actions;
 mod alert_dialog;
@@ -195,7 +197,7 @@ pub use text_selection::{
     TextSelection, TextSelectionContentKey, TextSelectionCoverage, TextSelectionEndpoint,
     TextSelectionEvent, TextSelectionHandle, TextSelectionLayer, TextSelectionProjection,
     TextSelectionRegistration, TextSelectionRun, TextSelectionScopeId, TextSelectionSnapshot,
-    TextSelectionWindowPoints, TouchHandleLayout,
+    TextSelectionWindowPoints, TouchHandleLayout, selection_start_position,
 };
 pub use theme::{PlotTheme, ResizableTheme, ScrollbarTheme, Theme, ThemeAppearance};
 pub use theme_tokens::{

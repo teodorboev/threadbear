@@ -29,7 +29,7 @@ import Testing
          ],"hasMore":false,"images":[{"bad":true}]}
         """)
         let backend = ConvexBackend(transport: transport, token: "t")
-        var iterator = backend.messages("t1", limit: 50).makeAsyncIterator()
+        var iterator = backend.messages("t1", limit: 50, notes: false).makeAsyncIterator()
         let page = try #require(try await iterator.next())
         #expect(page.messages.map(\.seq) == [1, 3])
         #expect(page.messages.map(\.role) == [.user, .assistant])

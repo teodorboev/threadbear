@@ -36,6 +36,9 @@ export type Settings = {
   // How often a fork's runner starts a thread to bring in Mike's releases
   // (bring-in.ts): every so many days, 'important' or 'off'.
   bringIn: BringInSetting;
+  // Full sync (docs/full-convex.md): tool output goes to Convex too. What
+  // runner.json says, which takes effect when the runner next starts.
+  fullSync: boolean;
   models: {
     pool: string | null;
     privateFolders: string[];
@@ -54,6 +57,7 @@ export type SettingsUpdate = {
   labReview?: boolean;
   keepAwake?: boolean;
   bringIn?: BringInSetting;
+  fullSync?: boolean;
   models?: { pool?: string | null; privateFolders?: string[] };
   // Experiment id to on or off, saved under runner.json `experiments`.
   experiments?: Record<string, boolean>;
@@ -85,6 +89,7 @@ export class SettingsService {
       labReview: this.cfg.labReview,
       ...(process.platform === 'darwin' ? { keepAwake: this.cfg.keepAwake } : {}),
       bringIn: bringInSetting(this.cfg.home),
+      fullSync: peekRunnerJson(this.cfg.home).sync?.full === true,
       models: {
         pool: this.cfg.models.pool,
         privateFolders: [...this.cfg.models.privateFolders],
@@ -136,6 +141,13 @@ export class SettingsService {
     if (u.keepAwake !== undefined) json.keepAwake = this.cfg.keepAwake = u.keepAwake;
     // Read each time it's needed (bring-in.ts), so this takes effect at once.
     if (u.bringIn !== undefined) json.releases = { ...json.releases, bringIn: u.bringIn };
+    // Saved only: the mirror reads it when the runner starts. Either answer is
+    // an answer, so the runner never asks about it again (convex-use.ts).
+    // And the question's thread can't answer it again (Daybreak 121).
+    if (u.fullSync !== undefined) {
+      const { fullAskedThread: _t, fullAskedQuestion: _q, ...sync } = json.sync ?? {};
+      json.sync = { ...sync, full: u.fullSync };
+    }
     if (folders !== undefined || pool !== undefined) {
       json.models = { ...json.models };
       if (pool !== undefined) json.models.pool = this.cfg.models.pool = pool;
@@ -181,6 +193,10 @@ export function settingsMethods(s: SettingsService): Record<string, (p: Record<s
       if (p.keepAwake !== undefined) {
         if (typeof p.keepAwake !== 'boolean') throw bad('keepAwake must be a boolean');
         u.keepAwake = p.keepAwake;
+      }
+      if (p.fullSync !== undefined) {
+        if (typeof p.fullSync !== 'boolean') throw bad('fullSync must be a boolean');
+        u.fullSync = p.fullSync;
       }
       if (p.bringIn !== undefined) {
         const b = parseBringIn(p.bringIn);

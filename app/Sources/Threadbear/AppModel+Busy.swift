@@ -12,8 +12,6 @@ enum BusyKey {
     /// A folder change on its way: the composer's + spins, as its menu has it.
     static func movingFolder(_ threadId: String) -> String { "movingFolder/\(threadId)" }
     static func copying(_ threadId: String) -> String { "copying/\(threadId)" }
-    /// The same path on two Macs is two files.
-    static func fetching(_ path: String, runner: String?, action: FileLinkAction) -> String { "fetching/\(action)/\(runner ?? "")/\(path)" }
     static func deleteThread(_ id: String) -> String { "deleteThread/\(id)" }
     /// Move or Cancel on its way to the runner (AppModel+Moves).
     static func moveThread(_ id: String) -> String { "moveThread/\(id)" }

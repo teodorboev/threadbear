@@ -157,7 +157,7 @@ pub struct Tasks {
 }
 
 impl Tasks {
-    fn decode(v: &Value) -> Option<Tasks> {
+    pub fn decode(v: &Value) -> Option<Tasks> {
         if !v.is_object() {
             return None;
         }
@@ -560,6 +560,16 @@ fn newest_first(a: &ThreadSummary, b: &ThreadSummary) -> Ordering {
     b.activity_ms().cmp(&a.activity_ms()).then_with(|| a.id.cmp(&b.id))
 }
 
+/// Sorts as `newest_first` does, reading each thread's time once: comparing
+/// read both times again each time, and the Projects list sorts every
+/// project's threads, archived ones too (1,150 of Mike's), as it draws.
+fn sort_newest_first<'a>(threads: &mut [&'a ThreadSummary]) {
+    threads.sort_by_cached_key(|t| {
+        let t: &'a ThreadSummary = t;
+        (std::cmp::Reverse(t.activity_ms()), t.id.as_str())
+    });
+}
+
 impl<'a> Sections<'a> {
     /// Archived projects are left out, and so are archived and hibernating
     /// threads, as in the inbox (archived ones go in `archived`). A thread in
@@ -594,11 +604,11 @@ impl<'a> Sections<'a> {
             .into_iter()
             .map(|project| {
                 let mut threads = members.remove(project.id.as_str()).unwrap_or_default();
-                threads.sort_by(|a, b| newest_first(a, b));
+                sort_newest_first(&mut threads);
                 // A thread in a project twice (a summary a moment behind) is listed once.
                 threads.dedup_by(|a, b| a.id == b.id);
                 let mut put_away = archived.remove(project.id.as_str()).unwrap_or_default();
-                put_away.sort_by(|a, b| newest_first(a, b));
+                sort_newest_first(&mut put_away);
                 put_away.dedup_by(|a, b| a.id == b.id);
                 let own = project.last_activity_ms.unwrap_or(project.updated_ms);
                 let last_activity_ms = newest.get(project.id.as_str()).copied().unwrap_or(i64::MIN).max(own);
@@ -606,7 +616,7 @@ impl<'a> Sections<'a> {
             })
             .collect();
         sections.sort_by(|a, b| b.last_activity_ms.cmp(&a.last_activity_ms).then_with(|| standard_compare(&a.project.title, &b.project.title)));
-        unfiled.sort_by(|a, b| newest_first(a, b));
+        sort_newest_first(&mut unfiled);
         Sections::with_parts(sections, unfiled)
     }
 
@@ -653,7 +663,7 @@ impl<'a> Sections<'a> {
     pub fn threads_with_parts(&self, section: &Section<'a>) -> Vec<&'a ThreadSummary> {
         let mut seen = HashSet::new();
         let mut out: Vec<&ThreadSummary> = std::iter::once(section).chain(self.parts_of(section.id())).flat_map(|s| s.threads.iter().copied()).filter(|t| seen.insert(t.id.as_str())).collect();
-        out.sort_by(|a, b| newest_first(a, b));
+        sort_newest_first(&mut out);
         out
     }
 
@@ -671,7 +681,7 @@ impl<'a> Sections<'a> {
 /// its page.
 pub fn threads_in<'a>(project_id: &str, threads: impl IntoIterator<Item = &'a ThreadSummary>) -> Vec<&'a ThreadSummary> {
     let mut out: Vec<&ThreadSummary> = threads.into_iter().filter(|t| t.projects.iter().flatten().any(|m| m.id == project_id)).collect();
-    out.sort_by(|a, b| newest_first(a, b));
+    sort_newest_first(&mut out);
     out
 }
 
@@ -729,6 +739,62 @@ pub fn fold_layout(sections: &Sections, open: &HashSet<String>) -> Vec<String> {
     rows
 }
 
+// ---------------------------------------------------------------- the page's tabs
+
+/// A project's page in two tabs (the projectDecisions experiment), a port of
+/// ThreadbearCore's ProjectTabs.swift: its decisions, and everything else
+/// about it. Mike, 12 Nov 2026: "tabbed at the top so you can swap between
+/// coordinator and project info".
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ProjectTab {
+    Decisions,
+    Project,
+}
+
+impl ProjectTab {
+    pub const ALL: [ProjectTab; 2] = [ProjectTab::Decisions, ProjectTab::Project];
+
+    pub fn title(self) -> &'static str {
+        match self {
+            ProjectTab::Decisions => "Decisions",
+            ProjectTab::Project => "Project",
+        }
+    }
+
+    /// The name a script and the dump use: "decisions" or "project".
+    pub fn name(self) -> &'static str {
+        match self {
+            ProjectTab::Decisions => "decisions",
+            ProjectTab::Project => "project",
+        }
+    }
+
+    pub fn from_name(name: &str) -> Option<ProjectTab> {
+        ProjectTab::ALL.into_iter().find(|t| t.name() == name)
+    }
+
+    /// The tab a page opens on when none has been picked for it: Decisions
+    /// when something's waiting, else Project.
+    pub fn opening(decisions: usize) -> ProjectTab {
+        if decisions > 0 { ProjectTab::Decisions } else { ProjectTab::Project }
+    }
+
+    /// The tab showing: the one last picked for this project, else the one
+    /// it opened on this visit. Never worked out again from the decisions
+    /// while it's open, so the page doesn't jump under the pointer as they
+    /// come and go.
+    pub fn current(picked: Option<ProjectTab>, opened_on: Option<ProjectTab>, decisions: usize) -> ProjectTab {
+        picked.or(opened_on).unwrap_or_else(|| ProjectTab::opening(decisions))
+    }
+
+    /// The tab beside this one, for ⇧⌘[ (-1) and ⇧⌘] (1): they stop at the
+    /// ends rather than wrapping, as there are only two.
+    pub fn step(self, by: i32) -> ProjectTab {
+        let at = ProjectTab::ALL.iter().position(|t| *t == self).unwrap_or(0) as i32;
+        ProjectTab::ALL[(at + by).clamp(0, ProjectTab::ALL.len() as i32 - 1) as usize]
+    }
+}
+
 // ---------------------------------------------------------------- decisions
 
 /// The thread is waiting on Mike with a card of asks he hasn't finished
@@ -752,7 +818,7 @@ pub fn open_asks(t: &ThreadSummary) -> usize {
 /// threads, which already leave out archived and hibernating ones.
 pub fn decision_threads<'a>(threads: &[&'a ThreadSummary]) -> Vec<&'a ThreadSummary> {
     let mut out: Vec<&ThreadSummary> = threads.iter().copied().filter(|t| is_waiting(t)).collect();
-    out.sort_by(|a, b| newest_first(a, b));
+    sort_newest_first(&mut out);
     out
 }
 
@@ -1268,6 +1334,27 @@ mod tests {
     use super::*;
     use crate::inbox::{iso_time, OpenAsk};
     use chrono::FixedOffset;
+
+    #[test]
+    fn a_page_opens_on_its_decisions_when_something_waits() {
+        assert_eq!(ProjectTab::opening(3), ProjectTab::Decisions);
+        assert_eq!(ProjectTab::opening(0), ProjectTab::Project);
+        // What it opened on holds while the decisions come and go.
+        assert_eq!(ProjectTab::current(None, Some(ProjectTab::Decisions), 0), ProjectTab::Decisions);
+        // A tab picked wins over both.
+        assert_eq!(ProjectTab::current(Some(ProjectTab::Project), Some(ProjectTab::Decisions), 4), ProjectTab::Project);
+        assert_eq!(ProjectTab::current(None, None, 2), ProjectTab::Decisions);
+    }
+
+    #[test]
+    fn the_tab_keys_stop_at_the_ends() {
+        assert_eq!(ProjectTab::Decisions.step(1), ProjectTab::Project);
+        assert_eq!(ProjectTab::Project.step(1), ProjectTab::Project);
+        assert_eq!(ProjectTab::Project.step(-1), ProjectTab::Decisions);
+        assert_eq!(ProjectTab::Decisions.step(-1), ProjectTab::Decisions);
+        assert_eq!(ProjectTab::from_name("project"), Some(ProjectTab::Project));
+        assert_eq!(ProjectTab::from_name("other"), None);
+    }
 
     const NOW: i64 = 1_000_000_000;
 

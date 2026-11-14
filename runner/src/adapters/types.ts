@@ -90,6 +90,8 @@ export type TurnResult = {
   // messages sent close together that ran as one turn, then any folded in
   // while it ran. Absent from CLIs that don't report it (then `answers`).
   answered?: string[];
+  // Cancelled in this adapter's waiting queue, before reaching the CLI.
+  unreceived?: string[];
   // Messages still waiting in the CLI's queue when this result was
   // produced, when the CLI reports it: it runs them next, without being
   // sent anything.
@@ -102,6 +104,9 @@ export type TurnResult = {
 };
 
 export type AdapterOutput =
+  // The CLI's receipt for an input, before it asks the model. Cancelled
+  // without started means the message never became the agent's to read.
+  | { kind: 'messageState'; id: string; state: 'queued' | 'started' | 'cancelled' }
   | { kind: 'event'; event: EventBody }
   | { kind: 'delta'; delta: DeltaBody }
   | { kind: 'session'; nativeSessionId: string; model?: string }
@@ -118,7 +123,10 @@ export type AdapterOutput =
   | { kind: 'cliTurn'; note?: string }
   // The Stop hook sent a turn back to call end_turn, as its message is the
   // reply (end_turn's handler then doesn't ask for another).
-  | { kind: 'endTurnNudge' }
+  // With `reopen`, the turn had its end_turn and reply, and is sent back for
+  // a card the reply asked for (needs.ts, REPLY_ASKS): the next end_turn is
+  // taken, not refused as a repeat, and the reply written stands.
+  | { kind: 'endTurnNudge'; reopen?: true }
   // Background work the CLI is running (shells, async subagents). Replaces
   // the previous list.
   | { kind: 'tasks'; tasks: BackgroundTask[] }
@@ -188,6 +196,11 @@ export type ToolApprovalRequest = {
   queued?: QueuedCall[];
   // Why the CLI is asking, in a sentence for the card (askReason in the Claude adapter).
   reason?: string;
+  // Full access would have let it through with no card: switching the
+  // thread to Full answers it Allow (Runner.update), as a card that waits
+  // under a composer saying Full is the thing Ian hit (13 Nov). Never on
+  // a card every mode shows (delete_thread, a raise, a plan).
+  fullAllows?: boolean;
 };
 
 // mode: the permission mode to switch to as the call goes ahead (approving
@@ -243,6 +256,13 @@ export interface AgentSession {
   // folder's untrusted permission rules, after the thread left Full, for
   // the turns the CLI starts by itself before the next message replaces it.
   askBeforeEveryTool?(): void;
+  // For end_turn's handler: whether a message sent into the running turn is
+  // one the CLI hasn't handed to the agent yet, so the call being handled was
+  // written without it. Each call counts as a refusal for the messages still
+  // waiting, and a message is refused for twice at most: the refusal is what
+  // it is handed over with. Only on an adapter whose CLI says when it hands
+  // one over.
+  unreadMessage?(): boolean;
   // Moves the session to another folder from its next turn, in the same
   // native session. Only on adapters with movesFolders.
   setCwd?(cwd: string): Promise<void>;

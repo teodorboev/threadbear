@@ -9,9 +9,12 @@
 // read-only editor, coloured by its highlighter; any text with the find bar
 // over it (file_find.rs). On a Mac a video plays and a PDF shows in the
 // system's own view over the pane (media_view.rs), read from this Mac's own
-// file once the open gate has checked it; on Windows and Linux, and for
-// everything else, the pane says it opens in its app (`file.quicklook`), and
-// web pages go to the browser (`file.htmlpreview`, `panel.web` are later work).
+// file once the open gate has checked it. Office and iWork documents show a
+// read-only Quick Look thumbnail. On Windows and Linux these open in their
+// own app (`file.quicklook`). A
+// local web page shows sealed in the web runtime, its scripts off until Run
+// them (`file.htmlpreview`, `file.runthem`: web_panels.rs `local_page`).
+use crate::spinner::Spinner;
 use crate::file_edit::{FileEdit, SaveFile};
 use crate::file_find::{FindBar, FindNext, FindPrevious};
 use crate::file_watch::FolderWatch;
@@ -21,7 +24,7 @@ use crate::{call, icons, style};
 use gpui_kit::base::{TestSupportExt as _, TextViewState, TextViewStyle};
 use gpui_kit::component::input::{Editor, EditorState};
 use gpui_kit::component::menu::{DropdownMenu, PopupMenu, PopupMenuItem};
-use gpui_kit::component::{h_flex, spinner::Spinner, v_flex, ActiveTheme as _, Selectable, Sizable as _};
+use gpui_kit::component::{h_flex, v_flex, ActiveTheme as _, Selectable, Sizable as _};
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 // Shadows gpui's px, so sizes here follow the app's zoom (style.rs).
@@ -78,11 +81,14 @@ pub(crate) struct OpenFile {
     _file_watch: Option<FolderWatch>,
     /// The read that follows a change, once its burst settles.
     _reread: Option<Task<()>>,
+    /// Its folder heard it change while another thread was showing, so the
+    /// read was put off: coming back reads it again (`load_file`).
+    pub changed_away: bool,
 }
 
 impl OpenFile {
     fn new(path: String, opened: u64, body: FileBody) -> Self {
-        OpenFile { path, opened, body, truncated: false, size: 0, find: None, edit: None, page_scroll: ScrollHandle::new(), _page_watch: None, _file_watch: None, _reread: None }
+        OpenFile { path, opened, body, truncated: false, size: 0, find: None, edit: None, page_scroll: ScrollHandle::new(), _page_watch: None, _file_watch: None, _reread: None, changed_away: false }
     }
 
     /// The raw text's editor, while it's showing.
@@ -104,7 +110,7 @@ pub(crate) struct FilesState {
     known_folders: HashSet<String>,
     /// The pane's own text style, built once per appearance.
     /// Keyed by appearance and zoom, as `rows`' is.
-    reading_style: Option<((bool, u32), TextViewStyle)>,
+    reading_style: Option<(crate::style::ReadingStyleKey, TextViewStyle)>,
     /// How files and folders show, remembered across launches.
     pub(crate) prefs: FilePrefs,
     /// What was last looked for, which the next ⌘F starts with, as AppKit's
@@ -145,10 +151,42 @@ pub(crate) enum FileBody {
     /// (media_view.rs). Nothing's read for it here: the view reads the real
     /// file the open gate found, as it's made.
     Media(crate::media_view::Kind),
+    /// A local web page on this Mac, sealed in the web runtime (web_panels.rs
+    /// `local_page`): it reads only itself and the assets it names, never the
+    /// network, with its scripts off unless Mike chose Run them for these
+    /// bytes (`LocalPagePreview`).
+    Page(LocalPage),
+}
+
+/// A local page's file, and what the scan of it found.
+#[derive(Clone, Debug)]
+pub(crate) struct LocalPage {
+    /// The real file the open gate found, symlinks followed.
+    pub real: String,
+    /// Whether it has scripts, and the digest of the bytes scanned; None
+    /// until the scan's back (or a file that couldn't be scanned).
+    pub scan: Option<(bool, String)>,
+    /// Mike chose Run them for these bytes (`ScriptConsent`).
+    pub allowed: bool,
+}
+
+impl LocalPage {
+    /// The digest its scripts run for, while they're allowed.
+    pub(crate) fn scripts_for(&self) -> Option<&str> {
+        match &self.scan {
+            Some((true, digest)) if self.allowed => Some(digest),
+            _ => None,
+        }
+    }
+
+    /// Whether the bar asking to run its scripts shows.
+    pub(crate) fn asks(&self) -> bool {
+        matches!(&self.scan, Some((true, _))) && !self.allowed
+    }
 }
 
 /// Which of the system's views a file in the pane shows in, by its name: a
-/// video or a PDF, on a Mac. None elsewhere, where they open in their app.
+/// video, PDF or document thumbnail, on a Mac. None elsewhere, where they open in their app.
 pub(crate) fn media_kind(path: &str) -> Option<crate::media_view::Kind> {
     use crate::media_view::Kind;
     use threadbear_core::open_policy::Media;
@@ -158,6 +196,7 @@ pub(crate) fn media_kind(path: &str) -> Option<crate::media_view::Kind> {
     threadbear_core::open_policy::media_kind(path).map(|m| match m {
         Media::Video => Kind::PaneVideo,
         Media::Pdf => Kind::PaneDocument,
+        Media::Office => Kind::PaneQuickLook,
     })
 }
 
@@ -171,7 +210,8 @@ pub(crate) fn media_key(thread_id: &str, path: &str, opened: u64) -> String {
 /// has to be placed every frame (shell.rs draws the pane uncached then).
 pub(crate) fn shows_media(side: &SidePane, thread_id: &str) -> bool {
     let Some(path) = side.previews.get(thread_id).and_then(|p| p.file_path()) else { return false };
-    side.files.open.get(thread_id).is_some_and(|f| f.path == path && matches!(f.body, FileBody::Media(_)))
+    // A local page's view is placed every frame too (web_panels.rs).
+    side.files.open.get(thread_id).is_some_and(|f| f.path == path && matches!(f.body, FileBody::Media(_) | FileBody::Page(_)))
 }
 
 /// An image's format from its name, for the kit's decoder.
@@ -213,10 +253,10 @@ pub(crate) fn home_dir() -> String {
     std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE")).unwrap_or_default()
 }
 
-/// A web page in the browser (the panel page is later work). Only http and
-/// https: anything else is refused by the open gate, said so.
+/// A web page in the browser, or an agent's BrowserBear tab already on it.
+/// Only http and https: anything else is refused by the open gate, said so.
 pub(crate) fn open_web(url: &str, cx: &mut App) {
-    crate::open_gate::open_web(url, cx);
+    crate::open_gate::open_web_page(url, cx);
 }
 
 /// A file on this runner in its own app, through the open gate: a document
@@ -322,13 +362,9 @@ impl SidePane {
                     self.files.open.insert(thread.id.clone(), OpenFile::new(path.clone(), preview.opened, FileBody::Opaque { note }));
                     cx.notify();
                 }
-                // The real file, after its symlinks: a page named .html that's
-                // really something else asks first, as any file does.
-                Viewer::Web => {
-                    open_file_in_app(path, crate::open_gate::Origin::ThisMac, cx);
-                    self.previews.remove(&thread.id);
-                    cx.notify();
-                }
+                // Sealed in the pane, if the open gate's rule for pages lets it
+                // (this Mac's own, a real page after its symlinks).
+                Viewer::Web => self.show_local_page(thread, path, preview.opened, cx),
                 _ if media_kind(path).is_some() => self.show_media_file(thread, path, preview.opened, cx),
                 _ => self.load_file(thread, path.clone(), preview.opened, cx),
             },
@@ -339,6 +375,80 @@ impl SidePane {
             }
             Target::Folder(_) => self.load_folder_for_preview(thread, cx),
         }
+    }
+
+    /// A local web page: checked by the gate, then scanned off the main
+    /// thread for scripts and its digest, which decide the bar over it and
+    /// whether Run them was already chosen for these bytes.
+    fn show_local_page(&mut self, thread: &ThreadSummary, path: &str, opened: u64, cx: &mut Context<Self>) {
+        if self.files.open.get(&thread.id).is_some_and(|f| f.path == path && f.opened == opened) {
+            return;
+        }
+        let real = match threadbear_core::local_preview::decide_page(path, crate::open_gate::Origin::ThisMac) {
+            Ok(real) => real,
+            Err(note) => {
+                self.files.open.insert(thread.id.clone(), OpenFile::new(path.to_owned(), opened, FileBody::Opaque { note }));
+                cx.notify();
+                return;
+            }
+        };
+        let page = LocalPage { real: real.to_string_lossy().into_owned(), scan: None, allowed: false };
+        self.files.open.insert(thread.id.clone(), OpenFile::new(path.to_owned(), opened, FileBody::Page(page)));
+        cx.notify();
+        let (thread_id, path) = (thread.id.clone(), path.to_owned());
+        cx.spawn(async move |this, cx| {
+            let found = cx.background_executor().spawn(async move { threadbear_core::local_preview::scan(&real) }).await;
+            this.update(cx, |pane, cx| {
+                // The pane may have moved on, or opened it again since.
+                let Some(open) = pane.files.open.get_mut(&thread_id).filter(|f| f.path == path && f.opened == opened) else { return };
+                if let FileBody::Page(page) = &mut open.body {
+                    page.allowed = found.as_ref().is_some_and(|(scripts, digest)| *scripts && crate::prefs::load().preview_scripts.allows(&page.real, digest));
+                    page.scan = found;
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Run them: these bytes of this page may run their scripts, from now
+    /// until the file changes; it loads again with them on.
+    pub(crate) fn run_page_scripts(&mut self, thread_id: &str, cx: &mut Context<Self>) {
+        let Some(open) = self.files.open.get_mut(thread_id) else { return };
+        let FileBody::Page(page) = &mut open.body else { return };
+        let Some((true, digest)) = page.scan.clone() else { return };
+        let mut prefs = crate::prefs::load();
+        prefs.preview_scripts.allow(&page.real, &digest);
+        crate::prefs::save(&prefs);
+        page.allowed = true;
+        cx.notify();
+    }
+
+    /// The bar over a page with scripts that aren't running
+    /// (`LocalPagePreview`): what it is, why, and Run them.
+    fn scripts_bar(&self, thread_id: &str, p: Palette, cx: &mut Context<Self>) -> AnyElement {
+        use threadbear_core::local_preview::words;
+        let thread_id = thread_id.to_owned();
+        let run = cx.listener(move |this, _: &ClickEvent, _, cx| this.run_page_scripts(&thread_id, cx));
+        v_flex()
+            .flex_none()
+            .w_full()
+            .child(
+                h_flex()
+                    .id("hl-page-scripts")
+                    .w_full()
+                    .px(px(10.))
+                    .py(px(6.))
+                    .gap(px(6.))
+                    .items_center()
+                    .child(div().text_size(px(style::size::SMALL)).text_color(p.secondary).child(words::HAS_SCRIPTS))
+                    .child(crate::highlights::tipped_as(div().id("hl-page-scripts-why").flex_none().child(crate::highlights::icon("info.circle", 11., p.faint)), words::EXPLANATION, gpui_kit::Role::Image))
+                    .child(div().flex_1())
+                    .child(crate::push_button::PushButton::new("hl-page-run", words::RUN_THEM, words::RUN_THEM_TIP).render(cx, run)),
+            )
+            .child(div().h(px(1.)).w_full().bg(p.hairline))
+            .into_any_element()
     }
 
     /// A video or a PDF: in the system's view over the pane, made as it's
@@ -360,9 +470,13 @@ impl SidePane {
 
     fn load_file(&mut self, thread: &ThreadSummary, path: String, opened: u64, cx: &mut Context<Self>) {
         // The same open again (a repaint, a re-select) reads nothing new;
-        // opening it again from a row does (`opened` moved).
-        if self.files.open.get(&thread.id).is_some_and(|f| f.path == path && f.opened == opened) {
-            return;
+        // opening it again from a row does (`opened` moved), and so does
+        // coming back to a thread whose file changed while it was away.
+        if let Some(open) = self.files.open.get_mut(&thread.id).filter(|f| f.path == path && f.opened == opened) {
+            if !open.changed_away {
+                return;
+            }
+            open.changed_away = false;
         }
         self.read_file(thread, path, opened, cx);
     }
@@ -370,7 +484,15 @@ impl SidePane {
     /// The file showing, read again where it is: its folder heard it change,
     /// or its own text was put away (Done).
     pub(crate) fn reread_file(&mut self, thread_id: &str, cx: &mut Context<Self>) {
-        let Some(thread) = self.thread(cx).filter(|t| t.id == thread_id) else { return };
+        // Another thread is showing: read it when this one's back, rather
+        // than never (13 Nov 2026, the implicit state machines scan: the
+        // preview kept an agent's rewrite out until it was opened again).
+        let Some(thread) = self.thread(cx).filter(|t| t.id == thread_id) else {
+            if let Some(open) = self.files.open.get_mut(thread_id) {
+                open.changed_away = true;
+            }
+            return;
+        };
         let Some((path, opened)) = self.files.open.get(thread_id).map(|f| (f.path.clone(), f.opened)) else { return };
         if self.previews.get(thread_id).and_then(|p| p.file_path()) != Some(path.as_str()) {
             return;
@@ -615,7 +737,7 @@ impl SidePane {
         let showing = if editing { MarkdownView::Markdown } else { MarkdownView::Preview };
         let tip = showing.tip();
         let side = cx.entity().downgrade();
-        let holder = crate::highlights::tipped(div().id("hl-markdown-view").flex_none(), tip);
+        let holder = crate::highlights::tipped_as(div().id("hl-markdown-view").flex_none(), tip, gpui_kit::Role::GenericContainer);
         let menu = ModeLabel::new("hl-markdown-view-label", showing.title(), p).dropdown_menu(move |menu: PopupMenu, _, _| {
             let mut menu = menu;
             for view in MarkdownView::ALL {
@@ -762,6 +884,19 @@ impl SidePane {
             FileBody::Loading => div().size_full().flex().items_center().justify_center().child(Spinner::new().with_size(px(14.)).color(p.secondary)).into_any_element(),
             FileBody::Failed { message } => pane_note(&failed_words(message), p).into_any_element(),
             FileBody::Opaque { note } => pane_note(note, p).into_any_element(),
+            FileBody::Page(page) => {
+                let page = page.clone();
+                let bar = page.asks().then(|| self.scripts_bar(&thread_id, p, cx));
+                // Until the scan's back nothing's made, so a page with scripts
+                // Mike already allowed doesn't load once without them first.
+                let body = if page.scan.is_none() {
+                    div().size_full().flex().items_center().justify_center().child(Spinner::new().with_size(px(14.)).color(p.secondary)).into_any_element()
+                } else {
+                    let main = self.app.upgrade().is_some_and(|app| app.read(cx).main_window == window.window_handle());
+                    crate::web_panels::local_page(&page.real, page.scripts_for(), open.opened, main, window, cx)
+                };
+                v_flex().id("hl-page").size_full().children(bar).child(div().flex_1().min_h_0().child(body)).into_any_element()
+            }
             FileBody::Media(kind) => {
                 let kind = *kind;
                 let origin = if thread.is_remote() { crate::open_gate::Origin::OtherMac } else { crate::open_gate::Origin::ThisMac };
@@ -810,7 +945,7 @@ impl SidePane {
                     .into_any_element()
             }
             FileBody::Markdown { doc, .. } => {
-                let key = (cx.theme().is_dark(), crate::style::zoom_percent());
+                let key = crate::style::reading_style_key(cx);
                 let style = match &self.files.reading_style {
                     Some((was, style)) if *was == key => style.clone(),
                     _ => {
@@ -973,6 +1108,16 @@ impl SidePane {
                         pane.insert("previewKind".into(), json!("note"));
                         pane.insert("previewText".into(), json!(note));
                     }
+                    // As the Swift pane says it: "web" and its path. GPUI's
+                    // own: whether its scripts run, and the bar's words.
+                    FileBody::Page(page) => {
+                        pane.insert("previewKind".into(), json!("web"));
+                        pane.insert("previewText".into(), json!(path));
+                        pane.insert("previewScripts".into(), json!(if page.scripts_for().is_some() { "on" } else { "off" }));
+                        if page.asks() {
+                            pane.insert("previewNote".into(), json!(threadbear_core::local_preview::words::HAS_SCRIPTS));
+                        }
+                    }
                     // As the Swift pane says it (FilePreviewView.debugShows):
                     // "video" with the film's size once its track has said;
                     // a PDF, its pages.
@@ -981,6 +1126,11 @@ impl SidePane {
                         if let Some(why) = crate::media_view::failure_of(&key) {
                             pane.insert("previewKind".into(), json!("note"));
                             pane.insert("previewText".into(), json!(why));
+                        } else if *kind == crate::media_view::Kind::PaneQuickLook {
+                            pane.insert("previewKind".into(), json!("quickLook"));
+                            if let Some(state) = crate::media_view::state_of(&key).filter(|s| !s.loading && s.width > 0. && s.height > 0.) {
+                                pane.insert("previewText".into(), json!(format!("Quick Look thumbnail {}x{}", state.width.round(), state.height.round())));
+                            }
                         } else if *kind == crate::media_view::Kind::PaneDocument {
                             pane.insert("previewKind".into(), json!("pdf"));
                             if let Some(state) = crate::media_view::state_of(&key).filter(|s| !s.loading) {
@@ -1036,6 +1186,16 @@ pub(crate) fn preview_command(side: &Entity<SidePane>, thread: &ThreadSummary, c
         let pane = side.read(cx);
         let key = pane.files.open.get(&thread.id).filter(|o| matches!(o.body, FileBody::Media(crate::media_view::Kind::PaneDocument))).map(|o| media_key(&thread.id, &o.path, o.opened));
         return if key.is_some_and(|k| crate::media_view::click_link(&k)) { Ok(json!("ok clicked")) } else { Err("no PDF with a link is showing".into()) };
+    }
+    if cmd["runScripts"].as_bool() == Some(true) {
+        // The bar's Run them over a local page with scripts.
+        let asks = side.read(cx).files.open.get(&thread.id).is_some_and(|o| matches!(&o.body, FileBody::Page(page) if page.asks()));
+        if !asks {
+            return Err("no page is asking to run its scripts".into());
+        }
+        let id = thread.id.clone();
+        side.update(cx, |pane, cx| pane.run_page_scripts(&id, cx));
+        return Ok(json!("ok running its scripts"));
     }
     if cmd["copyImage"].as_bool() == Some(true) {
         let format = side.update(cx, |pane, cx| pane.copy_open_picture(cx)).ok_or("no picture is showing")?;

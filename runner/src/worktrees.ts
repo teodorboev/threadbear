@@ -13,7 +13,7 @@ import type { WorktreePatch } from './patches.ts';
 import { inBackground } from './background.ts';
 import { mainCheckoutOf as linkedMainCheckout } from './patch-trust.ts';
 import { untrustedGitArgs } from './safe-git.ts';
-import { joinQueue, leaveQueue, queueDir, readEntry, setRunning, waiting, waitingLine, writeEntry, type QueueEntry } from './land-queue.ts';
+import { LAND_TIMES_FILE, joinQueue, leaveQueue, queueDir, readEntry, setRunning, waiting, waitingLine, writeEntry, type QueueEntry } from './land-queue.ts';
 
 // What a thread's record keeps about its worktree.
 export type WorktreeRecord = {
@@ -331,12 +331,37 @@ export type LandOptions = {
   // on main (land-gate.ts). Asked after the rebase, before the check, so a
   // held landing doesn't wait out a check first.
   hold?: (root: string, files: string[]) => Promise<string | undefined>;
+  // `tb land --despite-red`: this landing is the repair for what's red, so
+  // `hold` isn't asked about its own files. In the queue it's a fix: it
+  // goes first in any group check and the halving never leaves it out.
+  despiteRed?: boolean;
   // Where readCheck looks from, relative to the worktree's root (a
   // subfolder's patch can ask for its own check). Only landings that look
   // from the same place are checked together, so the check read on the
   // stack is the one each of them asks for.
   checkFrom?: string;
+  // The check hosts this landing asks for: THREADBEAR_CHECK_HOST if left out.
+  checkHost?: string;
 };
+
+// The hosts a landing asked for, as check.sh would take them (an ssh host
+// name each, comma-separated), or undefined for none.
+const HOST_NAME = /^[A-Za-z0-9][A-Za-z0-9._@-]*$/;
+function askedHosts(v: string | undefined): string[] {
+  return (v ?? '').split(',').map((h) => h.trim()).filter((h) => HOST_NAME.test(h));
+}
+// A group's check runs in the holder's tb, with the holder's environment, so
+// what the others asked for went nowhere: on 13 Nov a landing that set
+// THREADBEAR_CHECK_HOST=cloud to keep off Tinker Desk's long builds was
+// checked there, in another thread's group. Each entry keeps what its own
+// tb asked for, and the group's check gets them all, in line order after the
+// holder's, as THREADBEAR_CHECK_PREFER: scripts/check-remote.sh tries those
+// hosts first and keeps the rest of its list behind them, so a group that
+// needs a Mac still finds one.
+export function checkPreference(own: string | undefined, others: (string | undefined)[]): string | undefined {
+  const all = [...askedHosts(own), ...others.flatMap(askedHosts)];
+  return all.length ? [...new Set(all)].join(',') : undefined;
+}
 
 // How many lines of a failed check's output are shown.
 const CHECK_TAIL_LINES = 40;
@@ -363,7 +388,7 @@ export async function land(t: LandTarget, opts: LandOptions = {}): Promise<numbe
   }
   const common = path.resolve(t.path, commonRel);
   const gitDir = path.resolve(t.path, (await gitOut(t.path, ['rev-parse', '--git-dir'])) ?? commonRel);
-  const timesFile = path.join(common, 'threadbear-land-times.log');
+  const timesFile = path.join(common, LAND_TIMES_FILE);
   const asked = Date.now();
 
   // One tb land at a time in a worktree: it rebases before taking the
@@ -383,13 +408,14 @@ export async function land(t: LandTarget, opts: LandOptions = {}): Promise<numbe
   let entry: QueueEntry | undefined;
   let entryHeld: (() => Promise<void>) | undefined;
   try {
-    await recoverDetached(t, gitDir, out);
+    const unrecovered = await recoverDetached(t, gitDir, out, err);
+    if (unrecovered !== undefined) return unrecovered;
     await recoverLandedFor(t, common, out);
 
     // Refusals, and conflicts with main as it is now, come straight away
     // rather than after the wait. It's done again with the lock held, as
     // main will have moved.
-    const ready = await prepare(t, out, err, opts.hold);
+    const ready = await prepare(t, out, err, opts.despiteRed ? undefined : opts.hold);
     if (typeof ready === 'number') return ready;
 
     // A dry run, and a branch with a merge on it (it's merged with main,
@@ -400,7 +426,12 @@ export async function land(t: LandTarget, opts: LandOptions = {}): Promise<numbe
     if (!opts.dryRun && !ready.hasMerge) {
       try {
         const check = opts.readCheck ? await opts.readCheck() : t.check;
-        entry = joinQueue(common, { branch: t.branch, path: t.path, base: ready.base, commit: ready.commit, check: check ?? null, checkFrom: opts.checkFrom ?? '' });
+        const checkHost = askedHosts(opts.checkHost ?? process.env.THREADBEAR_CHECK_HOST).join(',');
+        entry = joinQueue(common, {
+          branch: t.branch, path: t.path, base: ready.base, commit: ready.commit, check: check ?? null, checkFrom: opts.checkFrom ?? '',
+          ...(checkHost ? { checkHost } : {}),
+          ...(opts.despiteRed ? { fix: true } : {}),
+        });
         entryHeld = await holdLock(entryLockFile(common, entry.id), false);
         if (!entryHeld) throw new Error('entry lock taken');
       } catch {
@@ -421,7 +452,7 @@ export async function land(t: LandTarget, opts: LandOptions = {}): Promise<numbe
       // An earlier tb of this branch, killed, may have landed while this one
       // waited.
       await recoverLandedFor(t, common, out);
-      return await landLocked(t, opts, { file: timesFile, waitedMs: Date.now() - asked }, common, gitDir, mine?.limit);
+      return await landLocked(t, opts, { file: timesFile, waitedMs: Date.now() - asked, entryId: entry?.id }, common, gitDir, mine?.limit === undefined ? undefined : { limit: mine.limit, at: mine.limitAt });
     } finally {
       await release();
     }
@@ -465,6 +496,12 @@ async function recoverLandedFor(t: LandTarget, common: string, out: (line: strin
   } catch {
     return;
   }
+  // A note left by an older tb land for a commit that landed as it was:
+  // the branch is already there.
+  if (landed === head) {
+    fs.rmSync(file, { force: true });
+    return;
+  }
   if ((await gitOut(t.path, ['rev-parse', '--abbrev-ref', 'HEAD'])) !== t.branch) return;
   if (!(await git(t.path, ['merge-base', '--is-ancestor', landed, `refs/heads/${MAIN}`])).ok) return;
   if ((await git(t.path, ['reset', '-q', '--keep', landed])).ok) {
@@ -490,6 +527,8 @@ async function moveGoneBranch(e: QueueEntry, landed: string): Promise<void> {
     if ((await gitOut(e.path, ['rev-parse', 'HEAD'])) === e.commit &&
         (await gitOut(e.path, ['rev-parse', '--abbrev-ref', 'HEAD'])) === e.branch &&
         (await gitOut(e.path, ['status', '--porcelain', '--untracked-files=all'])) === '') {
+      // The note stays: another worktree on the same commit may still need
+      // it (Codex's review, 13 Nov). Old ones go after a week.
       await git(e.path, ['reset', '-q', '--keep', landed]);
     }
   } finally {
@@ -521,25 +560,101 @@ async function ownerWaiting(common: string, e: QueueEntry): Promise<boolean> {
 // running: it holds the worktree's lock) puts the branch back.
 const detachedMarker = (gitDir: string): string => path.join(gitDir, 'threadbear-land-checking.json');
 
-async function recoverDetached(t: LandTarget, gitDir: string, out: (line: string) => void): Promise<void> {
-  let m: { branch?: string; own?: string } | undefined;
+// Back on the branch from a group check's detached HEAD, `top` (the stack).
+// Commits made there meanwhile go onto the branch first, as a rebase would
+// carry them: on 13 Nov an agent committed its fix there while its group
+// check ran, the next tb land checked the branch out, and the fix was left
+// on no branch at all, silently, so the same check failed again. One that
+// won't go on cleanly leaves HEAD where it is and says how to keep them.
+// `top` is unknown only in a marker from before it was written down.
+async function leaveStack(t: LandTarget, gitDir: string, own: string, top: string | undefined): Promise<{ ok: true; carried?: string } | { ok: false; reason: string }> {
+  const head = await gitOut(t.path, ['rev-parse', 'HEAD']);
+  const detached = (await gitOut(t.path, ['rev-parse', '--abbrev-ref', 'HEAD'])) === 'HEAD';
+  if (!detached || !head) {
+    const back = await git(t.path, ['checkout', '-q', t.branch]);
+    return back.ok ? { ok: true } : { ok: false, reason: `${t.branch} couldn't be checked out in ${t.path}: ${firstLine(back.stderr || back.stdout)}` };
+  }
+  // A marker from before `top` was written down can't tell the stack from
+  // commits made on it, so it never checks out over them (Codex, 13 Nov).
+  if (!top) {
+    return { ok: false, reason: `HEAD in ${t.path} is detached at ${head.slice(0, 9)}, and tb land can't tell whether commits were made on it. If any are yours, keep them (git log there, then git cherry-pick them onto ${t.branch}); then git checkout ${t.branch} there and run tb land again.` };
+  }
+  // The checkout, only from `from`: HEAD is read again just before, and the
+  // reflog after says what it really moved from, as a commit can be made
+  // in between (Codex, 13 Nov).
+  const checkoutFrom = async (from: string, carried?: string): Promise<{ ok: true; carried?: string } | { ok: false; reason: string }> => {
+    const pre = carried ? `${carried}\nBut ` : '';
+    const now = await gitOut(t.path, ['rev-parse', 'HEAD']);
+    if (now !== from) {
+      return { ok: false, reason: `${pre}HEAD in ${t.path} moved to ${now?.slice(0, 9) ?? '?'} while tb land was putting ${t.branch} back, so it's left there. Keep anything of yours on it (git cherry-pick ${from.slice(0, 9)}..${now?.slice(0, 9) ?? 'HEAD'} onto ${t.branch}), then git checkout ${t.branch} and run tb land again.` };
+    }
+    const back = await git(t.path, ['checkout', '-q', t.branch]);
+    if (!back.ok) return { ok: false, reason: `${pre}${t.branch} couldn't be checked out in ${t.path}: ${firstLine(back.stderr || back.stdout)}. Check it out there, then run tb land again.` };
+    // This checkout's own entry, not whatever is newest by now (a hook's
+    // commit after it, say): detached, git names where it moved from in full.
+    const log = (await gitOut(t.path, ['reflog', 'show', '-n', '20', '--format=%gs', 'HEAD'])) ?? '';
+    const left = /^checkout: moving from ([0-9a-f]{40,}) to /m.exec(log)?.[1];
+    if (left !== from) {
+      return { ok: false, reason: `${pre}A commit was made in ${t.path} just as ${t.branch} was checked out again, and it's on no branch now: ${left?.slice(0, 9) ?? 'see git reflog'}. Keep it with git cherry-pick ${from.slice(0, 9)}..${left?.slice(0, 9) ?? '<it>'}, then run tb land again.` };
+    }
+    return { ok: true, ...(carried ? { carried } : {}) };
+  };
+  if (head === top) return checkoutFrom(head);
+  const keep = `Nothing was moved, so they're safe where HEAD is. To keep them: git checkout ${t.branch}, then git cherry-pick ${top.slice(0, 9)}..${head.slice(0, 9)} in ${t.path}, then run tb land again.`;
+  const made = (await git(t.path, ['merge-base', '--is-ancestor', top, head])).ok
+    ? await gitOut(t.path, ['rev-list', '--reverse', `${top}..${head}`])
+    : undefined;
+  if (made === undefined) {
+    return { ok: false, reason: `HEAD in ${t.path} was moved off the checked group (${top.slice(0, 9)}) to ${head.slice(0, 9)} while tb land had it, so ${t.branch} wasn't checked out again, in case that has work of yours on it. Check out ${t.branch} there when it's safe, then run tb land again.` };
+  }
+  const list = made.split('\n').filter(Boolean);
+  const merges = await gitOut(t.path, ['rev-list', '--merges', `${top}..${head}`]);
+  const tip = merges === '' ? await pick(t.path, list, own) : undefined;
+  const ids = (await gitOut(t.path, ['log', '--oneline', '--no-decorate', `${top}..${head}`])) ?? list.join('\n');
+  if (!tip) {
+    return { ok: false, reason: [`Commits were made in ${t.path} on top of the checked group, which isn't ${t.branch}, and they don't go onto ${t.branch} cleanly:`, ...ids.split('\n').map((l) => `  ${l}`), keep].join('\n') };
+  }
+  if (!(await git(t.path, ['update-ref', `refs/heads/${t.branch}`, tip, own])).ok) {
+    return { ok: false, reason: [`Commits were made in ${t.path} on top of the checked group, and ${t.branch} couldn't be moved to take them:`, ...ids.split('\n').map((l) => `  ${l}`), keep].join('\n') };
+  }
+  // Those are on the branch now: if the checkout below stops, the next tb
+  // land carries only what's past `head` (Codex, 13 Nov).
+  try {
+    if (fs.existsSync(detachedMarker(gitDir))) fs.writeFileSync(detachedMarker(gitDir), JSON.stringify({ branch: t.branch, own: tip, top: head }));
+  } catch {
+    // Then the next one stops and says what to keep, as with an old marker.
+  }
+  return checkoutFrom(head, `Commits made on the checked group while tb land had this worktree were moved onto ${t.branch}, as the group itself isn't yours to land:\n${ids.split('\n').map((l) => `  ${l}`).join('\n')}`);
+}
+
+// A number is the exit code to stop with: the branch couldn't be put back.
+async function recoverDetached(t: LandTarget, gitDir: string, out: (line: string) => void, err: (line: string) => void): Promise<number | undefined> {
+  let m: { branch?: string; own?: string; top?: string } | undefined;
   try {
     m = JSON.parse(fs.readFileSync(detachedMarker(gitDir), 'utf8'));
   } catch {
-    return;
+    return undefined;
   }
-  if (m?.branch === t.branch &&
+  if (m?.branch === t.branch && m.own &&
       (await gitOut(t.path, ['rev-parse', '--abbrev-ref', 'HEAD'])) === 'HEAD' &&
-      (await gitOut(t.path, ['rev-parse', t.branch])) === m.own &&
-      (await git(t.path, ['checkout', '-q', t.branch])).ok) {
-    out(`An earlier tb land was stopped during a check with others' work; ${t.branch} is checked out again as it was.`);
-    fs.rmSync(detachedMarker(gitDir), { force: true });
-    return;
+      (await gitOut(t.path, ['rev-parse', t.branch])) === m.own) {
+    const r = await leaveStack(t, gitDir, m.own, typeof m.top === 'string' ? m.top : undefined);
+    if (r.ok) {
+      out(`An earlier tb land was stopped during a check with others' work; ${t.branch} is checked out again${r.carried ? '.' : ' as it was.'}`);
+      if (r.carried) out(r.carried);
+      fs.rmSync(detachedMarker(gitDir), { force: true });
+      return undefined;
+    }
+    // Stop, keeping the marker, rather than land the branch without
+    // commits made on the stack.
+    err(`An earlier tb land was stopped during a check with others' work, and left HEAD detached at it. ${r.reason}`);
+    return 1;
   }
   // Only once it no longer applies: on the branch again, or the branch
   // moved on by hand. Kept while it could still put things back.
   const on = await gitOut(t.path, ['rev-parse', '--abbrev-ref', 'HEAD']);
   if (on !== 'HEAD' || (await gitOut(t.path, ['rev-parse', t.branch])) !== m?.own) fs.rmSync(detachedMarker(gitDir), { force: true });
+  return undefined;
 }
 
 // Another landing's check took this one with it. Its branch is moved to
@@ -634,8 +749,23 @@ export function parseCheckTimes(text: string): { host?: string; copySeconds?: nu
   for (const line of text.split('\n')) {
     const host = /^Checking on (\S+) \((?:copied in (\d+)s)?/.exec(line);
     if (host) {
+      // A run starting on a host: any steps before it are from a host that
+      // dropped out partway (check-remote.sh goes to the next), not this run's.
       found.host = host[1];
+      delete found.copySeconds;
       if (host[2] !== undefined) found.copySeconds = Number(host[2]);
+      found.steps = [];
+      last = undefined;
+      continue;
+    }
+    // No host could take it, so check.sh runs it here (its own words): the
+    // steps that follow weren't on a host, and the updater mustn't read
+    // them as if they were (update.ts, passedLandCheck).
+    if (/^So the checks run on this Mac instead\b/.test(line)) {
+      delete found.host;
+      delete found.copySeconds;
+      found.steps = [];
+      last = undefined;
       continue;
     }
     const step = /^(ok|FAIL|skip)\s+(\S.*?)\s+(?:(\d+)s\b|\()(.*)$/.exec(line);
@@ -791,6 +921,34 @@ async function holdFor(cwd: string, from: string, to: string, hold: NonNullable<
   return hold(cwd, changed.stdout.split('\0').filter(Boolean));
 }
 
+// Why a group's files can't land now: what each member's commits change
+// as they're stacked (replayed, so a fix that moved a file ahead of it is
+// followed to where the change really lands), and this one's on top,
+// except a fix's: that's the repair for what's red.
+async function groupHeld(
+  t: LandTarget,
+  main: string,
+  group: { entry: QueueEntry; tip: string }[],
+  top: string,
+  opts: LandOptions,
+): Promise<string | undefined> {
+  if (!opts.hold) return undefined;
+  const ranges: [string, string][] = [];
+  let prev = main;
+  for (const g of group) {
+    if (!g.entry.fix) ranges.push([prev, g.tip]);
+    prev = g.tip;
+  }
+  if (!opts.despiteRed) ranges.push([prev, top]);
+  const files = new Set<string>();
+  for (const [from, to] of ranges) {
+    const changed = await git(t.path, ['diff', '--name-only', '-z', `${from}..${to}`]);
+    if (!changed.ok) return `Couldn't read what ${to} changes in ${t.path}, so nothing landed. Run tb land again.`;
+    for (const f of changed.stdout.split('\0').filter(Boolean)) files.add(f);
+  }
+  return files.size ? opts.hold(t.path, [...files]) : undefined;
+}
+
 // `from..to`'s commits (first parent, no merges) made again on `onto`, as a
 // rebase would, without touching any working tree: a three-way merge of
 // each one's change (git merge-tree), then a commit with its author and
@@ -810,6 +968,12 @@ async function replay(cwd: string, from: string, to: string, onto: string): Prom
     if (line[0] === '=' && (await gitOut(cwd, ['rev-parse', `${c}^{tree}`])) !== (await gitOut(cwd, ['rev-parse', `${c}^^{tree}`]))) continue;
     list.push(c);
   }
+  return pick(cwd, list, onto);
+}
+
+// Commits `list`, oldest first, made again on `onto` without touching any
+// worktree, as rebase would; undefined if one doesn't go on cleanly.
+async function pick(cwd: string, list: string[], onto: string): Promise<string | undefined> {
   let tip = onto;
   for (const c of list) {
     const merged = await git(cwd, ['merge-tree', '--write-tree', `--merge-base=${c}^`, tip, c]);
@@ -844,14 +1008,25 @@ async function stackWaiting(
   limit: number,
   check: string | null,
   checkFrom: string,
+  withFixes = true,
+  includeOthers = true,
 ): Promise<{ tip: string; group: { entry: QueueEntry; tip: string; commits: string }[] }> {
   let tip = main;
   let cap = limit;
+  let counted = 0;
   const group: { entry: QueueEntry; tip: string; commits: string }[] = [];
-  for (const e of waiting(common)) {
+  // A fix (tb land --despite-red: the repair for a main that's red) goes
+  // first and isn't counted against the limit, so the halving never leaves
+  // it out. On 13 Nov a group behind a broken main was halved down three
+  // checks, each failing on main's own error, while the one-line repair
+  // waited behind it for a group of its own.
+  const all = waiting(common);
+  const ordered = withFixes ? [...all.filter((e) => e.fix), ...all.filter((e) => !e.fix)] : all.filter((e) => !e.fix);
+  for (const e of ordered) {
     if (e.pid === process.pid && e.path === t.path) continue; // this one
-    const c = Math.min(cap, e.limit ?? Infinity);
-    if (group.length + 2 > c) continue;
+    const c = e.fix ? Infinity : Math.min(cap, e.limit !== undefined && e.limitAt === main ? e.limit : Infinity);
+    if (!e.fix && counted + 2 > c) continue;
+    if (!e.fix && !includeOthers) continue;
     if (e.path === t.path || e.branch === t.branch) continue;
     if ((e.check ?? null) !== check || (e.checkFrom ?? '') !== checkFrom) continue;
     if (!(await ownerWaiting(common, e))) continue;
@@ -864,7 +1039,10 @@ async function stackWaiting(
     if (commits === undefined) continue;
     group.push({ entry: e, tip: next, commits });
     tip = next;
-    cap = c;
+    if (!e.fix) {
+      counted++;
+      cap = c;
+    }
   }
   return { tip, group };
 }
@@ -872,10 +1050,10 @@ async function stackWaiting(
 async function landLocked(
   t: LandTarget,
   opts: LandOptions,
-  times: { file: string; waitedMs: number },
+  times: { file: string; waitedMs: number; entryId?: string },
   common: string,
   gitDir: string,
-  startLimit: number | undefined,
+  startLimit: { limit: number; at?: string } | undefined,
 ): Promise<number> {
   const out = opts.out ?? ((l: string) => process.stdout.write(l + '\n'));
   const err = opts.err ?? ((l: string) => process.stderr.write(l + '\n'));
@@ -885,11 +1063,15 @@ async function landLocked(
   };
 
   // Steps 1 and 2 again: main has likely moved while this waited.
-  const ready = await prepare(t, out, err, opts.hold);
+  const ready = await prepare(t, out, err, opts.despiteRed ? undefined : opts.hold);
   if (typeof ready === 'number') return ready;
   const own = ready.commit;
   const main = ready.base;
-  let limit = startLimit ?? Infinity;
+  // A limit from a failed group check only holds while main is where it
+  // was: a failure on an old main (13 Nov: its own compile error) says
+  // nothing about a new one, and kept every later landing checked alone.
+  let limit = startLimit && startLimit.at === main ? startLimit.limit : Infinity;
+  let withFixes = true;
 
   for (;;) {
     // 3. The others waiting go on main first, then this branch on top. The
@@ -904,15 +1086,22 @@ async function landLocked(
     } catch (e) {
       return fail(`Couldn't read the repo's patches for its check: ${(e as Error).message}`);
     }
-    if (!opts.dryRun && !ready.hasMerge && limit > 1) {
-      const stacked = await stackWaiting(t, common, main, limit, check ?? null, opts.checkFrom ?? '');
+    if (!opts.dryRun && !ready.hasMerge) {
+      let stacked = await stackWaiting(t, common, main, limit, check ?? null, opts.checkFrom ?? '', withFixes);
+      let top = stacked.group.length ? await replay(t.path, main, own, stacked.tip) : undefined;
+      // Held on GitHub for what the others change (not a fix's, which is
+      // the repair): then only the fixes go with it, and the others go by
+      // themselves later, each hearing why. Still held with only the fixes
+      // (this one's own change, moved by one): it goes alone.
+      if (opts.hold && top && (await groupHeld(t, main, stacked.group, top, opts))) {
+        stacked = await stackWaiting(t, common, main, limit, check ?? null, opts.checkFrom ?? '', withFixes, false);
+        top = stacked.group.length ? await replay(t.path, main, own, stacked.tip) : undefined;
+        if (top && (await groupHeld(t, main, stacked.group, top, opts))) top = undefined;
+      }
       if (stacked.group.length) {
-        const top = await replay(t.path, main, own, stacked.tip);
-        // Held on GitHub for what the others change: they go by themselves
-        // later, and each hears why.
-        if (top && top !== stacked.tip && !(opts.hold && (await holdFor(t.path, main, top, opts.hold)))) {
+        if (top && top !== stacked.tip) {
           try {
-            fs.writeFileSync(detachedMarker(gitDir), JSON.stringify({ branch: t.branch, own }));
+            fs.writeFileSync(detachedMarker(gitDir), JSON.stringify({ branch: t.branch, own, top }));
           } catch {
             // Only recovery after a crash reads it.
           }
@@ -927,13 +1116,25 @@ async function landLocked(
     }
     const together = group.map((g) => g.entry.branch);
     // Back on the branch, as it was, after a group check that didn't land.
+    // Commits made on the stack meanwhile go onto the branch (leaveStack),
+    // and then this run stops rather than land without them: `carried`.
+    let stuck = `${t.path} is left with HEAD detached at the checked group; run git checkout ${t.branch} there.`;
+    let carried = false;
     const back = async (): Promise<boolean> => {
       if (!group.length) return true;
-      const ok = (await git(t.path, ['checkout', '-q', t.branch])).ok;
-      if (ok) fs.rmSync(detachedMarker(gitDir), { force: true });
-      return ok;
+      const r = await leaveStack(t, gitDir, own, checked);
+      if (!r.ok) {
+        stuck = r.reason;
+        return false;
+      }
+      fs.rmSync(detachedMarker(gitDir), { force: true });
+      if (r.carried) {
+        carried = true;
+        out(r.carried);
+      }
+      return true;
     };
-    const stuck = `${t.path} is left with HEAD detached at the checked group; run git checkout ${t.branch} there.`;
+    const committedMeanwhile = `Commits were made in ${t.path} while it was being checked, so nothing landed; they're on ${t.branch} now. Wait for tb land to finish before committing there, and run tb land again to land them.`;
 
     try {
       // The stack has the others' patches too, so read it again there.
@@ -946,9 +1147,26 @@ async function landLocked(
       out(group.length
         ? `Running the check, together with ${together.join(', ')}: ${check}`
         : `Running the check: ${check}`);
-      setRunning(common, { startedAt: Date.now(), branches: [t.branch, ...together] });
-      const r = await runCheck(check, t.path, opts.shell);
+      setRunning(common, {
+        startedAt: Date.now(), branches: [t.branch, ...together], pid: process.pid,
+        entries: [...(times.entryId ? [times.entryId] : []), ...group.map((g) => g.entry.id)],
+      });
+      const prefer = group.length
+        ? checkPreference(opts.checkHost ?? process.env.THREADBEAR_CHECK_HOST, group.map((g) => g.entry.checkHost))
+        : undefined;
+      // THREADBEAR_CHECK_GROUP says it's a group's check even when nobody
+      // asked for a host, so check.sh never takes the holder's own (an empty
+      // one would run everyone's check on this Mac; Codex's second review).
+      const r = await runCheck(check, t.path, opts.shell, group.length ? { THREADBEAR_CHECK_GROUP: '1', ...(prefer ? { THREADBEAR_CHECK_PREFER: prefer } : {}) } : {});
       setRunning(common, undefined);
+      // Whether the check ran on the commit it's logged for: asked before the
+      // line is written, as the runner's updater takes a passing line as
+      // proof for that commit (update.ts, landChecked), and a check of files
+      // edited meanwhile proves nothing about it (Codex, 13 Nov). The same
+      // questions are asked again below, where they stop the landing.
+      const intact = r.ok &&
+        (await gitOut(t.path, ['rev-parse', 'HEAD'])) === checked &&
+        (await gitOut(t.path, ['status', '--porcelain', '--untracked-files=all'])) === '';
       logCheckTimes(times.file, {
         at: new Date().toISOString(),
         branch: t.branch,
@@ -960,18 +1178,34 @@ async function landLocked(
         waitedSeconds: Math.round(times.waitedMs / 1000),
         ...(opts.dryRun ? { dryRun: true } : {}),
         ...parseCheckTimes(r.text),
+        // After what the check printed, so nothing it prints can be these.
+        check,
+        ...(intact ? { intact: true } : {}),
       });
       if (!r.ok && group.length) {
+        // Show the group's failure now: finding the individual landing can
+        // take several more checks, and its logs are already available.
+        out([
+          `The check failed with ${group.length + 1} landings together${r.code !== undefined ? ` (exit ${r.code})` : ''}, so ${MAIN} wasn't touched. The last lines of its output:`,
+          'Wait for tb land to finish before editing this worktree.',
+          '',
+          r.text.trimEnd().split('\n').slice(-CHECK_TAIL_LINES).join('\n').slice(-8000),
+        ].join('\n'));
         // One of them (or two together) broke it. Halve the group and go
         // again, this one with the first half; the rest wait their turn.
-        // Nothing's told it failed until it fails in a check of its own.
+        // No individual landing is refused until its own check fails.
         if (!(await back())) return fail(`The check failed with ${group.length + 1} landings together, so nothing landed. ${stuck}`);
-        limit = Math.ceil((group.length + 1) / 2);
+        if (carried) return fail(committedMeanwhile);
+        // Fixes always come along, so once it's down to this one and the
+        // fixes, the fixes are left out next, to see whose it is.
+        const counted = group.filter((g) => !g.entry.fix).length;
+        if (counted === 0) withFixes = false;
+        limit = Math.max(1, Math.ceil((counted + 1) / 2));
         for (const g of group) {
           const now = readEntry(common, g.entry.id);
-          if (now && !now.result) writeEntry(common, { ...now, limit: Math.min(now.limit ?? Infinity, limit) });
+          if (now && !now.result) writeEntry(common, { ...now, limit: Math.min(now.limitAt === main ? now.limit ?? Infinity : Infinity, limit), limitAt: main });
         }
-        out(`The check failed with ${group.length + 1} landings together, so ${MAIN} wasn't touched. Checking them in smaller groups to find which.`);
+        out('Checking them in smaller groups to find which.');
         continue;
       }
       if (!r.ok) {
@@ -992,7 +1226,10 @@ async function landLocked(
         (await gitOut(t.path, ['rev-parse', '--abbrev-ref', 'HEAD'])) !== (group.length ? 'HEAD' : t.branch) ||
         (await gitOut(t.path, ['status', '--porcelain', '--untracked-files=all'])) !== '') {
       if (group.length && (await gitOut(t.path, ['rev-parse', t.branch])) === own &&
-          (await gitOut(t.path, ['status', '--porcelain', '--untracked-files=all'])) === '') await back();
+          (await gitOut(t.path, ['status', '--porcelain', '--untracked-files=all'])) === '') {
+        if (!(await back())) return fail(`The branch or files in ${t.path} changed while the check ran, so nothing landed. ${stuck}`);
+        if (carried) return fail(committedMeanwhile);
+      }
       return fail(`The branch or files in ${t.path} changed while the check ran, so nothing landed.${group.length ? ` (The check was of ${t.branch} with ${together.join(', ')}; HEAD was detached at it, so check out ${t.branch} if it still is.)` : ''} Commit the changes and run tb land again.`);
     }
 
@@ -1010,6 +1247,7 @@ async function landLocked(
       }
       if (movedOn.length) {
         if (!(await back())) return fail(`${movedOn.join(', ')} stopped waiting and moved on during the check, so nothing landed. ${stuck}`);
+        if (carried) return fail(committedMeanwhile);
         out(`${movedOn.join(', ')} stopped waiting and moved on during the check, so it's checked again without ${movedOn.length > 1 ? 'them' : 'it'}.`);
         continue;
       }
@@ -1018,7 +1256,7 @@ async function landLocked(
     // Asked again now the check is done: a run that was going when it
     // started may have failed since. Others in the group wait their turn.
     if (opts.hold && !opts.dryRun) {
-      const held = await holdFor(t.path, main, checked, opts.hold);
+      const held = group.length ? await groupHeld(t, main, group, checked, opts) : opts.despiteRed ? undefined : await holdFor(t.path, main, checked, opts.hold);
       if (held) {
         if (!(await back())) err(stuck);
         return fail(held);
@@ -1078,14 +1316,24 @@ async function landLocked(
         // One whose tb has gone never hears: move its branch here, as it
         // would have, or its next tb land would land a commit made empty
         // on purpose a second time (rebase keeps those).
-        if (!(await ownerWaiting(common, g.entry))) {
+        // Not when it landed as it was (first in the stack, so rebased to
+        // the same commits, as happens within the same second): there's
+        // nothing to move, and a note from a commit to itself made its next
+        // tb land say it moved the branch (red on GitHub's Linux, 13 Nov).
+        if (g.tip !== g.entry.commit && !(await ownerWaiting(common, g.entry))) {
           writeLandedFor(common, g.entry.commit, g.tip);
           await moveGoneBranch(g.entry, g.tip);
         }
       }
-      const moved = (await git(t.path, ['update-ref', `refs/heads/${t.branch}`, checked, own])).ok &&
-        (await git(t.path, ['checkout', '-q', t.branch])).ok;
-      if (moved) fs.rmSync(detachedMarker(gitDir), { force: true });
+      // Through leaveStack, as a commit made since the check was looked at
+      // would otherwise be checked out away.
+      const moved = (await git(t.path, ['update-ref', `refs/heads/${t.branch}`, checked, own])).ok
+        ? await leaveStack(t, gitDir, checked, checked)
+        : undefined;
+      if (moved?.ok) {
+        fs.rmSync(detachedMarker(gitDir), { force: true });
+        if (moved.carried) out(moved.carried);
+      } else if (moved) err(`It landed, and ${t.branch} is on what landed. ${moved.reason}`);
       else err(`It landed, but ${t.branch} couldn't be moved to it in ${t.path}: HEAD is detached at what landed. Run git checkout ${t.branch} there and git reset --keep ${MAIN}.`);
       mine = (await gitOut(t.path, ['log', '--oneline', '--first-parent', `${group.at(-1)!.tip}..${checked}`])) ?? mine;
     }
@@ -1144,7 +1392,7 @@ export function overwrittenFiles(text: string): string[] {
 
 // Runs the check through a shell, keeping the end of its output (that's
 // where a test runner says what failed).
-function runCheck(command: string, cwd: string, shell = ['/bin/sh', '-c']): Promise<{ ok: boolean; code?: number; text: string; durationMs: number }> {
+function runCheck(command: string, cwd: string, shell = ['/bin/sh', '-c'], extraEnv: NodeJS.ProcessEnv = {}): Promise<{ ok: boolean; code?: number; text: string; durationMs: number }> {
   const started = Date.now();
   // At background priority: a land's check is the full quick suite.
   const [bin, args] = inBackground(shell[0], [...shell.slice(1), command]);
@@ -1155,7 +1403,11 @@ function runCheck(command: string, cwd: string, shell = ['/bin/sh', '-c']): Prom
       text += b.toString('utf8');
       if (text.length > keep * 2) text = text.slice(-keep);
     };
-    const child = spawn(bin, args, { cwd, env: process.env, stdio: ['ignore', 'pipe', 'pipe'] });
+    // Never one left over from whatever started this tb: only a group sets it.
+    const env: NodeJS.ProcessEnv = { ...process.env, ...extraEnv };
+    if (!extraEnv.THREADBEAR_CHECK_PREFER) delete env.THREADBEAR_CHECK_PREFER;
+    if (!extraEnv.THREADBEAR_CHECK_GROUP) delete env.THREADBEAR_CHECK_GROUP;
+    const child = spawn(bin, args, { cwd, env, stdio: ['ignore', 'pipe', 'pipe'] });
     child.stdout.on('data', take);
     child.stderr.on('data', take);
     child.on('error', (e) => resolve({ ok: false, text: `${text}\n${e.message}`, durationMs: Date.now() - started }));
@@ -1407,4 +1659,39 @@ export async function cleanUpWorktree(w: WorktreeRecord, stillOurs: () => boolea
     // Not empty, or gone.
   }
   return { removed: true };
+}
+
+// When a worktree has to stay after its thread is archived or deleted (work
+// that isn't on main, uncommitted changes), its build caches (the patch's
+// `keep`) go. Nothing else can use them: no other thread takes the folder
+// until its branch is landed or dropped, and only a spare's caches are
+// reused. On 13 Nov 2026 such slots held 39 GB of app builds on Mike's Mac,
+// and he asked for them to go once no thread can use them. A thread brought
+// back just builds again. Only while the folder is still this branch's own
+// checkout, and only real folders inside it, never through a link to
+// somewhere else. Each is renamed aside first, right after that check with
+// nothing awaited between, then deleted: deleting a gigabyte or two takes a
+// while, and the check can't hold for that long. Returns what went.
+export async function clearBuildCaches(w: WorktreeRecord): Promise<string[]> {
+  if (!w.keep?.length || !(await stillCheckedOut(w))) return [];
+  const cleared: string[] = [];
+  for (const k of w.keep) {
+    const rel = k.replace(/^\/+|\/+$/g, '');
+    if (!rel || rel.split('/').includes('..')) continue;
+    const here = worktreeFolderNow(w);
+    if (!here) break;
+    const dir = path.join(here, rel);
+    let aside: string;
+    try {
+      // A real folder, reached without a link anywhere in `rel`.
+      if (!fs.lstatSync(dir).isDirectory() || realpath(dir) !== dir) continue;
+      aside = path.join(here, `.threadbear-clearing-${rel.replace(/\//g, '-')}-${Date.now()}`);
+      fs.renameSync(dir, aside);
+    } catch {
+      continue;
+    }
+    cleared.push(rel);
+    await fs.promises.rm(aside, { recursive: true, force: true }).catch(() => undefined);
+  }
+  return cleared;
 }

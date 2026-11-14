@@ -11,4 +11,6 @@ crons.interval('prune old files', { hours: 6 }, internal.sync.pruneFiles, {});
 crons.interval('prune old tool output', { minutes: 15 }, internal.sync.pruneBodies, {});
 // Moves nobody answered, or frozen too long (moves.ts), and old ended ones.
 crons.interval('expire moves', { minutes: 5 }, internal.moves.expireMoves, {});
+// Pushes held for a Mac that went to sleep with Mike at it (sync.ts).
+crons.interval('send stale held pushes', { minutes: 2 }, internal.sync.sendStaleHeldPushes, {});
 export default crons;

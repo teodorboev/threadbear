@@ -21,6 +21,9 @@ import { GpuiDriver } from '../support/gpui.ts';
 import { sleep, type Dump } from '../support/driver.ts';
 import { startSites, stopSites } from '../support/web-pages.ts';
 import { assertInFront, windowFrame, work } from './real-screen.ts';
+import { ensurePerfLock } from './perf-lock.ts';
+
+await ensurePerfLock();
 
 const archive = process.env.TB_WEB_RUNTIME_ARCHIVE;
 if (!archive) throw new Error('TB_WEB_RUNTIME_ARCHIVE is the pinned web runtime archive');

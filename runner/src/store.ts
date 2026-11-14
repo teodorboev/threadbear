@@ -15,7 +15,7 @@ export type LabLedger = LabReviewLedger & { delivered?: number; answered?: numbe
 // A reviewer's verdict: its findings, none when nothing holds up.
 export type ReviewVerdict = { findings: Pick<ReviewFinding, 'severity' | 'claim' | 'where' | 'case'>[] };
 
-export type QueuedSend = { turnId: string; text: string; images: ImageRef[]; origin?: MessageOrigin; scheduleId?: string; reviewId?: string; reviewResponse?: ReviewDraft; answers?: AskAnswer[]; editOf?: number };
+export type QueuedSend = { scheduledSince?: number; turnId: string; text: string; images: ImageRef[]; origin?: MessageOrigin; scheduleId?: string; reviewId?: string; reviewResponse?: ReviewDraft; answers?: AskAnswer[]; editOf?: number };
 
 // What thread.json holds: the public summary fields plus a few internal ones.
 export type PressNote = { id: string; line: string; told?: { seq: number; inFlight?: boolean } };
@@ -53,8 +53,9 @@ export function cleanPresses(raw: unknown): PressNote[] | undefined {
 // summary and the start loop walk these for every thread: `presses: {}`,
 // then `queue: {}`, stopped the runner at every start (security review and
 // Muse's review of the fix, 11 Nov 2026, finding 96). True if it changed.
-const OBJECT_LISTS = ['waitingOn', 'reviews', 'buttons', 'subagents', 'projects', 'rewinds', 'queue'];
+const OBJECT_LISTS = ['waitingOn', 'reviews', 'buttons', 'subagents', 'projects', 'rewinds', 'queue', 'messageRecoveries'];
 const STRING_LISTS = ['reviewDeliveries', 'allowRules', 'pendingApprovals', 'projectsLeft', 'projectsTold'];
+const NUMBER_LISTS = ['interruptedMessages'];
 const OBJECTS = ['needs', 'looseEnds', 'stoppedWork', 'stoppedMidTurn', 'highlights', 'worktree', 'handoff', 'moved', 'startedBy', 'labReview', 'labReviewOwed', 'reviewVerdict', 'finished'];
 const NESTED: [string, string, 'object' | 'string' | 'number'][] = [
   ['needs', 'asks', 'object'],
@@ -76,7 +77,7 @@ function listOf(v: unknown, kind: 'object' | 'string' | 'number'): unknown[] | u
 export function normaliseRecord(rec: Record<string, unknown>): boolean {
   const before = JSON.stringify(rec);
   for (const k of OBJECTS) if (rec[k] !== undefined && !isObject(rec[k])) delete rec[k];
-  for (const [k, kind] of [...OBJECT_LISTS.map((k) => [k, 'object'] as const), ...STRING_LISTS.map((k) => [k, 'string'] as const)]) {
+  for (const [k, kind] of [...OBJECT_LISTS.map((k) => [k, 'object'] as const), ...STRING_LISTS.map((k) => [k, 'string'] as const), ...NUMBER_LISTS.map((k) => [k, 'number'] as const)]) {
     if (rec[k] === undefined) continue;
     const list = listOf(rec[k], kind);
     if (list) rec[k] = list;
@@ -98,7 +99,12 @@ export function normaliseRecord(rec: Record<string, unknown>): boolean {
   if (isObject(rec.labReview) && !(typeof rec.labReview.rounds === 'number' && Array.isArray(rec.labReview.findings))) delete rec.labReview;
   if (isObject(rec.highlights) && !(Array.isArray(rec.highlights.items) && Array.isArray(rec.highlights.edited))) delete rec.highlights;
   // A wait is on a thread, by its id.
-  if (Array.isArray(rec.waitingOn)) rec.waitingOn = rec.waitingOn.filter((w) => typeof w.threadId === 'string' && typeof (w.title ?? '') === 'string' && (w.done === undefined || (isObject(w.done) && typeof (w.done.reply ?? '') === 'string' && typeof (w.done.why ?? '') === 'string')));
+  if (Array.isArray(rec.waitingOn)) {
+    const waits = rec.waitingOn.filter((w) => typeof w.threadId === 'string' && typeof (w.title ?? '') === 'string' && (w.done === undefined || (isObject(w.done) && typeof (w.done.reply ?? '') === 'string' && typeof (w.done.why ?? '') === 'string')));
+    rec.waitingOn = waits;
+    // A `by` that isn't one is dropped, and the wait counts as from the least (hibernation.ts, mayHear).
+    for (const w of waits) if (w.by !== undefined && !(isObject(w.by) && ['ask', 'plan', 'auto', 'full'].includes(w.by.mode) && typeof w.by.confined === 'boolean')) delete w.by;
+  }
   // What it said last, which a wait on it carries.
   if (isObject(rec.finished) && rec.finished.reply !== undefined && typeof rec.finished.reply !== 'string') delete rec.finished.reply;
   if (isObject(rec.reviewVerdict) && !Array.isArray(rec.reviewVerdict.findings)) delete rec.reviewVerdict;
@@ -173,13 +179,20 @@ export type ThreadRecord = {
   snoozedUntilRestart?: boolean; // snoozedUntil is UNTIL_RESTART; start() wakes it
   untilRelease?: string; // with snoozedUntilRestart: only a start on another release wakes it
   wakeWhen?: WakeWhen; // hibernated in Mike's words (wake-when.ts)
+  // An agent's wait for something to happen (WakeWhen.by) that woke it to
+  // check: which threads it woke from, at what seq. Kept through the wake so
+  // a snooze again with the same words isn't woken again by the same claim
+  // until that thread says more (Codex's review, 13 Nov 2026).
+  wakeChecked?: { said: string; from: Record<string, number> };
   // Hibernating until these threads finish (end_turn's waitFor,
   // runner/hibernation.ts): each counts once it has finished (with no new
   // work since), been archived or been deleted.
   // `until`: waits for something in particular, which the librarian
   // judges from its looks at that thread (met), not for any finish.
   // `review`: the thread is a review of this one's change (runner/lab-review.ts).
-  waitingOn?: { threadId: string; title: string; until?: string; review?: true; quiet?: true; done?: { at: string; how: 'finished' | 'met' | 'archived' | 'deleted'; reply?: string; why?: string } }[];
+  // `by`: the waiting thread's access when it said to wait (hibernation.ts,
+  // mayHear): what it asked to hear isn't passed on once it has more.
+  waitingOn?: { threadId: string; title: string; until?: string; review?: true; quiet?: true; by?: { mode: PermissionMode; confined: boolean }; done?: { at: string; how: 'finished' | 'met' | 'archived' | 'deleted'; reply?: string; why?: string } }[];
   // Its last finished turn (nothing needed, nothing left running) and that
   // turn's reply, for threads waiting on it, including on a runner it
   // moves to (runner/hibernation.ts, reconcileWaits). Cleared by any new
@@ -244,8 +257,9 @@ export type ThreadRecord = {
   forceUnread?: boolean; // set when a snooze ends
   // What the last completed turn said it needs from Mike, with the seq of
   // its turn.completed and which of its asks he has ticked.
-  // open: what the agent said is still open (experiment looseEnds).
-  needs?: { seq: number; needs: NeedsWho; asks?: Ask[]; ticked?: number[]; open?: string[] };
+  // (A record from 11 to 13 Nov 2026 may also hold `open`, the agent's own
+  // lines for the done card: nothing reads it now.)
+  needs?: { seq: number; needs: NeedsWho; asks?: Ask[]; ticked?: number[] };
   // Set when the folder or account changes, or the record had to be
   // rebuilt; the next turn starts a new native session with a note.
   // lost: the session to resume couldn't be found (never saved; only set
@@ -257,6 +271,10 @@ export type ThreadRecord = {
   sample?: true; // one of the tour's sample threads (Runner.samples): made up, never sent to
   allowRules?: string[]; // "Always allow" rules, in the CLI's syntax
   queue: QueuedSend[];
+  // User message seqs in the event log, saved by an early Stop for the next send.
+  interruptedMessages?: number[];
+  // Which ordinary message carried saved rows, so an edit can undo delivery.
+  messageRecoveries?: { seq: number; messages: number[] }[];
   pendingApprovals: string[];
   turnId?: string; // turn in progress when the record was saved
   titleSet?: boolean;
@@ -304,6 +322,12 @@ export type ThreadRecord = {
   // its title doesn't say ("dentist" for a wisdom tooth appointment).
   // "" once a look or the keyword sweep found none, so the sweep moves on.
   keywords?: string;
+  // Open threads that may be doing the same work, found as it was made
+  // (same-work.ts), for its first session's instructions. Gone once a
+  // turn has completed.
+  sameWork?: string;
+  // The threads that note names, checked again as it's told.
+  sameWorkIds?: string[];
   // show_panel's request, until the app shows it or Mike sends a message.
   panelRequest?: PanelRequest;
   // The seq ranges edits of earlier messages cut out of the conversation

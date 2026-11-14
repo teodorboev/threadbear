@@ -27,6 +27,9 @@ export class FolderCache {
   private mtimes = new Map<string, Entry<number | undefined>>();
   private texts = new Map<string, Entry<string | undefined>>();
   private loading = new Map<string, Promise<unknown>>();
+  // Bumped by clear(): a read started before it is answered to whoever
+  // waits, but not kept, as it may be from before the change that cleared.
+  private generation = 0;
   private ttlMs: number;
   private now: () => number;
 
@@ -38,8 +41,11 @@ export class FolderCache {
     this.now = now;
   }
 
-  // Forgets everything: the next reads go to the disk.
+  // Forgets everything: the next reads go to the disk, including any
+  // already going, which aren't kept when they land.
   clear(): void {
+    this.generation++;
+    this.loading.clear();
     this.listings.clear();
     this.kinds.clear();
     this.mtimes.clear();
@@ -142,6 +148,7 @@ export class FolderCache {
   private async load<T>(map: Map<string, Entry<T>>, prefix: string, key: string, read: () => Promise<T>): Promise<void> {
     if (this.fresh(map.get(key))) return;
     const id = prefix + key;
+    const generation = this.generation;
     let pending = this.loading.get(id) as Promise<T> | undefined;
     if (!pending) {
       pending = read();
@@ -149,9 +156,10 @@ export class FolderCache {
     }
     try {
       const value = await pending;
-      map.set(key, { at: this.now(), value });
+      if (this.generation === generation) map.set(key, { at: this.now(), value });
     } finally {
-      this.loading.delete(id);
+      // Only its own: after a clear another read may have this id.
+      if (this.loading.get(id) === pending) this.loading.delete(id);
     }
   }
 }

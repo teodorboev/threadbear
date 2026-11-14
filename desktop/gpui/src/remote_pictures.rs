@@ -130,6 +130,6 @@ pub(crate) fn tile_point_command(app: &Entity<crate::app::Threadbear>, cmd: &ser
     window.render_frame(cx);
     // A tile's label is its file's name (rows/images.rs).
     let tile = window.find_all_by_label(&name).into_iter().filter(|e| e.visible()).last().ok_or("that picture isn't on screen")?;
-    let at = tile.bounds().center();
-    Ok(json!(format!("ok {} {} {name}", f32::from(at.x).round(), f32::from(at.y).round())))
+    let (x, y) = crate::automation::whole_point(tile.visible_bounds()).ok_or("that picture isn't on screen")?;
+    Ok(json!(format!("ok {x} {y} {name}")))
 }

@@ -12,9 +12,6 @@ struct AsksCard: View {
     /// Its answer is on its way: spinning, and nothing more to press.
     var busy: Bool
     var send: () -> Void
-    /// Run on an ask's command, and which of them are on their way.
-    var run: (PhoneAskRun) -> Void = { _ in }
-    var pressingRuns: Set<String> = []
     /// Goes up with each pick, for its tick. Not the picks themselves, which a
     /// new card clears.
     @State private var pickTaps = 0
@@ -56,7 +53,6 @@ struct AsksCard: View {
                     .textSelection(.enabled)
                     .foregroundStyle(ticked ? .secondary : .primary)
             }
-            if !ticked, let run = ask.run { runView(run) }
             if !ticked, ask.hasNotes {
                 // Each answer says what it does: rows, the note under its
                 // label, as the Mac draws them; links in a row above.
@@ -77,37 +73,6 @@ struct AsksCard: View {
                 }
                 .controlSize(.small)
             }
-        }
-    }
-
-    /// The whole command, as it's what the press agrees to; where it runs;
-    /// and Run, which spins and takes no more taps while it's going.
-    private func runView(_ run: PhoneAskRun) -> some View {
-        let going = run.running == true || pressingRuns.contains(run.buttonId)
-        return VStack(alignment: .leading, spacing: 6) {
-            Text(run.command)
-                .font(.system(.footnote, design: .monospaced))
-                .textSelection(.enabled)
-                .padding(10)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(Color(.tertiarySystemBackground), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-            if let cwd = run.cwd {
-                Text("In \(cwd)").font(.caption).foregroundStyle(.secondary)
-            }
-            if let failed = run.failed {
-                Text(failed).font(.caption).foregroundStyle(.red)
-            }
-            Button {
-                guard !going else { return }
-                sendTaps += 1
-                self.run(run)
-            } label: {
-                Label(going ? "Running" : run.failed == nil ? "Run" : "Run again", systemImage: "play")
-                    .spinning(going, tint: .white)
-            }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.small)
-            .allowsHitTesting(!going)
         }
     }
 
@@ -308,6 +273,23 @@ struct WorkedView: View {
 /// "6 min later · Mine the repo finished": a thin rule with the wait in the
 /// middle, before a turn the agent started by itself (TurnGap). Quiet, like
 /// a chat app's day divider, as on the Mac.
+/// "Moved to mike@example.org: mike@example.net hit its 5-hour limit, back
+/// at 11:30 am.": the runner's line when a thread's login ran out and it
+/// moved to another or is waiting for room. Quiet and centred, as on the
+/// Mac, and on as many lines as it needs.
+struct LoginNoteView: View {
+    let text: String
+
+    var body: some View {
+        Text(text)
+            .font(.caption)
+            .foregroundStyle(.tertiary)
+            .multilineTextAlignment(.center)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 2)
+    }
+}
+
 struct GapView: View {
     let gap: TurnGap
 
@@ -355,6 +337,7 @@ struct WorkedItems: View {
                 case let .tools(run): ToolRunView(items: run)
                 case let .worked(inner): WorkedView(worked: inner)
                 case let .gap(gap): GapView(gap: gap)
+                case let .note(note): LoginNoteView(text: note.text)
                 }
             }
         }

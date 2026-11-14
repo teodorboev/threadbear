@@ -431,7 +431,8 @@ describe('convex mirror e2e', { skip: LOCAL ? false : 'no local Convex deploymen
       return r.threads.some((t: any) => t.threadId === 'other-t1') ? r : undefined;
     });
     const other = remote.runners.find((r: any) => r.id === 'e2e-other');
-    assert.deepEqual([other.name, other.icon, other.online, other.rpcUrl, other.tokenFile], ['other', 'macmini', true, 'wss://other.example.ts.net/rpc', undefined]);
+    // An old runner's rpcUrl (the direct link, gone 13 Nov 2026) still goes in, and never reaches the app.
+    assert.deepEqual([other.name, other.icon, other.online, other.rpcUrl, other.tokenFile], ['other', 'macmini', true, undefined, undefined]);
     assert.ok(!remote.runners.some((r: any) => r.id === runnerId), 'not this runner itself');
     assert.equal(remote.threads.find((t: any) => t.threadId === 'other-t1').needsYou, true);
 

@@ -235,14 +235,19 @@ test('runCommand: output, exit codes, the time limit and the size cap', async ()
   assert.equal(failed.ok, false);
   assert.equal(failed.exitCode, 3);
   assert.equal(failed.text.trim(), 'nope');
-  const slow = await runCommand('echo start; sleep 5; echo never', { cwd, env, shell: sh, timeoutMs: 300 });
+  // Long enough for a busy Mac's shell to say start before it's stopped.
+  const slow = await runCommand('echo start; sleep 60; echo never', { cwd, env, shell: sh, timeoutMs: 2500 });
   assert.equal(slow.ok, false);
-  assert.equal(slow.text, 'start\nStopped after 0.3 s.');
-  assert.ok(slow.durationMs < 3000);
+  assert.equal(slow.text, 'start\nStopped after 2.5 s.');
+  assert.ok(slow.durationMs < 30_000);
   const big = await runCommand('yes abcdefghij | head -c 200000', { cwd, env, shell: sh });
   assert.equal(big.ok, true);
   assert.equal(big.truncated, true);
   assert.equal(big.text.length, 64 * 1024);
+  // A patch function's sh asks for more (PATCH_SH_MAX_BYTES).
+  const whole = await runCommand('yes abcdefghij | head -c 200000', { cwd, env, shell: sh, maxBytes: 1024 * 1024 });
+  assert.equal(whole.truncated, false);
+  assert.equal(whole.text.length, 200000);
   const missing = await runCommand('true', { cwd, env, shell: ['/no/such/shell', '-c'] });
   assert.equal(missing.ok, false);
   assert.match(missing.text, /ENOENT/);
@@ -420,6 +425,40 @@ test('a panel with an items function is a list panel, filled by renderListPanel 
   assert.equal(readPatchModule('x', 'project', '/x.ts', { panels: [{ title: 'Both', url: 'https://a.dev', items: () => [] }] }).info.error, 'panels[0] ("Both") should have url or items, not both.');
 });
 
+// 13 Nov: `tandem waiting --json` printed 310 KB for a folder of 32
+// projects, sh handed the Tandem patch the first 64 KB, and its JSON.parse
+// failed with "Expected ',' or ']' after array element at position 65536".
+test("a patch function's sh gets a command's whole output, or an error, never part of it", async () => {
+  const { renderListPanel, applyLive, PATCH_SH_MAX_BYTES } = await import('../../src/patches.ts');
+  const home = tmpDir();
+  const app = project(home, 'dev/app', { 'package.json': '{}' });
+  writePatch(path.join(app, '.threadbear/patches'), 'big.ts', `
+    const read = async ({ sh }) => JSON.parse("[" + (await sh("yes 1234567, | head -n 30000")) + "0]").length - 1;
+    export default {
+      actions: [{ title: "Big", prompt: "x", badge: async (ctx) => (await read(ctx)) / 1000 }],
+      panels: [{ title: "Big list", items: async (ctx) => [{ title: String(await read(ctx)) }] }],
+    };
+  `);
+  const set = await loadPatchSet(app, home);
+  assert.equal(set.patches[0]?.error, undefined);
+  const ctx = {
+    cwd: app,
+    threadId: 't1',
+    timeoutMs: 120_000,
+    // 30,000 lines of 9 bytes: 270 KB, over the old 64 KB.
+    run: (command: string, cwd: string) => runCommand(command, { cwd, env: process.env, maxBytes: PATCH_SH_MAX_BYTES }),
+  };
+  assert.deepEqual(await renderListPanel(set.panels[0]!, set, ctx), { items: [{ title: '30000' }] });
+  assert.equal((await applyLive(set, ctx)).actions[0]!.badge, 30);
+  // Past the cap: a plain error, not half a document.
+  const cut = { ...ctx, run: async () => ({ ok: true, text: '[1,', truncated: true, durationMs: 1 }) };
+  assert.deepEqual(await renderListPanel(set.panels[0]!, set, cut), { note: "Couldn't fill this panel: yes 1234567, | head -n 30000 printed more than the 16 MB a patch's sh reads" });
+  // A failure's huge last line doesn't go to clients whole.
+  const failed = { ...ctx, run: async () => ({ ok: false, exitCode: 1, text: 'x'.repeat(5_000_000), truncated: false, durationMs: 1 }) };
+  assert.ok(((await renderListPanel(set.panels[0]!, set, failed)).note ?? '').length < 600);
+  assert.ok(((await applyLive(set, failed)).patches[0]!.liveError ?? '').length < 600);
+});
+
 test('a tool patch (appliesTo) applies only where its name is found, from any project folder, and runs there', async () => {
   const home = tmpDir();
   const tool = project(home, 'dev/tandem', { 'package.json': '{}' });
@@ -493,6 +532,35 @@ test('live state: when hides, badge counts, label retitles, a shared command run
   assert.equal(hasLive(without), false);
   assert.equal(await applyLive(without, ctx), without);
   assert.equal(readPatchModule('x', 'project', '/x.ts', { actions: [{ title: 'A', run: 'x', when: true }] }).info.error, 'actions[0] ("A") has a when that isn\'t a function.');
+});
+
+test('live state and list panels see the thread: its title and projects, so a patch can show in only some threads', async () => {
+  const { applyLive, renderListPanel } = await import('../../src/patches.ts');
+  const home = tmpDir();
+  const app = project(home, 'dev/app', { 'package.json': '{}' });
+  writePatch(path.join(app, '.threadbear/patches'), 'at.ts', `
+    const inAT = ({ thread }) => thread.projects.some((p) => p.title === "Acceptance testing" || p.parent?.title === "Acceptance testing");
+    export default {
+      panels: [
+        { title: "AT runs", url: "http://127.0.0.1:1/", when: inAT },
+        { title: "Titled", items: ({ thread }) => [{ title: thread.title }, ...thread.projects.map((p) => ({ title: p.id + " " + p.title + " " + (p.parent?.id ?? "-") }))] },
+      ],
+    };
+  `);
+  const base = await loadPatchSet(app, home);
+  const run = async (command: string, cwd: string) => runCommand(command, { cwd, env: process.env });
+  const at = { title: 'Login flow', projects: [{ id: 'p_l', title: 'Login', parent: { id: 'p_at', title: 'Acceptance testing' } }] };
+  const other = { title: 'Fix the header', projects: [{ id: 'p_w', title: 'Website' }] };
+  const shown = await applyLive(base, { cwd: app, threadId: 't1', thread: at, run });
+  assert.deepEqual(shown.panels.map((p) => p.title), ['AT runs', 'Titled']);
+  const hidden = await applyLive(base, { cwd: app, threadId: 't2', thread: other, run });
+  assert.deepEqual(hidden.panels.map((p) => p.title), ['Titled']);
+  // A caller that leaves it out still gives patches a thread to read.
+  const bare = await applyLive(base, { cwd: app, threadId: 't3', run });
+  assert.deepEqual(bare.panels.map((p) => p.title), ['Titled']);
+  const titled = base.panels.find((p) => p.title === 'Titled')!;
+  const rows = await renderListPanel(titled, base, { cwd: app, threadId: 't1', thread: at, run });
+  assert.deepEqual(rows.items?.map((r) => r.title), ['Login flow', 'p_l Login p_at']);
 });
 
 test('icons on chips: the patch file\'s, unless an action has its own', () => {

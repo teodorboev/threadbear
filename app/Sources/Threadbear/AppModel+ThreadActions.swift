@@ -84,10 +84,6 @@ extension AppModel {
     /// imported as the composer's are and added to that ask's answer.
     func addNoteImages(thread: ThreadSummary, ask: Int, urls: [URL]) {
         guard !urls.isEmpty else { return }
-        if let why = picturesRefusal(for: thread) {
-            errorMessage = why
-            return
-        }
         let threadId = thread.id
         Task {
             let refs = await importImages(urls)
@@ -172,10 +168,6 @@ extension AppModel {
         guard !answers.isEmpty else { return }
         let text = Decisions.message(asks: thread.asks, picks: picks, notes: notes)
         let images = Decisions.images(asks: thread.asks, picks: picks, notes: notes)
-        if !images.isEmpty, let why = picturesRefusal(for: thread) {
-            errorMessage = why
-            return
-        }
         // As `send`: one of this Mac's threads waits for a restarting
         // runner; otherwise it needs its runner connected.
         let holding = !isRemote(threadId) && connection != .connected && restartUnderWay
@@ -345,13 +337,7 @@ extension AppModel {
         guard !trimmed.isEmpty || !images.isEmpty else { return }
         // A second Return while the first new thread is still being made.
         if threadId == nil, creatingThread { return }
-        // Pictures pasted before the direct link was turned on, or before
-        // the draft moved to another runner: they'd go as paths on this Mac.
-        if !images.isEmpty, threadId == nil || thread != nil, let why = picturesRefusal(for: thread) {
-            errorMessage = why
-            return
-        }
-        // A new thread on another runner goes over that runner's connection.
+        // A new thread on another runner goes through Convex.
         if threadId == nil, let runnerId = newThreadRunnerId {
             return sendNewThread(on: runnerId, text: trimmed, draft: stored)
         }
@@ -392,11 +378,10 @@ extension AppModel {
                     // In a pool the runner picked the login; that's the one
                     // that counts as used.
                     rememberLastAccount(request.poolId == nil ? account : thread.accountId)
-                    // The folder, a picked mode and a picked account or
-                    // pool were for this thread; the next one starts from
-                    // the defaults again (the runner's mode), on whichever
-                    // account then has the most room. The model and effort
-                    // stick.
+                    // The folder and a picked account or pool were for this
+                    // thread; the next one starts from the defaults again,
+                    // on whichever account then has the most room. The
+                    // model, effort and mode stick (lastPermission).
                     newThreadCwd = nil
                     newThreadProjectId = nil
                     newThreadPermissionPick = nil
@@ -745,7 +730,7 @@ extension AppModel {
                 // as a send can be: Mike saw "Thread not found" picking an
                 // effort (7 Nov). It goes again on the new runner, still
                 // showing.
-                let client = try await rowClient(for: threadId)
+                let client = try await openClient(for: threadId)
                 threads[threadId] = try await inRestartOrder(threadId, sentOn: client) { client in
                     try await client.updateThread(threadId, update)
                 }
@@ -866,7 +851,7 @@ extension AppModel {
                 threads[threadId]?.archivedAt = guess
             }
             do {
-                let client = try await rowClient(for: threadId)
+                let client = try await openClient(for: threadId)
                 let archived = try await inRestartOrder(threadId, sentOn: client) { client in
                     try await client.updateThread(threadId, ThreadUpdate(archived: true))
                 }
@@ -1010,7 +995,7 @@ extension AppModel {
         if selection == threadId { select(next) }
         Task {
             do {
-                let client = try await rowClient(for: threadId)
+                let client = try await openClient(for: threadId)
                 threads[threadId] = try await client.hibernateWhen(threadId: threadId, said: said)
             } catch {
                 if let before, threads[threadId] == guess { threads[threadId] = before }

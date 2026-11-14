@@ -35,6 +35,14 @@ Feature: Settings
     When I press "Stop your Mac sleeping on its own while a thread is working" in Settings
     Then Settings says the Mac isn't kept awake
 
+  # The Swift app is frozen, so it never gets this switch (AGENTS.md).
+  @settings.general @swift-pending
+  Scenario: Turning on full sync changes the runner's setting
+    When I open Settings
+    Then Settings says full sync is off
+    When I press "Send tool output and diffs to your Convex deployment" in Settings
+    Then Settings says full sync is on
+
   @settings.models @swift-pending
   Scenario: A private folder can be taken off
     When I open Settings on "models"

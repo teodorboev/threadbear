@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { tmpDir } from '../helpers/fakes.ts';
-import { GiB, macDf, setup } from '../helpers/check-remote-harness.ts';
+import { GiB, linuxDf, macDf, setup } from '../helpers/check-remote-harness.ts';
 
 test("a df answer that can't be used doesn't stop the check, and is never run or trusted as room", () => {
   const marker = path.join(tmpDir('check-remote-marker-'), 'ran');
@@ -84,12 +84,20 @@ test('a copy that fails on a host short of room still goes on to one with room',
   assert.match(r.stdout, /ran on h2 now/);
 });
 
-test('a copy that fails with plenty of room is still just unreachable: 255', () => {
+test('a copy that fails with plenty of room, to a host still answering, never sends the check here', () => {
   const s = setup({ h1: { state: 'free' } });
   const r = s.run('h1', 3600, '', { RSYNC_FAILS_ON: 'h1' });
-  assert.equal(r.status, 255, r.stdout + r.stderr);
+  assert.equal(r.status, 1, r.stdout + r.stderr);
   assert.match(r.stderr, /Couldn't copy this checkout to h1; trying the others\./);
-  assert.match(r.stderr, /None of h1 can run this check now\./);
+  assert.match(r.stderr, /h1: it answers, but the copy to it failed/);
+});
+
+test('a copy that fails as the host stops answering is unreachable: 255', () => {
+  const s = setup({ h1: { state: 'free' } });
+  // The copy fails, and h1 is gone by the time it's asked again.
+  const r = s.run('h1', 3600, '', { RSYNC_FAILS_ON: 'h1', RSYNC_PEEK: `touch '${path.join(s.fake, 'h1', 'dead')}'` });
+  assert.equal(r.status, 255, r.stdout + r.stderr);
+  assert.match(r.stderr, /None of h1 can be reached/);
 });
 
 // Codex's review of the above.
@@ -102,14 +110,29 @@ test("a disk too full for the probe's own mkdir is no room, not unreachable", ()
   assert.deepEqual(r.copies, []);
 });
 
-test('a probe that fails with room to spare, or a host ssh cannot reach, is still unreachable: 255', () => {
+test("a probe that fails on a host that still answers says why there, and never sends the check here", () => {
   const s = setup({ h1: { state: 'free' } });
   fs.writeFileSync(path.join(s.fake, 'h1', 'probe-fails'), '');
-  for (const hosts of ['h1', 'nope']) {
-    const r = s.run(hosts, 3600);
-    assert.equal(r.status, 255, r.stdout + r.stderr);
-    assert.match(r.stderr, new RegExp(`Couldn't reach ${hosts} over ssh`));
-  }
+  const r = s.run('h1', 3600);
+  assert.equal(r.status, 1, r.stdout + r.stderr);
+  assert.match(r.stderr, /h1: it answered, but couldn't make or lock ~\/\.cache\/threadbear-check there \(exit 1\)/);
+});
+
+test('a host ssh cannot reach is unreachable: 255', () => {
+  const s = setup({ h1: { state: 'free' } });
+  const r = s.run('nope', 3600);
+  assert.equal(r.status, 255, r.stdout + r.stderr);
+  assert.match(r.stderr, /Couldn't reach nope over ssh/);
+});
+
+test("a host short of room and one that can't run the check are both named", () => {
+  const s = setup({ h1: { state: 'free', df: macDf(0.5 * GiB) }, h2: { state: 'free', os: 'Linux', df: linuxDf(50 * GiB) } });
+  fs.mkdirSync(path.join(s.repo, 'ios'));
+  fs.writeFileSync(path.join(s.repo, 'ios', 'x.swift'), '\n');
+  const r = s.run('h1,h2', 3600);
+  assert.equal(r.status, 1, r.stdout + r.stderr);
+  assert.match(r.stderr, /No check host has room for this check: h1 has 0\.5 GiB free/);
+  assert.match(r.stderr, /The others can't run it: h2: it's Linux/);
 });
 
 test('a slow copy that loses the race to a check that fills the disk moves on, not waits there', () => {

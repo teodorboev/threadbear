@@ -210,8 +210,8 @@ everyday things. Tailscale is the default for everything that's machine to machi
 - **A second runner:** built and supported (section 4, step 7). It writes to the same
   backend and shows up on the phone and the website straight away. This proposal had the
   Mac app reach it over the tailnet; today the first Mac's app reads and steers it through
-  Convex, so it needs no Tailscale, and Tailscale only adds the direct link in
-  Settings > Runners.
+  Convex, so it needs no Tailscale. (A direct link over the tailnet, behind a setting,
+  was taken out on 13 Nov 2026.)
 - **A self-hosted backend**, for anyone who picks that option (2.1).
 - **Setup checks Tailscale** is installed and logged in, and says what it adds rather
   than refusing.

@@ -26,6 +26,21 @@ Feature: Web pages in a thread's panels
     When I show the "mock.page" section of the pane
     Then the panel shows the page "Panel home" without loading it again
 
+  # The page is a native view GPUI can't draw over, so a menu reaching it
+  # hides it. The tab's own right-click menu is the dock's, which the app
+  # doesn't place itself: on 13 Nov it came up behind the page.
+  @panel.web @web-runtime @swift-pending
+  Scenario: A panel's right-click menu comes up over its page, not behind it
+    Given the web runtime is installed
+    When I open the thread "Add dark mode to the dashboard"
+    And the thread's url panel shows the page server
+    And I show the "mock.page" section of the pane
+    Then the panel shows the page "Panel home"
+    When I right-click the panel's tab bar
+    Then the panel's page is out of sight under the menu
+    When I press Escape
+    Then the panel shows the page "Panel home"
+
   @panel.web @panel.bar @web-runtime @swift-pending
   Scenario: A link to another site opens in the browser, and the panel keeps its page
     Given the web runtime is installed

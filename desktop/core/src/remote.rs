@@ -7,6 +7,30 @@
 use crate::inbox::{iso_time, parse_ms, ThreadSummary};
 use serde_json::Value;
 
+/// The old runner let go of a thread during a move (its row left the index,
+/// or this Mac's runner deleted it): the row to keep in its place (`movedAway`).
+/// It stays as it was, the old runner's and locked with its move, until the
+/// destination lists it: this Mac's own `threads.list` for a move here, the
+/// destination's index row for a move to another. A row that has only gone
+/// from its old runner says nothing about where the thread is, and a
+/// secondary runner can take its own row out and put it back at will
+/// (Daybreak 113, 13 Nov 2026): taken as arrived, the thread looked like
+/// this Mac's, its box unlocked, while every message still went to the old
+/// runner. None when it isn't a move, and the row should go.
+pub fn moved_away(thread: &ThreadSummary) -> Option<ThreadSummary> {
+    let moving = thread.moving.as_ref()?;
+    if matches!(moving["state"].as_str(), Some("failed" | "cancelled")) {
+        return None;
+    }
+    moving["to"].as_str().filter(|id| !id.is_empty())?;
+    Some(thread.clone())
+}
+
+/// Where a move in flight is going, as its row says.
+pub fn moving_to(thread: &ThreadSummary) -> Option<&str> {
+    thread.moving.as_ref()?["to"].as_str().filter(|id| !id.is_empty())
+}
+
 /// A runner the backend knows of (`RemoteRunner`).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct RemoteRunner {
@@ -14,9 +38,6 @@ pub struct RemoteRunner {
     pub name: String,
     pub icon: Option<String>,
     pub online: bool,
-    /// Where this Mac keeps that runner's token, once one's been copied in
-    /// (`tb pair`): what a direct connection to it needs (Settings › Runners).
-    pub token_file: Option<String>,
 }
 
 /// `RemoteThreads`: what the sidebar shows of the other runners.
@@ -27,14 +48,16 @@ pub struct RemoteThreads {
     /// Mike's runner order (backend API 58), every runner's id: what the
     /// phone and the Runners panel list them in. None from a backend without one.
     pub order: Option<Vec<String>>,
+    /// A partial or unready index cannot prove a previously seen row is gone.
+    /// Missing `ready` is an older runner, whose array is already ready.
+    complete: bool,
 }
 
 impl RemoteRunner {
     fn decode(v: &Value) -> Option<RemoteRunner> {
         let id = v["id"].as_str().filter(|s| !s.is_empty())?.to_owned();
         let name = v["name"].as_str().filter(|s| !s.is_empty()).unwrap_or(&id).to_owned();
-        let token_file = v["tokenFile"].as_str().filter(|s| !s.is_empty()).map(str::to_owned);
-        Some(RemoteRunner { name, icon: v["icon"].as_str().filter(|s| !s.is_empty()).map(str::to_owned), online: v["online"].as_bool().unwrap_or(false), token_file, id })
+        Some(RemoteRunner { name, icon: v["icon"].as_str().filter(|s| !s.is_empty()).map(str::to_owned), online: v["online"].as_bool().unwrap_or(false), id })
     }
 }
 
@@ -50,7 +73,7 @@ fn summary(row: &Value) -> Option<ThreadSummary> {
     let text = |key: &str| row[key].as_str().unwrap_or("").to_owned();
     let unread = row["unread"].as_bool().unwrap_or(false);
     let created = row["createdAt"].as_str().and_then(parse_ms).unwrap_or(0);
-    let last_activity_at = row["lastActivityAt"].as_str().filter(|s| parse_ms(s).is_some()).map_or_else(|| iso_time(created), str::to_owned);
+    let last_activity_at = row["lastActivityAt"].as_str().filter(|s| parse_ms(s).is_some()).or_else(|| row["updatedAt"].as_str().filter(|s| parse_ms(s).is_some())).map_or_else(|| iso_time(created), str::to_owned);
     let snoozed_until = row["snoozedUntil"].as_str().filter(|s| parse_ms(s).is_some()).map(str::to_owned);
     // Hibernating until that runner restarts is kept as a date in the year 9999.
     let until_restart = snoozed_until.as_deref().and_then(parse_ms).is_some_and(|t| t > 200_000_000_000_000);
@@ -73,6 +96,8 @@ fn summary(row: &Value) -> Option<ThreadSummary> {
         starred_at: row["starredAt"].as_str().filter(|s| parse_ms(s).is_some()).map(str::to_owned),
         started_by: row.get("startedBy").filter(|v| !v.is_null()).cloned(),
         asked: row["asked"].as_str().filter(|s| !s.is_empty()).map(str::to_owned),
+        keywords: row["keywords"].as_str().map(str::to_owned),
+        created_at: row["createdAt"].as_str().filter(|s| parse_ms(s).is_some()).map(str::to_owned),
         moving: row.get("moving").filter(|v| !v.is_null()).cloned(),
         last_seq: if unread { 1 } else { 0 },
         last_seen_seq: 0,
@@ -89,14 +114,28 @@ fn summary(row: &Value) -> Option<ThreadSummary> {
 /// `remoteThreads.list`'s answer (or `remoteThreads.updated`'s params), read
 /// leniently: an unreadable row is left out.
 pub fn decode_remote_threads(value: &Value) -> RemoteThreads {
+    let values = value["threads"].as_array();
+    let mut ids = std::collections::HashSet::new();
+    let threads: Vec<_> = values.into_iter().flatten().enumerate().filter_map(|(i, row)| {
+        match summary(row) {
+            Some(thread) if ids.insert(thread.id.clone()) => Some(thread),
+            _ => { crate::wire::dropped::<ThreadSummary>(&format!("remote thread list entry at {i}")); None }
+        }
+    }).collect();
+    if values.is_none() { crate::wire::dropped::<RemoteThreads>("remote thread list envelope"); }
+    let ready = value["ready"].as_bool();
+    let complete = ready != Some(false) && values.is_some_and(|v| v.len() == threads.len());
     RemoteThreads {
         runners: value["runners"].as_array().into_iter().flatten().filter_map(RemoteRunner::decode).collect(),
-        threads: value["threads"].as_array().into_iter().flatten().filter_map(summary).collect(),
+        threads,
         order: value["order"].as_array().map(|ids| ids.iter().filter_map(|id| id.as_str().map(str::to_owned)).collect()),
+        complete,
     }
 }
 
 impl RemoteThreads {
+    pub fn can_remove_missing(&self) -> bool { self.complete }
+
     pub fn runner(&self, id: &str) -> Option<&RemoteRunner> {
         self.runners.iter().find(|r| r.id == id)
     }
@@ -258,6 +297,23 @@ mod tests {
         assert_eq!(check.seq, 47);
         assert_eq!(check.ends[0].text, "Look at how the experiment went");
         assert!(list.threads[1].loose_ends.is_none(), "one that isn't an object is left off");
+    }
+
+    #[test]
+    fn a_move_keeps_the_thread_as_its_old_runners_until_the_destination_lists_it() {
+        let mut thread = ThreadSummary { id: "t".into(), runner_id: Some("bruce".into()), moving: Some(json!({ "to": "m5", "toName": "m5", "state": "copying" })), ..Default::default() };
+        let kept = moved_away(&thread).unwrap();
+        // Daybreak 113: never this Mac's (or the destination's) on the old
+        // runner's word alone, and still locked with its move.
+        assert_eq!(kept.runner_id.as_deref(), Some("bruce"), "still the old runner's");
+        assert!(kept.moving_line().is_some(), "its box stays locked");
+        assert_eq!(moving_to(&kept), Some("m5"));
+        let local = ThreadSummary { id: "u".into(), moving: Some(json!({ "to": "bruce", "state": "claimed" })), ..Default::default() };
+        assert!(moved_away(&local).unwrap().runner_id.is_none(), "one moving off this Mac stays this Mac's");
+        thread.moving.as_mut().unwrap()["state"] = json!("failed");
+        assert!(moved_away(&thread).is_none());
+        thread.moving = None;
+        assert!(moved_away(&thread).is_none(), "an ordinary delete still deletes");
     }
 
     #[test]

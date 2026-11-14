@@ -18,6 +18,12 @@ pub struct Prefs {
     /// The size the slash palette and its columns were dragged to
     /// (slash_resize.rs).
     pub slash_layout: threadbear_core::slash::PaletteLayout,
+    /// The local pages Mike chose Run them for, a digest each, so a page
+    /// rewritten since asks again (`PreviewScriptConsent`).
+    pub preview_scripts: threadbear_core::local_preview::ScriptConsent,
+    /// The message box's spelling and substitution switches, from its
+    /// right-click menu (composer_spelling.rs).
+    pub text_checks: crate::text_services::Checks,
 }
 
 fn path() -> PathBuf {

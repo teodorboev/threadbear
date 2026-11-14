@@ -16,6 +16,9 @@ import { SwiftDriver } from '../support/swift.ts';
 import { sleep, type Driver } from '../support/driver.ts';
 import { pane } from '../support/pane.ts';
 import { work } from './real-screen.ts';
+import { ensurePerfLock } from './perf-lock.ts';
+
+await ensurePerfLock();
 
 const [outArg, relative = 'screens/hero-walkthrough.mp4'] = process.argv.slice(2);
 if (!outArg) throw new Error('usage: media-shot.ts <out folder> [file]');

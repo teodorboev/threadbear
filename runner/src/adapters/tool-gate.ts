@@ -43,6 +43,7 @@ export async function gateThreadbearTool(deps: ToolGateDeps, call: ToolGateCall)
     input: card.input,
     canAlwaysAllow: !alwaysAsk,
     signal: call.signal,
+    fullAllows: !alwaysAsk,
   });
   if (ans.decision !== 'allow' && ans.decision !== 'allowAlways') {
     return { allowed: false, message: ans.message || (ans.decision === 'expired' ? 'The request expired before the user answered.' : 'The user denied this. Ask them how to proceed.') };

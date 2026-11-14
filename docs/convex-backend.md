@@ -463,7 +463,13 @@ Settings › Notify me): `away` (the default) only gets a push while he isn't
 at the Mac, `always` gets every one, `off` none. A push that's held back
 while he's there marks the thread `pushHeldAt`; leaving the Mac sends it to
 the `away` phones if the thread still needs him. A runner that hasn't
-checked in for 3 minutes (a sleeping Mac) counts as away.
+checked in for 3 minutes (a sleeping Mac) counts as away, and what it held
+goes then (`sync:sendStaleHeldPushes`, a cron every 2 minutes): a Mac whose
+lid closed with Mike at it never says he left. The cron only hands each
+such runner to a mutation of its own (`sync:drainHeldPushes`), which sends
+16 at a time and schedules the next 16, so one runner's backlog (a
+secondary key may hold 3,000 large rows) can't read past a mutation's
+limit and stop another Mac's pushes (Daybreak 119, 13 Nov).
 
 **Keeping old and new working together.** For a while after any change,
 an older runner, a newer backend and an App Store phone app from weeks ago
@@ -554,7 +560,11 @@ Queries:
   most 4,000 tool rows for the page's text ones, then says `hasMore`. Every message
   is kept since API 2, and with `tools: true` there's one row per tool call
   too (`role: "tool"`, a one-line `text` such as "Run the unit tests" or
-  "Edited ~/dev/x.ts", and `toolKind`). It reads Convex alone, so it works
+  "Edited ~/dev/x.ts", and `toolKind`). A login's note (`role: "note"`,
+  API 78: the line a thread writes when its login runs out) is in a page
+  only when it's asked for with `notes: true` (API 79), as the website and
+  iPhone app builds after 1.0.4 do; an app built before can't read the role.
+  `phone:thread` never has them. It reads Convex alone, so it works
   while the Mac is asleep. The website watches only the newest 30 with it and
   reads older pages once, with `beforeSeq` (`web/src/transcript.ts`). The
   iPhone does the same with an 80-row live page and chunks of 200
@@ -804,6 +814,21 @@ On the free plan the limits are hard: past them, "new mutations that attempt
 to commit more insertions or updates may fail", so the mirror stops. Starter
 has the same included amounts and then charges as it goes ($0.22 a GB of
 I/O, $2.20 a million calls, 1.3 times that outside US regions).
+
+### Warning before the limits (13 Nov 2026)
+
+A runner holds a deploy key and a runner key, and neither can read its team's
+usage (that takes a Convex login), so `runner/src/convex-use.ts` estimates it from
+what it can count: the bytes of every mutation it sends, by day, kept for 30 days in
+`convex-use.json`. On Mike's deployment (13 Nov, 15 minutes of prod logs) all reads
+and writes came to 1.7 times what runners wrote, so the I/O estimate is twice what
+was sent; stored tool output is what full sync sent in 30 days, plus a third. A first
+month is scaled up from the days it has. `tb status` shows both, and past 70% of
+Free's 1 GB of I/O or 0.5 GB of storage it warns (and says so to the app when it
+connects), suggesting `"sync": { "full": false }` or a paid plan, and
+`"sync": { "usageWarning": false }` to hide it on one. It's one runner's view of
+limits that are the team's, so it can be under, and it never blocks anything. On
+Free, Convex also emails as you near a limit.
 
 ### What Mike's prod used
 

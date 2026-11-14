@@ -1031,9 +1031,6 @@ test("R9: a script outside the repo runs only if it's on the list, and it and ev
     assert.equal(asc(), undefined, 'deny');
     execFileSync('/bin/chmod', ['-N', scripts]);
   }
-  // Mike's real one, where it is on this machine.
-  const real = path.join(os.homedir(), 'dev/me/poddle/scripts/asc-status.mjs');
-  if (fs.existsSync(real) && os.userInfo().username === 'm5-mike') assert.equal(ownedPathProblem(real), undefined, real);
 });
 
 test("R10: a live command's `&` can't outlive it: its process group gets SIGTERM, then SIGKILL after a short grace", async () => {

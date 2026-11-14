@@ -58,6 +58,8 @@ pub(crate) struct ProjectsState {
     /// The goals, state or notes being edited on the open page.
     pub(crate) editing: Option<Editing>,
     pub(crate) list_scroll: ScrollHandle,
+    /// The list's rows far out of view, drawn as gaps while it scrolls (far_rows.rs).
+    pub(crate) list_far: std::rc::Rc<crate::far_rows::FarRows>,
     pub(crate) home_scroll: ScrollHandle,
     pub(crate) page_scroll: ScrollHandle,
     /// Answers sent from a project's page that their threads haven't taken
@@ -74,6 +76,14 @@ pub(crate) struct ProjectsState {
     /// Each picture icon's blurred copy for its card's backdrop, by path;
     /// None while it's being made or when it can't be (projects_page.rs).
     pub(crate) backdrops: HashMap<String, Option<std::sync::Arc<Image>>>,
+    /// The tab last picked on each project's page, kept while the app runs,
+    /// and the one each opened on this visit (`projectTabsPicked`,
+    /// `projectTabsOpenedOn`; project_page.rs).
+    pub(crate) tabs_picked: HashMap<String, rules::ProjectTab>,
+    pub(crate) tabs_opened_on: HashMap<String, rules::ProjectTab>,
+    /// The page the last visit was to, so a new visit (opened from the list,
+    /// Back, a link) works out again which tab it opens on.
+    pub(crate) tab_visit: Option<String>,
 }
 
 /// The title field on a project's page, for that project.
@@ -153,7 +163,7 @@ impl Threadbear {
                 return made.clone();
             }
         }
-        let made = rules::stand_in(project, self.threads.values()).map(|found| {
+        let made = rules::stand_in(project, self.threads.values().map(|t| &**t)).map(|found| {
             let patches = rules::project_patches(project, found);
             let panels = rules::project_panels(project, found);
             let mut t = found.clone();
@@ -578,7 +588,7 @@ impl Threadbear {
         let before = self.threads.get(thread).and_then(|t| t.projects.clone());
         let titles: HashMap<String, String> = self.projects.list.iter().map(|p| (p.id.clone(), p.title.clone())).collect();
         let guess = rules::changing(before.as_deref().unwrap_or(&[]), &add, &remove, |id| titles.get(id).cloned());
-        if let Some(t) = self.threads.get_mut(thread) {
+        if let Some(t) = self.threads.get_mut(thread).map(std::sync::Arc::make_mut) {
             t.projects = (!guess.is_empty()).then(|| guess.clone());
         }
         cx.notify();
@@ -592,11 +602,11 @@ impl Threadbear {
                     Ok(v) => {
                         if let Ok(mut t) = serde_json::from_value::<ThreadSummary>(v["thread"].clone()) {
                             t.runner_id = this.threads.get(&t.id).and_then(|old| old.runner_id.clone());
-                            this.threads.insert(t.id.clone(), t);
+                            this.threads.insert(t.id.clone(), std::sync::Arc::new(t));
                         }
                     }
                     Err(e) => {
-                        if let Some(t) = this.threads.get_mut(&thread) {
+                        if let Some(t) = this.threads.get_mut(&thread).map(std::sync::Arc::make_mut) {
                             if same_memberships(t.projects.as_deref().unwrap_or(&[]), &guess) {
                                 t.projects = before;
                             }
@@ -786,7 +796,7 @@ impl Threadbear {
         }
         let input = cx.new(|cx| InputState::new(window, cx).placeholder("Title").default_value(project.title.clone()));
         // A new title typed and not yet saved: an update's restart waits for it.
-        crate::unsent::watch(&input, cx);
+        crate::unsent::watch(&input, "a project's new title", cx);
         let id = project.id.clone();
         let events = cx.subscribe_in(&input, window, move |this, input, ev: &InputEvent, window, cx| match ev {
             InputEvent::PressEnter { .. } => {
@@ -835,7 +845,7 @@ impl Threadbear {
         let input = cx.new(|cx| TextareaState::new(window, cx).auto_grow(rows.0, rows.1).default_value(text));
         // Changes not yet saved (they're saved with Save, not as typed): an
         // update's restart waits for them.
-        crate::unsent::watch(&input, cx);
+        crate::unsent::watch(&input, "a project's goals, state or notes being edited", cx);
         let events = cx.subscribe_in(&input, window, |this, _, ev: &InputEvent, window, cx| {
             // ⌘Return saves, as the Swift box's Save shortcut does.
             if let InputEvent::PressEnter { secondary: true, .. } = ev {
@@ -867,13 +877,15 @@ impl Threadbear {
     #[cfg(feature = "automation")]
     pub(crate) fn project_page_dump(&self) -> Value {
         let Some(project) = self.open_project() else { return Value::Null };
-        let threads = rules::threads_in(&project.id, self.threads.values());
-        let sections = rules::Sections::build(&self.projects.list, self.threads.values(), now_ms());
+        let threads = rules::threads_in(&project.id, self.threads.values().map(|t| &**t));
+        let sections = rules::Sections::build(&self.projects.list, self.threads.values().map(|t| &**t), now_ms());
         json!({
             "id": project.id,
             "title": project.title,
             "parent": project.parent_id.as_deref().and_then(|p| self.project(p)).map(|p| p.title.clone()),
             "parts": sections.parts_of(&project.id).iter().map(|s| s.project.title.clone()).collect::<Vec<_>>(),
+            // The tab showing, while the page is in tabs (projectDecisions).
+            "tab": self.project_decisions_on().then(|| self.project_tab(&project.id).name()),
             "folders": project.folders,
             "threads": threads.iter().map(|t| t.id.clone()).collect::<Vec<_>>(),
             "patches": rules::patches_across(project, &threads).iter().map(|(p, _)| p.id.clone()).collect::<Vec<_>>(),

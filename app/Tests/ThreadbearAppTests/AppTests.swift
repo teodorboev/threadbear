@@ -571,6 +571,13 @@ final class DraftTests: XCTestCase {
         super.setUp()
         // AppModel reads NSApp in places.
         _ = NSApplication.shared
+        // A mode picked in one test would be the next one's starting mode.
+        UserDefaults.standard.removeObject(forKey: AppModel.lastPermissionKey)
+    }
+
+    override func tearDown() {
+        UserDefaults.standard.removeObject(forKey: AppModel.lastPermissionKey)
+        super.tearDown()
     }
 
     func testSendingWhileDisconnectedKeepsTheDraft() {
@@ -612,9 +619,9 @@ final class DraftTests: XCTestCase {
         XCTAssertEqual(app.scheduleEditor?.permissionMode, .ask)
     }
 
-    /// The folder, "Ask before edits" and a picked account were for the
-    /// one thread; the model and effort are what the next thread starts on
-    /// too, and survive a relaunch. The account used becomes the last-used
+    /// The folder and a picked account were for the one thread; the model,
+    /// effort and mode ("Ask before edits") are what the next thread starts
+    /// on too, and survive a relaunch. The account used becomes the last-used
     /// one, which the next pick starts from.
     func testNewThreadSettingsAfterCreatingOne() async throws {
         defer {
@@ -640,7 +647,7 @@ final class DraftTests: XCTestCase {
         }
         XCTAssertEqual(app.selection, "th_new")
         XCTAssertNil(app.newThreadCwd)
-        XCTAssertEqual(app.newThreadPermission, .full)
+        XCTAssertEqual(app.newThreadPermission, .ask, "the mode sticks")
         XCTAssertNil(app.newThreadAccount, "a picked account is for that draft only")
         XCTAssertEqual(app.lastAccountId, "claude-3")
         XCTAssertEqual(app.newThreadAccountId, "claude-3", "with no usage known, the last-used one")
@@ -656,10 +663,15 @@ final class DraftTests: XCTestCase {
     }
 
     /// The composer starts on the runner's default mode (Auto on a new
-    /// install), goes back to it after a send, and to Full access with a
-    /// runner that has none.
-    func testNewThreadStartsOnTheRunnersDefaultMode() async throws {
-        defer { UserDefaults.standard.removeObject(forKey: AppModel.lastAccountKey) }
+    /// install), or Full access with a runner that has none, until a mode is
+    /// picked: then the next thread starts on that one too, as the model
+    /// does, but never on Plan first.
+    func testNewThreadStartsOnTheModeLastPicked() async throws {
+        UserDefaults.standard.removeObject(forKey: AppModel.lastPermissionKey)
+        defer {
+            UserDefaults.standard.removeObject(forKey: AppModel.lastAccountKey)
+            UserDefaults.standard.removeObject(forKey: AppModel.lastPermissionKey)
+        }
         let app = AppModel()
         XCTAssertEqual(app.newThreadPermission, .full, "a runner with no default, or one that hasn't said")
         app.defaults = RunnerDefaults(cwd: "/w", accountId: "claude-3", permissionMode: .auto)
@@ -677,15 +689,19 @@ final class DraftTests: XCTestCase {
             try await Task.sleep(for: .milliseconds(5))
         }
         XCTAssertEqual(app.selection, "th_new")
-        XCTAssertEqual(app.newThreadPermission, .auto, "back to the runner's default")
+        XCTAssertEqual(app.newThreadPermission, .ask, "the mode picked last, not the runner's default")
         XCTAssertNil(app.newThreadPermissionPick)
-        XCTAssertEqual(app.newThreadRequest(text: "x", images: []).permissionMode, .auto, "and that's what the next one sends")
+        XCTAssertEqual(app.newThreadRequest(text: "x", images: []).permissionMode, .ask, "and that's what the next one sends")
+        XCTAssertEqual(AppModel().newThreadPermission, .ask, "kept across launches")
+        app.newThreadPermission = .plan
+        XCTAssertEqual(app.lastPermission, .ask, "Plan first is for one task")
     }
 
     /// A runner whose default mode this app doesn't know: the composer says
     /// so rather than Full access, a new thread leaves the mode out so the
     /// runner starts it on that default, and a schedule made from it asks.
     func testUnknownRunnerDefaultModeIsNotFullAccess() {
+        UserDefaults.standard.removeObject(forKey: AppModel.lastPermissionKey)
         defer { UserDefaults.standard.removeObject(forKey: AppModel.lastAccountKey) }
         let app = AppModel()
         app.defaults = try! JSONDecoder().decode(RunnerDefaults.self, from: Data(#"{"cwd":"/w","accountId":"claude-3","permissionMode":"sandboxed"}"#.utf8))

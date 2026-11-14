@@ -1,26 +1,32 @@
 // How setup self-hosts the backend (scripts/self-hosted-plan.mjs): on the
-// tailnet or on this Mac only, which a later run keeps, and the container
-// settings for each, never published beyond loopback.
+// tailnet, on this Mac only, or at an address of your own, which a later run
+// keeps, and the container settings for each, never published beyond loopback.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-type Flags = { selfHosted?: boolean; local?: boolean; tailnet?: boolean };
-type Plan = { selfHosted?: boolean; mode?: 'local' | 'tailnet'; from?: string; fail?: string };
+type Flags = { selfHosted?: boolean; local?: boolean; tailnet?: boolean; url?: string; siteUrl?: string };
+type Plan = { selfHosted?: boolean; mode?: 'local' | 'tailnet' | 'url'; from?: string; fail?: string; url?: string; site?: string; readdressed?: boolean };
 type Container = { env: Record<string, string>; runArgs: string[]; cmd: string[] };
 // Plain JS with no types, as setup runs before any packages are installed.
 const planModule: string = '../../../scripts/self-hosted-plan.mjs';
 const m = (await import(planModule)) as {
-  selfHostedPlan: (p: { flags?: Flags; joining?: boolean; adminKeyFile?: boolean; syncUrl?: string }) => Plan;
-  backendContainer: (mode: string, tailnet?: { name: string; ip: string }) => Container;
-  origins: (mode: string, name?: string) => { url: string; site: string; dashboard: string };
+  selfHostedPlan: (p: { flags?: Flags; joining?: boolean; adminKeyFile?: boolean; syncUrl?: string; syncSite?: string }) => Plan;
+  backendContainer: (mode: string, at?: { name: string; ip: string } | { url: string; site: string }) => Container;
+  origins: (mode: string, at?: string | { url: string; site: string }) => { url: string; site: string; dashboard: string; dashboardBackend: string };
+  reachOf: (syncUrl: string) => string;
+  ownAddress: (raw: string, flag: string) => { origin?: string; fail?: string };
   isLoopbackUrl: (u: string) => boolean;
   servedOn: (status: unknown, tailnetPort: number) => { Proxy?: string }[] | undefined;
   mustSeeTailnetOff: (a: { from?: string; pending?: boolean }) => boolean;
+  tailnetPendingFiles: (defaultHome: string, home: string, path: unknown) => string[];
   offTailnetStep: (a: { cli: boolean; handlers?: { Proxy?: string }[]; tailnetPort: number; localPort: number; moving: boolean }) => { do: string; message?: string };
 };
 
 const LOCAL_URL = 'http://127.0.0.1:13210';
 const TAILNET_URL = 'https://mac.tail1.ts.net:3210';
+const OWN_URL = 'https://threadbear.example.com';
+const OWN_SITE = 'https://threadbear-site.example.com';
+const OWN = { url: OWN_URL, siteUrl: OWN_SITE };
 
 test('a first setup self-hosts only when asked, on the tailnet unless --local', () => {
   assert.deepEqual(m.selfHostedPlan({}), { selfHosted: false });
@@ -56,7 +62,7 @@ test('a Mac joining another has no backend, and the self-hosted flags are refuse
 });
 
 test('every port either backend publishes is on 127.0.0.1, never the LAN', () => {
-  for (const c of [m.backendContainer('local'), m.backendContainer('tailnet', { name: 'mac.tail1.ts.net', ip: '100.64.0.1' })]) {
+  for (const c of [m.backendContainer('local'), m.backendContainer('tailnet', { name: 'mac.tail1.ts.net', ip: '100.64.0.1' }), m.backendContainer('url', { url: OWN_URL, site: OWN_SITE })]) {
     const published = c.runArgs.flatMap((a, i) => (c.runArgs[i - 1] === '-p' ? [a] : []));
     assert.equal(published.length, 2);
     for (const p of published) assert.match(p, /^127\.0\.0\.1:\d+:\d+$/);
@@ -158,7 +164,139 @@ test('setup leaves the tailnet note before serving and clears it only after ever
   const write = src.indexOf('fs.writeFileSync(pendingFile');
   const serveLoop = src.indexOf('serve(tailnet.ts, tailnetPort, localPort)');
   const unserveLoop = src.indexOf('unserve(ts, tailnetPort, localPort, moving)');
-  const remove = src.indexOf('fs.rmSync(pendingFile');
+  const remove = src.indexOf('for (const f of pendingFiles) fs.rmSync(f');
   assert.ok(write > 0 && write < serveLoop, 'written before serving');
   assert.ok(unserveLoop > 0 && unserveLoop < remove, 'removed after the ports');
+});
+
+// Daybreak 12 Nov (finding 110): setup before 4d8cdb23 left the note in the
+// --home folder. An interrupted --tailnet run there, then a --local run on
+// the same folder with Tailscale unable to say what it serves, found no note
+// in the default folder and only noted it, leaving the ports served.
+test('a note an older setup left in a custom --home still makes a local run see the ports off', async () => {
+  const fs = await import('node:fs');
+  const os = await import('node:os');
+  const path = await import('node:path');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'tb-pending-'));
+  try {
+    const def = path.join(root, 'Threadbear');
+    const custom = path.join(root, 'custom-home');
+    fs.mkdirSync(def, { recursive: true });
+    fs.mkdirSync(custom, { recursive: true });
+    const files = m.tailnetPendingFiles(def, custom, path);
+    assert.deepEqual(files, [path.join(def, 'self-hosted-on-tailnet'), path.join(custom, 'self-hosted-on-tailnet')]);
+    // The legacy note only, as the old setup left it.
+    fs.writeFileSync(files[1]!, 'served\n');
+    const moving = m.mustSeeTailnetOff({ from: undefined, pending: files.some((f) => fs.existsSync(f)) });
+    assert.equal(moving, true);
+    assert.equal(m.offTailnetStep({ cli: true, handlers: undefined, tailnetPort: 3210, localPort: 13210, moving }).do, 'fail');
+    assert.equal(m.offTailnetStep({ cli: false, tailnetPort: 3210, localPort: 13210, moving }).do, 'fail');
+    // The default folder as --home is looked at once.
+    assert.deepEqual(m.tailnetPendingFiles(def, def + '/', path), [path.join(def, 'self-hosted-on-tailnet')]);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('setup reads and clears the note in both folders', async () => {
+  const fs = await import('node:fs');
+  const src = fs.readFileSync(new URL('../../../scripts/setup.mjs', import.meta.url), 'utf8');
+  assert.match(src, /tailnetPendingFiles\(DEFAULT_HOME, home, path\)/);
+  assert.match(src, /pending: pendingFiles\.some\(\(f\) => fs\.existsSync\(f\)\)/);
+});
+
+// An address of your own (--url, 14 Nov 2026): for someone who already
+// reaches their Mac their own way, so Threadbear needn't care how.
+test('--url and --site-url self-host at your own address, together, and only those', () => {
+  assert.deepEqual(m.selfHostedPlan({ flags: OWN }), { selfHosted: true, mode: 'url', url: OWN_URL, site: OWN_SITE });
+  assert.deepEqual(m.selfHostedPlan({ flags: { selfHosted: true, ...OWN } }), { selfHosted: true, mode: 'url', url: OWN_URL, site: OWN_SITE });
+  // Trailing slashes and default ports come off; other ports stay.
+  assert.deepEqual(m.selfHostedPlan({ flags: { url: 'https://Tb.Example.com:443/', siteUrl: 'https://tb.example.com:8443' } }), { selfHosted: true, mode: 'url', url: 'https://tb.example.com', site: 'https://tb.example.com:8443' });
+  // One without the other, or with another way, or the same address twice.
+  assert.match(m.selfHostedPlan({ flags: { url: OWN_URL } }).fail ?? '', /go together/);
+  assert.match(m.selfHostedPlan({ flags: { siteUrl: OWN_SITE } }).fail ?? '', /go together/);
+  assert.ok(m.selfHostedPlan({ flags: { ...OWN, local: true } }).fail);
+  assert.ok(m.selfHostedPlan({ flags: { ...OWN, tailnet: true } }).fail);
+  assert.match(m.selfHostedPlan({ flags: { url: OWN_URL, siteUrl: OWN_URL + '/' } }).fail ?? '', /same address/);
+  // What --tailnet makes would read back as the tailnet next time, and
+  // setup takes this backend's own serve off the tailnet ports, so your proxy
+  // can't be on them either.
+  assert.match(m.selfHostedPlan({ flags: { url: TAILNET_URL, siteUrl: 'https://mac.tail1.ts.net:8444' } }).fail ?? '', /--tailnet/);
+  assert.match(m.selfHostedPlan({ flags: { url: 'https://mac.tail1.ts.net:8443', siteUrl: 'https://mac.tail1.ts.net:3211' } }).fail ?? '', /--site-url .* --tailnet uses/);
+  assert.ok(m.selfHostedPlan({ flags: { url: 'https://mac.tail1.ts.net:8443', siteUrl: 'https://mac.tail1.ts.net:6791' } }).fail);
+  // Those ports on a name that isn't a tailnet one are fine.
+  assert.equal(m.selfHostedPlan({ flags: { url: 'https://tb.example.com:3210', siteUrl: 'https://tb.example.com:3211' } }).mode, 'url');
+  // But your own tailnet name on another port is yours.
+  assert.equal(m.selfHostedPlan({ flags: { url: 'https://mac.tail1.ts.net:8443', siteUrl: 'https://mac.tail1.ts.net:8444' } }).mode, 'url');
+  // A Mac joining another has no backend of its own.
+  assert.ok(m.selfHostedPlan({ joining: true, flags: OWN }).fail);
+});
+
+test('only an https address a phone could reach is taken as your own', () => {
+  for (const bad of ['https://mac.tail1.ts.net.:3210', 'https://tb.example.com.', 'http://threadbear.example.com', 'ftp://x.example.com', 'https://127.0.0.1:13210', 'https://localhost', 'https://[::1]:3210', 'https://user:pw@tb.example.com', 'https://tb.example.com/convex', 'https://tb.example.com/?a=1', 'https://tb.example.com/#x', 'https://happy-otter-123.convex.cloud', 'https://happy-otter-123.convex.site', 'not a url', '']) {
+    assert.ok(m.ownAddress(bad, '--url').fail, bad);
+  }
+  for (const [good, origin] of [['https://tb.example.com', 'https://tb.example.com'], ['https://tb.example.com/', 'https://tb.example.com'], ['https://192.168.1.20:8443', 'https://192.168.1.20:8443'], [' https://tb.example.com ', 'https://tb.example.com']]) {
+    assert.equal(m.ownAddress(good!, '--url').origin, origin, good);
+  }
+});
+
+test('setup run again keeps your own address, and a flag moves it', () => {
+  const was = { adminKeyFile: true, syncUrl: OWN_URL, syncSite: OWN_SITE };
+  assert.equal(m.reachOf(OWN_URL), 'url');
+  assert.equal(m.reachOf(TAILNET_URL), 'tailnet');
+  assert.equal(m.reachOf(LOCAL_URL), 'local');
+  assert.deepEqual(m.selfHostedPlan(was), { selfHosted: true, mode: 'url', url: OWN_URL, site: OWN_SITE });
+  // Plain --self-hosted (the docs' command again) keeps it there too.
+  assert.deepEqual(m.selfHostedPlan({ ...was, flags: { selfHosted: true } }), { selfHosted: true, mode: 'url', url: OWN_URL, site: OWN_SITE });
+  // The same addresses again aren't a change; new ones are.
+  assert.deepEqual(m.selfHostedPlan({ ...was, flags: OWN }), { selfHosted: true, mode: 'url', url: OWN_URL, site: OWN_SITE });
+  assert.deepEqual(m.selfHostedPlan({ ...was, flags: { url: 'https://new.example.com', siteUrl: OWN_SITE } }), { selfHosted: true, mode: 'url', url: 'https://new.example.com', site: OWN_SITE, readdressed: true });
+  // Moves to and from the other two ways.
+  assert.deepEqual(m.selfHostedPlan({ ...was, flags: { local: true } }), { selfHosted: true, mode: 'local', from: 'url' });
+  assert.deepEqual(m.selfHostedPlan({ ...was, flags: { tailnet: true } }), { selfHosted: true, mode: 'tailnet', from: 'url' });
+  assert.deepEqual(m.selfHostedPlan({ adminKeyFile: true, syncUrl: TAILNET_URL, flags: OWN }), { selfHosted: true, mode: 'url', url: OWN_URL, site: OWN_SITE, from: 'tailnet' });
+  assert.deepEqual(m.selfHostedPlan({ adminKeyFile: true, syncUrl: LOCAL_URL, flags: OWN }), { selfHosted: true, mode: 'url', url: OWN_URL, site: OWN_SITE, from: 'local' });
+  // A setup that stopped before saving its URL can carry on with --url.
+  assert.equal(m.selfHostedPlan({ adminKeyFile: true, flags: OWN }).mode, 'url');
+  assert.match(m.selfHostedPlan({ adminKeyFile: true }).fail ?? '', /--url/);
+  // Kept, but with no site saved: it asks rather than guess.
+  assert.match(m.selfHostedPlan({ adminKeyFile: true, syncUrl: OWN_URL }).fail ?? '', /sync\.site/);
+});
+
+test('a backend at your own address uses it as its origin, with its ports left on loopback for your proxy', () => {
+  const c = m.backendContainer('url', { url: OWN_URL, site: OWN_SITE });
+  assert.deepEqual(c.env, { CONVEX_CLOUD_ORIGIN: OWN_URL, CONVEX_SITE_ORIGIN: OWN_SITE, DISABLE_BEACON: 'true' });
+  assert.deepEqual(c.runArgs, ['-p', '127.0.0.1:13210:3210', '-p', '127.0.0.1:13211:3211', '-v', 'threadbear-convex-data:/convex/data']);
+  assert.deepEqual(c.cmd, []);
+  const o = m.origins('url', { url: OWN_URL, site: OWN_SITE });
+  assert.equal(o.url, OWN_URL);
+  assert.equal(o.site, OWN_SITE);
+  // The dashboard stays on this Mac and talks to the backend there.
+  assert.equal(o.dashboard, 'http://127.0.0.1:16791');
+  assert.equal(o.dashboardBackend, LOCAL_URL);
+  assert.equal(m.origins('tailnet', 'mac.tail1.ts.net').dashboardBackend, TAILNET_URL);
+  assert.equal(m.origins('local').dashboardBackend, LOCAL_URL);
+});
+
+test('setup checks your address from this Mac and from inside Docker before it carries on', async () => {
+  const fs = await import('node:fs');
+  const src = fs.readFileSync(new URL('../../../scripts/setup.mjs', import.meta.url), 'utf8');
+  assert.match(src, /if \(own\) await checkOwnAddress\(url, site, \{ quiet: prechecked \}\)/);
+  // Cross-lab review, 14 Nov 2026: checked against a running backend before
+  // anything changes, after the admin key (which marks the Mac self-hosted)
+  // on the way through, with the live connection, and not on a dotfile path.
+  const pre = src.indexOf('await checkOwnAddress(url, site, { fresh: true });');
+  // Waited for, not a single quick try, and from a container set up like the new one.
+  assert.match(src, /if \(await answers\(ADMIN_URL, 60\)\)/);
+  assert.match(src, /docker\(\['run', '--rm', '--entrypoint', curl\[0\], BACKEND_IMAGE/);
+  assert.ok(pre > 0 && pre < src.indexOf('ensureContainer(BACKEND_CONTAINER'), 'pre-check before the containers change');
+  assert.ok(pre < src.indexOf('unserve(ts, tailnetPort, localPort, moving);'), 'pre-check before tailnet ports come off');
+  assert.ok(src.indexOf("ok(`admin key saved in") < src.indexOf('if (own) await checkOwnAddress(url, site, {'), 'admin key before the check');
+  assert.match(src, /new WebSocket\(wsUrl\)/);
+  assert.ok(!src.includes('/.threadbear-setup-check-'));
+  assert.match(src, /docker\(\['exec', BACKEND_CONTAINER, \.\.\.curl\]\)/);
+  // A url run never asks Tailscale for this Mac's name, so it takes the
+  // backend's own tailnet ports off (the else of `if (tailnet)`), as a local one does.
+  assert.match(src, /else if \(own\) ok\(`your own address[^\n]*\n\s*else \{\n\s*tailnet = tailnetSelf\(\);/);
 });

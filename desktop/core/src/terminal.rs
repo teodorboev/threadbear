@@ -62,10 +62,10 @@ pub fn target_for(thread: Option<&ThreadSummary>, home: &str, runner: Option<&st
 /// archived (`Terminals.archived`). Never the home shell. Only this Mac's own
 /// threads have shells of their own, so another runner's index can't stop one
 /// by calling a row of its own "home" and archiving it (Daybreak, 10 Nov).
-pub fn archived<'a>(keys: impl IntoIterator<Item = &'a TerminalKey>, threads: &HashMap<String, ThreadSummary>) -> Vec<TerminalKey> {
+pub fn archived<'a, T: std::borrow::Borrow<ThreadSummary>>(keys: impl IntoIterator<Item = &'a TerminalKey>, threads: &HashMap<String, T>) -> Vec<TerminalKey> {
     keys.into_iter()
         .filter(|key| match key {
-            TerminalKey::Thread(id) => threads.get(id).is_some_and(|t| !t.is_remote() && t.is_archived()),
+            TerminalKey::Thread(id) => threads.get(id).map(crate::inbox::summary).is_some_and(|t| !t.is_remote() && t.is_archived()),
             TerminalKey::Home => false,
         })
         .cloned()
@@ -782,6 +782,33 @@ pub enum Link {
     Url(String),
 }
 
+/// GNU tools put this machine's hostname in OSC 8 file URLs. Strip only an
+/// exact local host; every other authority still goes to the gate to refuse.
+pub fn local_file_url(link: &str, hostname: &str) -> Option<String> {
+    if hostname.is_empty() || !link.get(..7)?.eq_ignore_ascii_case("file://") { return None; }
+    let rest = &link[7..];
+    let (host, _) = rest.split_once('/')?;
+    (!host.is_empty() && host.eq_ignore_ascii_case(hostname)).then(|| format!("file://{}", &rest[host.len()..]))
+}
+
+/// The printed address/path under a terminal cell. OSC 8 links use their
+/// explicit URI instead; this is for ordinary build output and shell text.
+pub fn link_word(chars: &[char], at: usize) -> Option<String> {
+    let boundary = |c: char| c.is_whitespace() || "\"'<>`".contains(c) || c.is_control();
+    if at >= chars.len() || boundary(chars[at]) { return None; }
+    let mut first = at;
+    let mut last = at + 1;
+    while first > 0 && !boundary(chars[first - 1]) { first -= 1; }
+    while last < chars.len() && !boundary(chars[last]) { last += 1; }
+    while first < last && "([{".contains(chars[first]) { first += 1; }
+    loop {
+        let tail = *chars.get(last.checked_sub(1)?)?;
+        let unmatched = [(')', '('), (']', '['), ('}', '{')].iter().any(|(close, open)| tail == *close && chars[first..last].iter().filter(|c| **c == *close).count() > chars[first..last].iter().filter(|c| **c == *open).count());
+        if first < last && (".,;!".contains(tail) || unmatched) { last -= 1; } else { break; }
+    }
+    (first <= at && at < last && last - first <= 4096).then(|| chars[first..last].iter().collect())
+}
+
 pub fn link_target(link: &str, folder: &str, home: &str, exists: impl Fn(&str) -> bool) -> Option<Link> {
     if link.is_empty() || link.len() > 4096 {
         return None;
@@ -1231,5 +1258,25 @@ mod tests {
         assert_eq!(link_target("main.swift:12", "/w", "/Users/me", exists), Some(Link::Url("main.swift:12".into())));
         assert_eq!(link_target("no scheme here", "/w", "/Users/me", exists), None);
         assert_eq!(link_target("", "/w", "/Users/me", exists), None);
+    }
+
+    #[test]
+    fn printed_terminal_links_keep_url_punctuation_and_file_positions() {
+        let word = |line: &str, at| link_word(&line.chars().collect::<Vec<_>>(), at);
+        assert_eq!(word("see (https://example.com/a(b)).", 12).as_deref(), Some("https://example.com/a(b)"));
+        assert_eq!(word("error: src/main.rs:12:4", 12).as_deref(), Some("src/main.rs:12:4"));
+        assert_eq!(word("雪 https://example.com", 8).as_deref(), Some("https://example.com"));
+        assert_eq!(word("https://example.com foo", 19), None);
+        assert_eq!(word("[x]", 0), None);
+        assert_eq!(word("()", 1), None);
+    }
+
+    #[test]
+    fn a_file_hyperlink_can_name_only_this_exact_machine() {
+        assert_eq!(local_file_url("file://MY-MAC.local/tmp/a%20b.command", "my-mac.local").as_deref(), Some("file:///tmp/a%20b.command"));
+        for uri in ["file://my-mac.local.evil/tmp/a", "file://my-mac/tmp/a", "file://user@my-mac.local/tmp/a", "file://my-mac.local:1/tmp/a", "file://other/tmp/a", "https://my-mac.local/a"] {
+            assert_eq!(local_file_url(uri, "my-mac.local"), None, "{uri}");
+        }
+        assert_eq!(local_file_url("file:///tmp/a", ""), None);
     }
 }

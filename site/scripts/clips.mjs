@@ -18,7 +18,7 @@
 // messages, answers a question, archives), so record from a fresh instance: stop and start it
 // again before running them all.
 import { execFileSync, spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -28,9 +28,12 @@ const site = join(dirname(fileURLToPath(import.meta.url)), "..");
 const devApp = join(site, "../app/Tools/dev-app.sh");
 const id = process.env.CLIPS_APP_ID ?? "siteclips";
 const out = join(site, "public/clips");
-const work = join(tmpdir(), "threadbear-site-clips");
+// A fresh folder of our own (mkdtemp, 0700): the recorder is compiled into it and then run, so a
+// fixed name another account could make first would let it swap the program (Codex's review of
+// Daybreak 114/116, 13 Nov).
+const work = mkdtempSync(join(tmpdir(), "threadbear-site-clips-"));
+process.on("exit", () => rmSync(work, { recursive: true, force: true }));
 mkdirSync(out, { recursive: true });
-mkdirSync(work, { recursive: true });
 
 function run(...commands) {
   const r = spawnSync(devApp, ["--id", id, "do", ...commands.map((c) => JSON.stringify(c))], { encoding: "utf8" });

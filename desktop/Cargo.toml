@@ -17,7 +17,28 @@ exclude = ["vendor"]
 # gpui-kit's base, the same way: the first commit under vendor/gpui-base is
 # 0.9.0 as published. Ours on top: a TextViewStyle switch for the hairline
 # the kit draws under every link, which Swift's replies don't have (Mike,
-# 12 Nov: "the links are underlined in the GPUI version").
+# 12 Nov: "the links are underlined in the GPUI version"). And a selection
+# takes in a soft-wrapped row's first character, which GPUI places at the end
+# of the row above (`wrapped_row_starts`, `drawn_position`; Mike, 13 Nov:
+# "can't select all the way to the start of the line"). And a test
+# snapshot's `visible_bounds`, what's drawn of an element inside its clips,
+# so scripted clicks land on it rather than its whole middle, which for one
+# scrolled half out of a pane is over its neighbour (13 Nov).
 [patch.crates-io]
 gpui-component = { path = "vendor/gpui-component" }
 gpui-base = { path = "vendor/gpui-base" }
+# gpui-pre 0.3.11 as published, with file drags switching out of keyboard
+# modality before hover hit tests (window.rs). Otherwise a drop after typing
+# reaches no target. Keep this patch when updating the snapshot. Also
+# Window::element_opacity made public, for the sidebar's turning arcs
+# (gpui/src/spinner.rs).
+gpui-pre = { path = "vendor/gpui-pre" }
+
+# Scripted screenshots run in debug apps, often at background priority. An
+# unoptimized PNG encode stalled the app for 30 seconds (14 Nov). Optimize
+# its filtering and CRC routines; generic encoding still uses the app's
+# debug settings, so the fixed filter and worker in automation matter too.
+[profile.dev.package.png]
+opt-level = 3
+[profile.dev.package.crc32fast]
+opt-level = 3

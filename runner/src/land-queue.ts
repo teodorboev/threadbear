@@ -15,6 +15,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 
+// Where each check leaves its line (worktrees.ts, logCheckTimes), beside the
+// landing lock in the repo's common git directory. The runner's updater
+// reads it too, to leave out checks a landing has already passed (update.ts,
+// landChecked).
+export const LAND_TIMES_FILE = 'threadbear-land-times.log';
+
 export type QueueResult = {
   // The entry's own commits as they landed on main (its rebased tip), and
   // their `git log --oneline`, for the owner to print.
@@ -36,10 +42,19 @@ export type QueueEntry = {
   // the same one are checked together.
   check?: string | null;
   checkFrom?: string; // where its check was looked up, from its root
+  // The check hosts its tb land asked for (its THREADBEAR_CHECK_HOST), if
+  // any. A group's check runs in the holder's tb, so these go to it as
+  // THREADBEAR_CHECK_PREFER: tried first, the holder's hosts still behind
+  // them (checkPreference in worktrees.ts).
+  checkHost?: string;
+  // tb land --despite-red: the repair for a red main. Goes first in a
+  // group check, outside the limit.
+  fix?: boolean;
   // The most landings it may be checked with. Each failed check of a group
   // halves it for everyone in that group, so a failure is narrowed down in a
   // few checks rather than one by one.
   limit?: number;
+  limitAt?: string; // the main that limit was set on; it lapses once main moves
   result?: QueueResult;
 };
 
@@ -114,7 +129,13 @@ export function waiting(common: string): QueueEntry[] {
 }
 
 // What the lock's holder is checking, for the waiting line.
-export type Running = { startedAt: number; branches: string[] };
+export type Running = {
+  startedAt: number;
+  branches: string[];
+  // Optional so a tb waiting on an older holder can still read its status.
+  pid?: number;
+  entries?: string[];
+};
 
 export function setRunning(common: string, r: Running | undefined): void {
   try {
@@ -126,7 +147,8 @@ export function setRunning(common: string, r: Running | undefined): void {
 }
 
 export function readRunning(common: string): Running | undefined {
-  return readJson<Running>(runningFile(common));
+  const running = readJson<Running>(runningFile(common));
+  return running?.pid !== undefined && !alive(running.pid) ? undefined : running;
 }
 
 // How long a passing check usually takes here: the median of the last 20
@@ -154,16 +176,35 @@ export function typicalCheckSeconds(timesFile: string): number | undefined {
 const minutes = (s: number): string => (s < 60 ? 'under a minute' : s < 90 ? '1 min' : `${Math.round(s / 60)} min`);
 
 // Where a waiting landing is in the line, and roughly how long it has.
-// Everyone waiting goes into the next check together, so it's the rest of
-// the current check and one more.
+// Entries stay in the queue during their group check. Those have only the
+// rest of this check to go; the others wait for this check and one more.
 export function waitingLine(common: string, timesFile: string, me: QueueEntry | undefined, now = Date.now()): string {
-  const all = waiting(common);
-  const ahead = me ? all.filter((e) => e.id !== me.id && (e.at < me.at || (e.at === me.at && e.id < me.id))).length : all.length;
+  // The holder writes the result on disk. The waiting tb still has its
+  // original entry and may not get the lock until another check finishes.
+  if (me && (readEntry(common, me.id)?.result || me.result)) {
+    return ': already landed with its group; waiting for the landing lock to finish up.';
+  }
   const running = readRunning(common);
+  // A new tb can join on the same branch after its old one was killed.
+  // The old entry's commit may be in the check, but the new one's isn't.
+  const checking = (e: QueueEntry): boolean => !!running && (running.entries
+    ? running.entries.includes(e.id) : running.branches.includes(e.branch));
+  const all = waiting(common).filter((e) => !checking(e));
+  const ahead = me ? all.filter((e) => e.id !== me.id && (e.at < me.at || (e.at === me.at && e.id < me.id))).length : all.length;
   const typical = typicalCheckSeconds(timesFile);
   const parts: string[] = [];
   if (running) {
     const ago = Math.max(0, Math.round((now - running.startedAt) / 1000));
+    if (me && checking(me)) {
+      const peers = running.branches.length - 1;
+      const withOthers = peers ? ` with ${peers} other landing${peers === 1 ? '' : 's'}` : '';
+      let estimate = '';
+      if (typical !== undefined) {
+        const left = ago >= typical ? 'longer than usual' : `so roughly ${minutes(Math.max(60, typical - ago))} to go`;
+        estimate = `, ${left} (a check takes about ${minutes(typical)} here)`;
+      }
+      return `: this landing is being checked${withOthers}; the check has been running ${minutes(ago)}${estimate}.`;
+    }
     const what = running.branches.length > 1 ? `${running.branches[0]} and ${running.branches.length - 1} more` : running.branches[0] ?? 'another landing';
     parts.push(`the check for ${what} has been running ${minutes(ago)}`);
     if (typical !== undefined) {

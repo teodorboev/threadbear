@@ -502,8 +502,23 @@ async function busyThreads(c) {
     for (const b of s.background ?? []) {
       if (!busy.some((t) => t.id === b.threadId)) busy.push(threads.find((t) => t.id === b.threadId) ?? { id: b.threadId, title: '' });
     }
-  } catch {
-    // older runner
+    // And everything else a restart would wait for (runner.status's busy:
+    // a turn-end hook, a thread between turns), from runners since 14 Nov 2026.
+    for (const id of Array.isArray(s.busy) ? s.busy : []) {
+      if (typeof id === 'string' && !busy.some((t) => t.id === id)) busy.push(threads.find((t) => t.id === id) ?? { id, title: '' });
+    }
+    // An older runner still finishing turns after a handover: stopping the
+    // LaunchAgent stops it too.
+    for (const d of Array.isArray(s.draining) ? s.draining : []) {
+      for (const id of Array.isArray(d?.threads) ? d.threads : []) {
+        if (typeof id === 'string' && !busy.some((t) => t.id === id)) busy.push(threads.find((t) => t.id === id) ?? { id, title: `finishing on the previous runner (${d.version ?? '?'})` });
+      }
+      if (!d?.threads?.length) busy.push({ id: '?', title: `the previous runner (pid ${d?.pid}) is still finishing` });
+    }
+  } catch (e) {
+    // Only a runner from before runner.status gets by on threads.list
+    // alone; one that didn't answer it can't be shown to be idle.
+    if (e?.code !== -32601) busy.push({ id: '?', title: `the runner didn't say what else it's doing (${e?.message ?? e})` });
   }
   return busy;
 }

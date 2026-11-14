@@ -27,10 +27,14 @@ pub const NO_ACCESS: i64 = -32041;
 #[serde(rename_all = "camelCase", default)]
 pub struct Deployment {
     /// Its name, "happy-otter-123".
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub deployment: String,
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub deployment_url: String,
     /// The Convex team and project, when `convex dev` noted them in .env.local.
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub team: Option<String>,
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub project: Option<String>,
 }
 
@@ -49,9 +53,12 @@ impl Deployment {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Choice {
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub deployment: String,
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub deployment_url: String,
     /// "Development", "Production", or "Configured" for the panel's own.
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub label: String,
 }
 
@@ -59,8 +66,10 @@ pub struct Choice {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize)]
 #[serde(default)]
 pub struct Choices {
+    #[serde(default, deserialize_with = "crate::wire::list")]
     pub deployments: Vec<Choice>,
     /// Why some aren't there, in the runner's words.
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub note: Option<String>,
 }
 
@@ -100,11 +109,15 @@ impl std::fmt::Debug for Key {
 #[serde(default)]
 pub struct Login {
     /// idle, waiting, done or failed.
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub state: String,
     /// The page to approve it on.
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub url: Option<String>,
     /// What that page shows.
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub code: Option<String>,
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub message: Option<String>,
 }
 

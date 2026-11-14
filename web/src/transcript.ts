@@ -24,7 +24,8 @@ export type Transcript = { messages: Row[]; images: Picture[]; hasMore: boolean;
 
 export function useTranscript(token: string, threadId: string): Transcript | undefined {
   const convex = useConvex();
-  const tail = useLiveQuery(api.phone.messages, { token, threadId, limit: TAIL, tools: true, noImages: true });
+  // notes: the lines a thread writes when its login runs out (API 79).
+  const tail = useLiveQuery(api.phone.messages, { token, threadId, limit: TAIL, tools: true, noImages: true, notes: true });
   const [held, setHeld] = useState<Held<Row>>();
   const heldRef = useRef<Held<Row>>(undefined);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -46,7 +47,7 @@ export function useTranscript(token: string, threadId: string): Transcript | und
       setLoadingMore(true);
       try {
         const beforeSeq = Math.min(...from.rows.keys());
-        const page = await convex.query(api.phone.messages, { token, threadId, beforeSeq, limit, tools: true, noImages: true });
+        const page = await convex.query(api.phone.messages, { token, threadId, beforeSeq, limit, tools: true, noImages: true, notes: true });
         if (mine === reading.current) heldRef.current = mergeOlder(heldRef.current ?? from, page);
       } catch (e) {
         // What's held still shows; "Load earlier messages" can try again.

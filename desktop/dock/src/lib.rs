@@ -26,7 +26,7 @@ pub fn dock_drag_disabled<E: InteractiveElement + Sized>(element: E) -> E {
     element.on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
 }
 
-pub use content::{DockContent, DockOptions, SharedContent};
+pub use content::{DockContent, DockMenuItem, DockOptions, SharedContent};
 pub use model::DockModel;
 pub use threadbear_dock_layout as layout;
 pub use threadbear_dock_layout::*;

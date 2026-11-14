@@ -16,6 +16,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
+use threadbear_core::juice;
 use threadbear_core::row_motion::{Glides, ARRIVE};
 
 /// A row turning up comes down this far as it fades in (`Juice.row`'s grow
@@ -34,6 +35,18 @@ pub(crate) struct RowMotion {
     /// Where each row was laid out this frame, from the list's top: its top
     /// and height, for scrolling one into view (`reveal`).
     placed: RefCell<HashMap<String, (f32, f32)>>,
+    /// Where each row was painted this frame, in the window, glide and all:
+    /// what the selection's highlight slides between.
+    painted: RefCell<HashMap<String, Bounds<Pixels>>>,
+    /// The selected row, and the highlight sliding to it from the one before.
+    selection: RefCell<Selection>,
+}
+
+#[derive(Default)]
+struct Selection {
+    key: Option<String>,
+    /// From which row, and when it set off.
+    slide: Option<(String, Instant)>,
 }
 
 /// A row to scroll into view once it's been laid out, and how many frames
@@ -49,6 +62,7 @@ impl RowMotion {
     /// The rows about to be drawn, by key, top to bottom (`Glides::rows_drawn`).
     pub(crate) fn rows_drawn(&self, rows: Vec<String>, quiet: &HashSet<String>, reduce: bool) {
         self.placed.borrow_mut().retain(|k, _| rows.contains(k));
+        self.painted.borrow_mut().retain(|k, _| rows.contains(k));
         self.glides.borrow_mut().rows_drawn(rows, quiet, reduce, Instant::now());
     }
 
@@ -113,6 +127,51 @@ impl RowMotion {
     pub(crate) fn list_marker(self: &Rc<Self>) -> impl IntoElement {
         let motion = self.clone();
         canvas(move |bounds, _, _| motion.list_top.set(f32::from(bounds.origin.y)), |_, _, _, _| {}).absolute().top_0().left_0().size_full()
+    }
+
+    /// Says which row is selected, before the rows are drawn, and whether
+    /// its highlight is sliding there from the one before (`Juice.selection`
+    /// over the highlight matched across the list, `rowHighlight`): while it
+    /// is, the row leaves its own highlight to `selection_marker`. Only from
+    /// a row that was on show, and not under Reduce Motion, where it jumps.
+    pub(crate) fn selection(&self, key: Option<&str>, reduce: bool) -> bool {
+        let mut selection = self.selection.borrow_mut();
+        if selection.key.as_deref() != key {
+            let from = selection.key.take().filter(|from| !reduce && key.is_some() && self.painted.borrow().contains_key(from));
+            selection.slide = from.map(|from| (from, Instant::now()));
+            selection.key = key.map(str::to_owned);
+        }
+        if selection.slide.as_ref().is_some_and(|(_, at)| at.elapsed() >= juice::SELECTION_SLIDE) {
+            selection.slide = None;
+        }
+        selection.slide.is_some()
+    }
+
+    /// The highlight on its way from one row to the next, under the rows: the
+    /// list's first child but one, so it paints before any of them, once
+    /// they've all been placed this frame.
+    pub(crate) fn selection_marker(self: &Rc<Self>, color: Hsla, corner: f32) -> impl IntoElement {
+        let motion = self.clone();
+        canvas(
+            |_, _, _| {},
+            move |_, _, window, _| {
+                let selection = motion.selection.borrow();
+                let (Some(to), Some((from, at))) = (selection.key.as_ref(), selection.slide.as_ref()) else { return };
+                let painted = motion.painted.borrow();
+                let (Some(a), Some(b)) = (painted.get(from), painted.get(to)) else { return };
+                let t = juice::selection_slide(juice::progress(at.elapsed(), juice::SELECTION_SLIDE));
+                let mix = |x: Pixels, y: Pixels| x + (y - x) * t;
+                let bounds = Bounds::new(point(mix(a.origin.x, b.origin.x), mix(a.origin.y, b.origin.y)), size(mix(a.size.width, b.size.width), mix(a.size.height, b.size.height)));
+                window.paint_quad(fill(bounds, color).corner_radii(px(corner)));
+                // Until it lands, and once more after, for the row to take its
+                // highlight back.
+                window.request_animation_frame();
+            },
+        )
+        .absolute()
+        .top_0()
+        .left_0()
+        .size_full()
     }
 
     /// A row that glides from its last place to its new one, and fades in
@@ -208,6 +267,7 @@ impl Element for Glide {
         if offset != 0. {
             window.request_animation_frame();
         }
+        self.motion.painted.borrow_mut().insert(self.key.clone(), Bounds::new(point(bounds.origin.x, bounds.origin.y + gpui_kit::px(offset)), bounds.size));
         let child = &mut self.child;
         window.with_element_offset(point(gpui_kit::px(0.), gpui_kit::px(offset)), |window| {
             child.prepaint(window, cx);

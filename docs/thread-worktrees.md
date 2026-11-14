@@ -160,8 +160,13 @@ runs go one at a time, with the newest push waiting in place of any before it.
 Fix what failed first (`gh run view <id> --log-failed`). The landing that is
 that fix, or one made while main already has a fix GitHub hasn't run yet
 (main is only pushed now and then), goes in with `tb land --despite-red`.
-When `gh` isn't installed, isn't signed in or can't reach GitHub, the
-landing goes ahead and says it couldn't ask. Only `desktop.yml` has the mark
+GitHub's answer is kept in the repo's git folder
+(`threadbear-land-gate/`), shared by every worktree: one from the last
+minute is used without asking again, as a dozen threads landing at once ran
+out GitHub's shared API allowance (13 Nov). When `gh` isn't installed,
+isn't signed in or can't reach GitHub (a 403 for that allowance too), an
+answer from the last half hour still counts, saying how old it is; with
+none, the landing goes ahead and says it couldn't ask. Only `desktop.yml` has the mark
 so far.
 
 ### Landing together
@@ -186,6 +191,16 @@ their own.
   landed; each of the others finds its result in its entry when it gets
   the lock, moves its own branch to its commits as they landed, prints
   them and which branches were in the same check, and exits.
+- The group's check runs in the holder's tb, with its environment, so each
+  entry also keeps the check hosts its own tb asked for
+  (`THREADBEAR_CHECK_HOST`). The check gets them all, the holder's first, as
+  `THREADBEAR_CHECK_PREFER`: `scripts/check-remote.sh` tries those hosts
+  first and keeps the rest of its list behind them, so a landing that asked
+  for the cloud box gets it when it's free, and a group that needs a Mac
+  still goes to one. A group's check (`THREADBEAR_CHECK_GROUP`) always goes
+  to runner.json's hosts, never only the holder's own list, and never to
+  this Mac just because the holder's asked for that. On 13 Nov one that asked for the cloud box was
+  checked on Tinker Desk, behind its long builds, in another's group.
 - An entry is left out, to see to itself later, if it asks for a
   different check (or reads it from another folder), its worktree has
   moved on since it asked, it doesn't go onto the stack cleanly, its tb
@@ -204,17 +219,50 @@ their own.
   for each meant two passing group checks in a row landed nothing.
 - A tb killed during a group check leaves its worktree detached at the
   stack (its branch is untouched) and a marker in the worktree's git dir;
-  the next `tb land` there checks the branch out again. Two `tb land`s in
+  the next `tb land` there checks the branch out again. Commits made on
+  the detached stack meanwhile (a fix committed while the check ran) are
+  first carried onto the branch, as a rebase would, and said; if they
+  don't go on cleanly, `tb land` stops with their ids and how to keep them
+  (`git cherry-pick`), leaving HEAD on them. A running `tb land` does the
+  same when it goes back to the branch, then stops without landing, so the
+  next run lands them too. On 13 Nov a fix committed there was checked out
+  away silently and the same check failed again. Two `tb land`s in
   one worktree take turns (`threadbear-land-worktree.lock` in its git dir).
+- A landing made with `tb land --despite-red` is the repair for what's
+  red, so it's a fix in the queue: it goes first on the stack in every
+  group check, outside the group's limit, and the red hold isn't asked
+  about its files (the others' still are). So a repair queued behind
+  groups failing on main's own error goes into the next check with them,
+  rather than waiting for the halving to finish (13 Nov: three group
+  checks failed on a broken main while its one-line repair waited). If a
+  group with only fixes and the holder fails, the fixes are left out next,
+  so a broken "fix" is still found.
 - If a group's check fails, nothing lands and the group is halved: the
   holder goes again with itself and the first half, and the rest wait with
-  their limit halved too. Nobody's told their check failed until it fails
-  in a check of its own, so the one that broke it is found in a few checks,
-  and the rest land.
+  their limit halved too. Before retrying, the holder prints the exit code
+  and last 40 lines of the failed check's output (up to 8,000 characters),
+  including any retained log paths there. Wait for `tb land` to finish before
+  editing the holder's worktree, which it still uses for retries.
+  That is the group's result; an individual landing is
+  only refused if its own check fails, so the one that broke it is found
+  in a few checks, and the rest land. Those limits hold only on the main
+  they were set on: once main moves, a failure on the old one says nothing
+  about the new, and they lapse.
 - While it waits, a landing says where it is: whose check is running and
   for how long, how many are waiting ahead of it, and roughly how long it
-  has to go, from the last 20 checks in the times log below. It says it
-  again every three minutes.
+  has to go, from the last 20 checks in the times log below. If it is
+  already in the running group, it says it is being checked and estimates
+  only the rest of that check. Landings in the running group don't count
+  as waiting ahead of anyone else. The status record includes the holder's
+  pid and the entries being checked, so a check left by a dead holder is
+  ignored, and a new landing on a branch already in the check isn't counted
+  as being checked. Older holders' records still work, using their branch
+  names. For a landing in the running group, a check that runs past the
+  usual time says "longer than usual" instead of guessing how much longer.
+  If its group has already landed but another landing gets the lock first,
+  it says it has landed and is waiting for the lock to finish up, without
+  an estimate for another check.
+  It says it again every three minutes.
 
 So a landing waits for at most the check that's running and the next one,
 unless a check fails.
@@ -232,12 +280,20 @@ directory (`.git/` in the main checkout), passes and failures alike:
 ```
 
 `seconds` is the check, `waitedSeconds` the wait for the landing lock,
+`check` the command, `intact` that the worktree was still at that commit
+with nothing changed when the check ended,
 `together` the other branches in the same check (when there were any), and
 `steps` whatever check.sh printed; another repo's check just has none. A
 failed one has `exit`, a dry run `dryRun: true`, and a step that only passed
 when check.sh ran its failing files again has `secondRun`, naming the tests.
 Past 1 MiB it's cut back to the newest 1000 lines. It stays on this Mac,
 and a log that can't be written never stops a landing.
+
+The runner's updater reads it too: a commit with a passing line here from
+a check host, with the runner's typecheck and unit tests run, is built
+without running them again (docs/dev-tools.md, "The runner updating
+itself"). `host` and `steps` are the last run's: a host that dropped out
+partway, or a run that fell back to this Mac, leaves none of its own.
 
 ## Cleaning up
 
@@ -337,6 +393,14 @@ With `keep`:
   and `git checkout -b thread/<id8> main`. Setup runs as for a new one.
 - A patch's `teardown` runs before the worktree is set aside, as for one
   that's removed: what the thread made is its own, not the next thread's.
+- A worktree that has to stay (work not on main, uncommitted changes)
+  can't be a spare, so no other thread will use its kept folders: they're
+  deleted, with a line in the note saying so (`clearBuildCaches`). Mike, 13
+  Nov 2026: such slots held 39 GB of app builds, and he asked for build
+  files to go once no thread can use them. A thread brought back builds
+  again. Only while the folder is still the thread's own checkout, and only
+  real folders inside it, never through a link; each is renamed aside right
+  after that check, then deleted.
 - The record keeps `keep`, and `spare: true` once it's set aside. A
   spare's thread, unarchived, moves to the main checkout even though the
   folder is still there: it's another thread's now. So does any thread
@@ -382,11 +446,17 @@ rebase cannot validate the new combination, even when files don't overlap.
 
 Main on this Mac moves by `tb land`; GitHub's moves by pushes and merged
 PRs. To bring them together, run `scripts/sync-main.sh` (from any
-checkout). It takes the landing lock for the whole of it, so no landing
-can move main meanwhile, then:
+checkout).
+
+- only this Mac's has moved (the usual case): pushes main straight away,
+  without waiting for the landing lock. A push moves only GitHub's main,
+  as a fast-forward or not at all, so it can't race a landing; with
+  landings queued, the wait for the lock was over 30 minutes (13 Nov).
+
+Otherwise it takes the landing lock for the rest, so no landing can move
+main meanwhile, then:
 
 - only GitHub's has moved: fast-forwards main to it;
-- only this Mac's has: pushes main;
 - both have: rebases this Mac's commits onto GitHub's (merges GitHub's
   in instead when this Mac's have a merge, which a rebase would flatten) in a borrowed
   worktree, runs `./check.sh --quick` on that (a combination nobody has

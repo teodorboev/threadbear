@@ -44,7 +44,18 @@ that has no file yet (`git tag -l 'release/*'` against `ls site/changelog`).
      `git log --oneline -S '<a distinctive string>' -- app runner ios web | tail -3`, or earlier
      commits about the same feature. If it existed, it's a fix or a change: say exactly what
      changed.
-     `credit` names someone when a commit says the work came from their fork or PR.
+   - Credit everyone a change came from, on cards and plain lines alike: their PR, a fork it
+     was ported from, their issue, or a bug they reported that the commit names ("Ville's Auto
+     threads asked..."). A card takes `"credit": "Name"`; a line becomes
+     `{ "text": "...", "credit": "Name" }`. Find them with
+     `git log --format='%h %an | %s' <range> | grep -v 'Mike Cann'`, the commits' non-Claude
+     `Co-Authored-By` lines, and "fork", "PR #", "issue" and people's names in the bodies; `gh
+     api users/<login> -q .name` gives a real name (else use the login). Mike, 13 Nov:
+     "attribute any fixes or whatever to people if it came from other people".
+     Each name links from `site/changelog/people.json`: their X account when `gh api
+     users/<login> -q .twitter_username` gives one, else their fork
+     (`https://github.com/<login>/threadbear`, if it answers), else their GitHub profile. The
+     build refuses a credit with nobody from that file in it, so add a new person there first.
    - `added` / `changed` / `fixed`: every other change a user would notice, one plain line each,
      several commits about one thing as one line. Leave out tests, refactors, docs, CI, agent
      instructions, review rounds and security-scan internals; security fixes users should know

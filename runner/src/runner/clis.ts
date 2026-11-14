@@ -13,13 +13,17 @@ export const clisPart = {
     const { rec, rt } = st;
     rt.idleTimer?.cancel();
     rt.idleTimer = undefined;
-    if (!rt.session || rt.closing || rt.turn || rec.queue.length || rt.approvals.size) return;
+    if (!rt.session || rt.closing || rt.turn || rt.approvals.size) return;
     // Snoozed or archived: the CLI goes now, stopping any background work
-    // (with a note), as Mike or the agent put the thread away.
+    // (with a note), as Mike or the agent put the thread away. Before the
+    // queue's check: a put-away thread keeps its queue until it's back, and
+    // returning on it here left the CLI alive with its work (13 Nov 2026,
+    // the implicit state machines scan).
     if (this.bucket(rec) !== 'inbox') {
       this.releaseSession(st);
       return;
     }
+    if (rec.queue.length) return;
     // A fresh CLI is wanted (another login or folder, /clear, a setting
     // the live one couldn't take), which the next message would get anyway.
     // Never at the cost of background work, or of the turn the CLI is about

@@ -53,6 +53,9 @@ echo "fake 0 0 $f 0% /"
   return { root, bin, base, env, left, trim };
 }
 
+// An ssh that runs the command here, stdin and all, past remote.sh's -o options.
+const FAKE_SSH = `#!/bin/bash\nwhile [ "$1" = -o ]; do shift 2; done\nshift\ncd "$HOME" && eval "$*"\n`;
+
 const WORK = {
   'src-aaa': 0, 'target-aaa': 0, // this checkout
   'src-bbb': 30, 'target-bbb': 30, // idle the longest
@@ -135,8 +138,7 @@ test('a df reporting less than nothing counts as full, and one it can not read b
 test('remote.sh stops before copying anything when the host refuses, and marks its target as used', (t) => {
   const h = host(t, 2, {});
   const log = path.join(h.root, 'rsync-ran');
-  // An ssh that runs the command here, stdin and all.
-  fs.writeFileSync(path.join(h.bin, 'ssh'), `#!/bin/bash\nshift\ncd "$HOME" && eval "$*"\n`, { mode: 0o755 });
+  fs.writeFileSync(path.join(h.bin, 'ssh'), FAKE_SSH, { mode: 0o755 });
   fs.writeFileSync(path.join(h.bin, 'rsync'), `#!/bin/bash\ntouch ${JSON.stringify(log)}\n`, { mode: 0o755 });
   const r = spawnSync('/bin/bash', [path.join(SCRIPTS, 'remote.sh'), 'somehost', '--', 'true'], { env: h.env, encoding: 'utf8', timeout: 20_000 });
   assert.equal(r.status, 3, r.stderr);
@@ -148,14 +150,18 @@ test('remote.sh stops before copying anything when the host refuses, and marks i
 
 test('a run marks its target in use and its copy as used, and ssh does not wait on the marking', (t) => {
   const h = host(t, 40, {});
-  fs.writeFileSync(path.join(h.bin, 'ssh'), `#!/bin/bash\nshift\ncd "$HOME" && eval "$*"\n`, { mode: 0o755 });
+  fs.writeFileSync(path.join(h.bin, 'ssh'), FAKE_SSH, { mode: 0o755 });
   fs.writeFileSync(path.join(h.bin, 'npm'), '#!/bin/bash\nexit 0\n', { mode: 0o755 });
   // The real rsync sets the copy's time to the Mac's, which is the point here.
   const findNode = path.join(import.meta.dirname, '..', '..', 'scripts', 'find-node.sh');
   fs.writeFileSync(path.join(h.bin, 'rsync'), `#!/bin/bash
 dest="$HOME/\${!##*:}"
-mkdir -p "$dest/runner/scripts"
+mkdir -p "$dest/runner/scripts" "$dest/scripts"
 cp ${JSON.stringify(findNode)} "$dest/runner/scripts/"
+source="\${@: -2:1}"
+for helper in perf-lock.pl perf-children.pl hangup-guard.sh remote-guard-lib.sh build-priority.sh perf-build.sh; do
+  cp "$source/scripts/$helper" "$dest/scripts/"
+done
 touch -t 202601010000 "$dest"
 # The host was too full for the first mkdir, and the trim then made room.
 rm -rf "$HOME"/.cache/threadbear-check/gpui/target-*
@@ -255,4 +261,212 @@ test("a trim waits for another one on the same host, so a run can't start betwee
   const r = spawnSync('/bin/bash', ['-c', `perl ${JSON.stringify(holder)} | { read -r _; SECONDS=0; bash ${JSON.stringify(TRIM)} aaa; echo "took $SECONDS"; }`], { cwd: h.base, env: h.env, encoding: 'utf8', timeout: 20_000 });
   assert.equal(r.status, 0, r.stderr);
   assert.ok(Number(/took (\d+)/.exec(r.stdout)![1]) >= 2, r.stdout);
+});
+
+// 13 Nov: the cloud box filled during a spec run, every scenario failed with
+// ENOSPC, and the run still ended 0.
+test('a run that leaves the host nearly full fails, whatever its command said, and says why', (t) => {
+  const h = host(t, 40, {});
+  const full = path.join(h.root, 'full');
+  fs.writeFileSync(path.join(h.bin, 'ssh'), FAKE_SSH, { mode: 0o755 });
+  fs.writeFileSync(path.join(h.bin, 'npm'), '#!/bin/bash\nexit 0\n', { mode: 0o755 });
+  // Room to start, then 300 MiB once the command has run.
+  fs.writeFileSync(path.join(h.bin, 'df'), `#!/bin/bash
+echo "Filesystem 1024-blocks Used Available Capacity Mounted"
+if [ -e ${JSON.stringify(full)} ]; then echo "fake 0 0 307200 0% /"; else echo "fake 0 0 $((40 * 1048576)) 0% /"; fi
+`, { mode: 0o755 });
+  const findNode = path.join(import.meta.dirname, '..', '..', 'scripts', 'find-node.sh');
+  fs.writeFileSync(path.join(h.bin, 'rsync'), `#!/bin/bash
+dest="$HOME/\${!##*:}"
+mkdir -p "$dest/runner/scripts" "$dest/scripts"
+cp ${JSON.stringify(findNode)} "$dest/runner/scripts/"
+source="\${@: -2:1}"
+for helper in perf-lock.pl perf-children.pl hangup-guard.sh remote-guard-lib.sh build-priority.sh perf-build.sh; do
+  cp "$source/scripts/$helper" "$dest/scripts/"
+done
+`, { mode: 0o755 });
+  // A host each: the fake ssh runs here, so a run's in-use marker keeps the
+  // last run's turn lock open, which the real ssh would have dropped.
+  const run = (where: string, ...cmd: string[]) => spawnSync('/bin/bash', [path.join(SCRIPTS, 'remote.sh'), where, '--', ...cmd], { env: h.env, encoding: 'utf8', timeout: 30_000 });
+
+  // Remote builds keep line numbers, not the full debug info that filled it.
+  const fine = run('host1', 'bash', '-c', 'echo "debug=$CARGO_PROFILE_DEV_DEBUG"');
+  assert.equal(fine.status, 0, fine.stderr);
+  assert.match(fine.stdout, /debug=line-tables-only/);
+
+  const filled = run('host2', 'touch', full);
+  assert.equal(filled.status, 1);
+  assert.match(filled.stderr, /host2 has only 300 MiB free after this run/);
+  // A failure keeps its own code.
+  fs.rmSync(full);
+  const failed = run('host3', 'bash', '-c', `touch ${JSON.stringify(full)}; exit 7`);
+  assert.equal(failed.status, 7);
+  assert.match(failed.stderr, /300 MiB free/);
+});
+
+test('the shared performance target survives ordinary cache eviction', (t) => {
+  const h = host(t, 400, MANY);
+  fs.mkdirSync(path.join(h.base, 'perf-target'));
+  assert.equal(h.trim().status, 0);
+  assert.ok(fs.existsSync(path.join(h.base, 'perf-target')));
+});
+
+test('a warm shared performance target needs warm-build space rather than cold-build space', (t) => {
+  const h = host(t, 6, { 'src-aaa': 0, 'target-aaa': -1 });
+  fs.mkdirSync(path.join(h.base, 'perf-target/debug'), { recursive: true });
+  fs.writeFileSync(path.join(h.base, 'perf-target/debug/out'), 'warm');
+  const r = spawnSync('/bin/bash', [TRIM, 'aaa', 'perf-target'], { cwd: h.base, env: h.env, encoding: 'utf8' });
+  assert.equal(r.status, 0, r.stderr);
+});
+
+
+test('perf mode consumes no per-checkout target slot', (t) => {
+  const h = host(t, 400, MANY);
+  fs.mkdirSync(path.join(h.base, 'perf-target'));
+  const r = spawnSync('/bin/bash', [TRIM, 'perfcheckout', 'perf-target'], { cwd: h.base, env: h.env, encoding: 'utf8' });
+  assert.equal(r.status, 0, r.stderr);
+  assert.ok(!fs.existsSync(path.join(h.base, 'target-perfcheckout')));
+  assert.equal(h.left().length, 4);
+});
+
+test('perf mode counts and evicts an old normal target without deleting its active source', (t) => {
+  const folders = { 'src-aaa': 20, 'target-aaa': 20, 'src-bbb': 1, 'target-bbb': 1, 'src-ccc': 2, 'target-ccc': 2, 'src-ddd': 3, 'target-ddd': 3, 'src-eee': 4, 'target-eee': 4 };
+  const h = host(t, 400, folders);
+  fs.mkdirSync(path.join(h.base, 'perf-target'));
+  const r = spawnSync('/bin/bash', [TRIM, 'aaa', 'perf-target'], { cwd: h.base, env: h.env, encoding: 'utf8' });
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(h.left().length, 4);
+  assert.ok(!fs.existsSync(path.join(h.base, 'target-aaa')));
+  assert.ok(fs.existsSync(path.join(h.base, 'src-aaa')), 'perf run still needs its source');
+});
+
+// 13 Nov: one target per checkout, six of them, 34 GB, filled the cloud box.
+// Builds now share a few targets (desktop/scripts/shared-cargo/cargo), each
+// under a lock its build holds.
+function sharedSlot(h: ReturnType<typeof host>, n: number, built: boolean) {
+  const t = path.join(h.base, `shared-${n}`, 'target');
+  fs.mkdirSync(path.join(t, 'debug'), { recursive: true });
+  if (built) fs.writeFileSync(path.join(t, 'debug', 'out'), 'x');
+  fs.writeFileSync(path.join(h.base, `shared-${n}.lock`), '');
+  return t;
+}
+
+test('too short to build at all, a shared target no build holds goes, but only after every idle checkout', (t) => {
+  const h = host(t, 1, { 'target-aaa': 0 });
+  const slot = sharedSlot(h, 1, true);
+  const r = h.trim();
+  assert.equal(r.status, 3, r.stderr); // the fake df only counts per-checkout targets
+  assert.equal(fs.existsSync(slot), false);
+  assert.match(r.stderr, /shared-1\/target, a shared build folder/);
+  assert.equal(fs.existsSync(path.join(h.base, 'shared-1')), true, 'its copy of the source stays');
+  assert.deepEqual(fs.readdirSync(h.base).filter((n) => n.includes('gone')), []);
+  // An idle checkout's target first: that's room enough, so the warm one stays.
+  const idle = host(t, 0, { 'target-aaa': 0, 'src-bbb': 30, 'target-bbb': 30 });
+  const kept = sharedSlot(idle, 1, true);
+  assert.equal(idle.trim().status, 0);
+  assert.equal(fs.existsSync(path.join(idle.base, 'target-bbb')), false);
+  assert.equal(fs.existsSync(kept), true);
+});
+
+test('a shared target a build holds stays, however low the disk', (t) => {
+  const h = host(t, 1, { 'target-aaa': 0 });
+  const slot = sharedSlot(h, 1, true);
+  // A build holding the slot's lock, as shared-cargo's flock does.
+  const holder = path.join(h.root, 'hold.pl');
+  fs.writeFileSync(holder, `use Fcntl ":flock"; open(my $f, ">>", "shared-1.lock") or die; flock($f, LOCK_EX) or die; $| = 1; print "held\\n"; sleep 4;`);
+  const r = spawnSync('/bin/bash', ['-c', `perl ${JSON.stringify(holder)} | { read -r _; bash ${JSON.stringify(TRIM)} aaa; }`], { cwd: h.base, env: h.env, encoding: 'utf8', timeout: 20_000 });
+  assert.match(r.stderr, /won't start/);
+  assert.equal(fs.existsSync(path.join(slot, 'debug', 'out')), true);
+});
+
+test("a checkout with no build of its own isn't cold when a shared target is warm", (t) => {
+  const h = host(t, 5, { 'target-aaa': -1 });
+  assert.equal(h.trim().status, 3);
+  sharedSlot(h, 2, true);
+  const r = h.trim();
+  assert.equal(r.status, 0, r.stderr);
+});
+
+test("remote.sh puts the shared cargo first and clears a checkout's target from before", (t) => {
+  const h = host(t, 40, {});
+  fs.writeFileSync(path.join(h.bin, 'ssh'), FAKE_SSH, { mode: 0o755 });
+  fs.writeFileSync(path.join(h.bin, 'npm'), '#!/bin/bash\nexit 0\n', { mode: 0o755 });
+  const findNode = path.join(import.meta.dirname, '..', '..', 'scripts', 'find-node.sh');
+  // The shim's own copy, from the checkout's copy to its slot, is a real one.
+  fs.writeFileSync(path.join(h.bin, 'rsync'), `#!/bin/bash
+case "\${!#}" in *:*) ;; *) exec /usr/bin/rsync "$@" ;; esac
+dest="$HOME/\${!##*:}"
+mkdir -p "$dest/runner/scripts" "$dest/scripts"
+cp ${JSON.stringify(findNode)} "$dest/runner/scripts/"
+source="\${@: -2:1}"
+for helper in perf-lock.pl perf-children.pl hangup-guard.sh remote-guard-lib.sh build-priority.sh perf-build.sh; do
+  cp "$source/scripts/$helper" "$dest/scripts/"
+done
+mkdir -p "$dest/desktop/scripts"
+cp -R "$source/desktop/scripts/shared-cargo" "$dest/desktop/scripts/"
+`, { mode: 0o755 });
+  // The first run makes this checkout's folders; then its target gets an old-style build in it.
+  // A host each: the fake ssh runs here, so a run's in-use marker keeps the
+  // last run's turn lock open.
+  const run = (where: string, ...cmd: string[]) => spawnSync('/bin/bash', [path.join(SCRIPTS, 'remote.sh'), where, '--', ...cmd], { env: h.env, encoding: 'utf8', timeout: 30_000 });
+  assert.equal(run('host1', 'true').status, 0);
+  const target = path.join(h.base, fs.readdirSync(h.base).find((n) => n.startsWith('target-'))!);
+  fs.mkdirSync(path.join(target, 'debug', '.fingerprint'), { recursive: true });
+  fs.writeFileSync(path.join(target, 'debug', 'big'), 'x');
+  const r = run('host2', 'bash', '-c', 'echo "path=$PATH"; echo "base=$THREADBEAR_SHARED_CARGO_BASE src=$THREADBEAR_SHARED_CARGO_SRC target=$CARGO_TARGET_DIR"');
+  assert.equal(r.status, 0, r.stderr);
+  const first = /path=([^:\n]*)/.exec(r.stdout)![1];
+  assert.match(first, /\/src-[0-9a-f]+\/desktop\/scripts\/shared-cargo$/);
+  assert.match(r.stdout, new RegExp(`base=${h.base} src=${h.base}/src-[0-9a-f]+ target=${target}`));
+  assert.equal(fs.existsSync(path.join(target, 'debug', 'big')), false, 'the old build went');
+  assert.equal(fs.existsSync(target), true);
+  // And cargo through the whole chain: this, build-priority's, then the real one, once.
+  const log = path.join(h.root, 'cargo.log');
+  fs.writeFileSync(path.join(h.bin, 'cargo'), `#!/bin/bash\necho "$(pwd -P) $CARGO_TARGET_DIR $*" >>${JSON.stringify(log)}\n`, { mode: 0o755 });
+  const built = run('host3', 'bash', '-c', 'cd desktop && cargo build -p x');
+  assert.equal(built.status, 0, built.stderr);
+  const lines = fs.readFileSync(log, 'utf8').trim().split('\n');
+  assert.equal(lines.length, 1, lines.join('\n'));
+  assert.match(lines[0], new RegExp(`/shared-1/src/desktop ${h.base}/shared-1/target build -p x$`));
+  // The three-day age limit spares a folder whose run is still marking it in use.
+  const days = new Date(Date.now() - 4 * 24 * HOUR);
+  for (const name of ['target-leased', 'target-stale', 'src-stale']) {
+    fs.mkdirSync(path.join(h.base, name), { recursive: true });
+    if (name === 'target-leased') fs.writeFileSync(path.join(h.base, name, '.in-use'), '');
+    else fs.writeFileSync(path.join(h.base, name, 'old'), '');
+    fs.utimesSync(path.join(h.base, name, name === 'target-leased' ? '.in-use' : 'old'), name === 'target-leased' ? new Date() : days, name === 'target-leased' ? new Date() : days);
+    fs.utimesSync(path.join(h.base, name), days, days);
+  }
+  assert.equal(run('host4', 'true').status, 0);
+  assert.equal(fs.existsSync(path.join(h.base, 'target-leased')), true, 'a run still in it');
+  assert.equal(fs.existsSync(path.join(h.base, 'target-stale')), false);
+  assert.equal(fs.existsSync(path.join(h.base, 'src-stale')), false);
+});
+
+test("an idle checkout's whole build from before the shared targets goes, even with room", (t) => {
+  const h = host(t, 400, { 'target-aaa': 0, 'src-old': 2, 'target-old': 2, 'src-busy': 0.1, 'target-busy': 0.1, 'src-new': 2, 'target-new': 2 });
+  for (const k of ['old', 'busy']) fs.mkdirSync(path.join(h.base, `target-${k}`, 'debug', '.fingerprint'));
+  // mkdir changed the folders' times: put the idle one's back.
+  const when = new Date(Date.now() - 2 * HOUR);
+  fs.utimesSync(path.join(h.base, 'target-old', 'debug', '.fingerprint'), when, when);
+  fs.utimesSync(path.join(h.base, 'target-old', 'debug'), when, when);
+  const r = h.trim();
+  assert.equal(r.status, 0, r.stderr);
+  assert.deepEqual(h.left(), ['target-aaa', 'target-busy', 'target-new']);
+  assert.match(r.stderr, /target-old, a whole build from before/);
+});
+
+test("check-remote.sh's trim gives nothing back while a build or measurement holds the host", (t) => {
+  const h = host(t, 1, WORK);
+  const lock = path.join(h.root, 'home', '.cache', 'threadbear-perf.lock');
+  fs.writeFileSync(lock, '');
+  const holder = path.join(h.root, 'hold.pl');
+  fs.writeFileSync(holder, `use Fcntl ":flock"; open(my $f, ">>", ${JSON.stringify(lock)}) or die; flock($f, LOCK_EX) or die; $| = 1; print "held\\n"; sleep 4;`);
+  const r = spawnSync('/bin/bash', ['-c', `perl ${JSON.stringify(holder)} | { read -r _; bash ${JSON.stringify(TRIM)} -; }`], { cwd: h.base, env: h.env, encoding: 'utf8', timeout: 20_000 });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stderr, /no build folders are given back now/);
+  assert.deepEqual(h.left(), ['target-aaa', 'target-bbb', 'target-ccc', 'target-ddd']);
+  // Free again, it does.
+  assert.equal(h.trim('-').status, 0);
+  assert.deepEqual(h.left(), ['target-aaa', 'target-ddd']);
 });

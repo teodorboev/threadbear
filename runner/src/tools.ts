@@ -262,11 +262,6 @@ export function cardInput(input: Record<string, unknown>, decisive: readonly str
 export const REMOTE_COMMAND_CHARS = 160;
 // What such a card says there, and what an allow from there is told.
 export const REMOTE_ALLOW_REFUSED = "It can't be shown in full here, so it can only be allowed in the Mac app connected straight to its runner.";
-// A card's Run (end_turn asks[].run) whose command or folder the scrub
-// changes: it goes up without its button, saying this, and a press from off
-// the Mac is refused with it (Daybreak, 10 Nov: comment lines dressed as a
-// PEM key hid a statement from the phone, and Run ran it).
-export const REMOTE_RUN_REFUSED = "Its command can't be shown in full here, so it can only be run in the Mac app connected straight to its runner.";
 // `cwd` is the thread's folder: a command that runs anywhere else, or asks
 // for the network, has more to it than its line (Codex review, 7 Nov 2026).
 // An edit of a file that runs as code shows all it writes on the Mac, and

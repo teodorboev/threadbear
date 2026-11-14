@@ -529,6 +529,10 @@ pub struct Remembered {
     pub last_pool_providers: HashMap<String, String>,
     pub last_models: HashMap<String, String>,
     pub last_efforts: HashMap<String, String>,
+    /// The mode last picked in the new-thread composer: the next new thread
+    /// starts on it too, as the model does (Mike, 13 Nov, after Ian kept
+    /// landing back on Auto). Never Plan first, which is for one task.
+    pub last_permission: Option<String>,
     /// The runner new threads start on ("Runs on"'s star), nil for this Mac.
     pub default_runner: Option<String>,
 }
@@ -554,6 +558,13 @@ impl Remembered {
             Some(m) => self.last_models.insert(provider.to_owned(), m.to_owned()),
             None => self.last_models.remove(provider),
         };
+    }
+
+    /// A mode picked for a new thread; Plan first isn't kept.
+    pub fn set_permission(&mut self, mode: &str) {
+        if matches!(mode, "full" | "ask" | "auto") {
+            self.last_permission = Some(mode.to_owned());
+        }
     }
 
     pub fn set_effort(&mut self, provider: &str, effort: Option<&str>) {
@@ -659,10 +670,16 @@ impl Draft<'_> {
         self.logins.account(&self.account_id()).map_or_else(|| "claude".to_owned(), |a| a.provider_id().to_owned())
     }
 
-    /// `AppModel.newThreadPermission`: picked, else the runner's default,
-    /// else full access.
+    /// `AppModel.newThreadPermission`: picked, else the last one picked for a
+    /// new thread, else the runner's default, else full access.
     pub fn permission(&self) -> String {
-        self.picks.permission.clone().or_else(|| self.logins.defaults.permission_mode.clone()).filter(|m| !m.is_empty()).unwrap_or_else(|| "full".to_owned())
+        self.picks
+            .permission
+            .clone()
+            .or_else(|| self.mem.last_permission.clone())
+            .or_else(|| self.logins.defaults.permission_mode.clone())
+            .filter(|m| !m.is_empty())
+            .unwrap_or_else(|| "full".to_owned())
     }
 
     /// What the note names after "on": the pool, or the login.
@@ -1040,6 +1057,20 @@ mod tests {
         assert_eq!(params["permissionMode"], "ask");
         assert!(params.get("poolId").is_none());
         assert!(params.get("model").is_none(), "the claude model doesn't follow a codex login");
+    }
+
+    #[test]
+    fn the_mode_picked_last_is_where_the_next_thread_starts() {
+        let l = with_pools();
+        let picks = NewThreadPicks::default();
+        let mut mem = Remembered::default();
+        assert_eq!(draft(&l, &picks, &mem).permission(), "auto", "the runner's default till one is picked");
+        mem.set_permission("full");
+        assert_eq!(draft(&l, &picks, &mem).permission(), "full");
+        mem.set_permission("plan");
+        assert_eq!(mem.last_permission.as_deref(), Some("full"), "Plan first is for one task");
+        let picked = NewThreadPicks { permission: Some("ask".into()), ..Default::default() };
+        assert_eq!(draft(&l, &picked, &mem).permission(), "ask");
     }
 
     #[test]

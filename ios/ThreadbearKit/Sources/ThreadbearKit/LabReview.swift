@@ -31,8 +31,10 @@ public struct PhoneLabReview: Codable, Sendable, Hashable {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         reviewer = (try? c.decode(String.self, forKey: .reviewer)) ?? "Another lab"
         independent = (try? c.decode(Bool.self, forKey: .independent)) ?? true
-        // A Convex number.
-        rounds = Int((try? c.decode(Double.self, forKey: .rounds)) ?? 1)
+        // A Convex number, so a Double, and another runner writes it: 1e20
+        // through `Int(_:)` traps, past any `try?` (Daybreak 109, 12 Nov
+        // 2026). A count of rounds or nothing.
+        rounds = (try? c.decode(Double.self, forKey: .rounds))?.wholeCount() ?? 1
         threadId = (try? c.decode(String.self, forKey: .threadId)) ?? ""
         passed = (try? c.decode(Bool.self, forKey: .passed)) ?? false
         unstructured = try? c.decodeIfPresent(Bool.self, forKey: .unstructured)
@@ -62,7 +64,12 @@ public struct PhoneReviewFinding: Codable, Sendable, Hashable, Identifiable {
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        id = Int(try c.decode(Double.self, forKey: .id))
+        // Checked as rounds is: a finding whose id isn't a whole number is
+        // left out (LossyList skips what throws), never a trap.
+        guard let id = try c.decode(Double.self, forKey: .id).wholeCount() else {
+            throw DecodingError.dataCorruptedError(forKey: .id, in: c, debugDescription: "not a whole number")
+        }
+        self.id = id
         severity = (try? c.decode(String.self, forKey: .severity)) ?? "medium"
         claim = try c.decode(String.self, forKey: .claim)
         `where` = try? c.decodeIfPresent(String.self, forKey: .where)

@@ -3302,6 +3302,72 @@ mod tests {
         );
     }
 
+    struct SizedMarkdownRoot {
+        text: Entity<TextViewState>,
+        width: Pixels,
+        style: TextViewStyle,
+    }
+
+    impl Render for SizedMarkdownRoot {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div().w(self.width).child(TextView::new(&self.text).style(self.style.clone()))
+        }
+    }
+
+    #[test]
+    fn natural_table_stops_growing_but_still_fits_a_narrow_parent() {
+        use crate::text::inline::test_fonts::WideMonoTextSystem;
+        use gpui::TestApp;
+        const CELL: u32 = 0x11aa77;
+        let painted_width = |width: f32, natural: bool| {
+            let mut app = TestApp::with_text_system(Arc::new(WideMonoTextSystem));
+            app.update(crate::init);
+            let mut window = app.open_window(|_, cx| SizedMarkdownRoot {
+                text: cx.new(|cx| TextViewState::markdown("| A | B |\n|---|---|\n| x | y |", cx)),
+                width: px(width),
+                style: TextViewStyle::default().with_table_natural_width(natural)
+                    .with_table_cell(StyleRefinement::default().bg(gpui::rgb(CELL))),
+            });
+            window.draw(); app.run_until_parked(); window.draw();
+            window.update(|_, window, _| {
+                let color: gpui::Background = gpui::rgb(CELL).into();
+                let cells: Vec<_> = window.painted_quads().into_iter().filter(|q| q.background == color).collect();
+                assert!(cells.len() >= 4, "the cells were painted (rows also paint slack)");
+                let left = cells.iter().map(|q| q.bounds.left()).min().unwrap();
+                let right = cells.iter().map(|q| q.bounds.right()).max().unwrap();
+                (right - left).as_f32() / window.scale_factor()
+            })
+        };
+        let natural = painted_width(1000., true);
+        assert!(natural < 300., "a two-letter table should not fill a wide reply");
+        assert_eq!(natural, painted_width(500., true));
+        assert!(painted_width(100., true) <= 100.);
+        assert!(painted_width(1000., false) > 900., "the kit default still fills its parent");
+    }
+
+    #[test]
+    fn list_item_gap_changes_the_space_between_painted_lines() {
+        use crate::text::inline::test_fonts::WideMonoTextSystem;
+        use gpui::TestApp;
+        let distance = |gap: f32| {
+            let mut app = TestApp::with_text_system(Arc::new(WideMonoTextSystem));
+            app.update(crate::init);
+            let mut window = app.open_window(|_, cx| SizedMarkdownRoot {
+                text: cx.new(|cx| TextViewState::markdown("- First\n- Second", cx)),
+                width: px(600.),
+                style: TextViewStyle::default().with_list_item_gap(gpui::rems(gap / 16.)),
+            });
+            window.draw(); app.run_until_parked(); window.draw();
+            window.read(|root, cx| {
+                let mut tops: Vec<_> = root.text.read(cx).selection_adapter.text_bounds().into_iter().map(|b| b.top()).collect();
+                tops.sort(); tops.dedup();
+                assert_eq!(tops.len(), 2);
+                tops[1] - tops[0]
+            })
+        };
+        assert_eq!(distance(6.) - distance(0.), px(6.));
+    }
+
     #[gpui::test]
     fn markdown_link_opens_url_without_handler(cx: &mut TestAppContext) {
         cx.update(crate::init);

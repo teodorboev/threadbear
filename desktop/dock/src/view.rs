@@ -130,6 +130,11 @@ struct LayoutMotion {
 }
 
 impl DockView {
+    /// A panel's own window, if it has been taken out of the dock.
+    pub fn floating_window(&self, panel: &str) -> Option<AnyWindowHandle> {
+        self.windows.handle(panel)
+    }
+
     /// A dock for `layout`. It redraws itself when the model changes, and
     /// opens and closes the torn-out windows the layout says it has.
     pub fn new(model: Entity<DockModel>, content: SharedContent, options: DockOptions, cx: &mut Context<Self>) -> Self {
@@ -173,6 +178,30 @@ impl DockView {
     /// are still on their way. For scripts.
     pub fn last_motion(&self) -> Option<(&HashMap<PanelId, dl::Rect>, &HashMap<PanelId, dl::Rect>, bool)> {
         self.last_motion.as_ref().map(|(from, to)| (from, to, self.motion.is_some()))
+    }
+
+    /// Whether `panel` is drawn in this window now: the front panel of a group
+    /// the dock draws, walking the layout as `node` and `split` do (a split
+    /// leaves out children with nothing to show, unless none has anything;
+    /// a group's front is the first tab with something to show, as `group`
+    /// has it). Not one out in a window of its own.
+    pub fn shows(&self, panel: &str, cx: &App) -> bool {
+        let content = self.content.clone();
+        let is_available = |p: &str| content.available(p, cx);
+        fn walk(node: &DockNode, panel: &str, is_available: &dyn Fn(&str) -> bool) -> bool {
+            match node {
+                DockNode::Group(g) => dl::visible_group(g, is_available).selected == panel,
+                DockNode::Split(s) => dl::shown_indices(s, is_available).into_iter().any(|i| walk(&s.children[i], panel, is_available)),
+            }
+        }
+        walk(&self.model.read(cx).layout().root, panel, &is_available)
+    }
+
+    /// Whether a dropped panel's ghost is still flying to where it landed.
+    /// Something drawn over the dock (the app's turning arcs) keeps out of
+    /// the way while it does, as while the panel's dragged.
+    pub fn is_landing(&self) -> bool {
+        self.landing.is_some()
     }
 
     /// Whether the last press on a bar moved the window or picked up a panel.
@@ -637,6 +666,10 @@ impl DockView {
 
         let menu = self.panel_menu(panel.clone(), tabbed);
         let body_press = panel.clone();
+        // With a bar there's a title or tab to drag it by, so the background
+        // only moves it when the app says so; without one (title hidden) the
+        // background stays a way to move it, beside the thin strip.
+        let background_moves = self.options.background_moves_panel || !header;
         let content = self.content.view(&panel, false, window, cx);
         let body = div()
             .id(ElementId::Name(format!("dock-body-{}", group.id).into()))
@@ -650,22 +683,24 @@ impl DockView {
             // A plain bubble listener, the lowest priority: any drag the
             // panel's own content handles (it stops the press) wins, so only
             // a held press on its background moves the panel.
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(move |this, e: &MouseDownEvent, window, cx| {
-                    // A press on words is the start of a selection, which wins
-                    // as an NSTextView's does over Swift's HoldDrag. The kit's
-                    // selection is the window's, not the text's, and never
-                    // stops the press, so it's asked. Without this, resting a
-                    // moment before dragging across a reply picked the thread
-                    // up instead (Mike, 12 Nov: "it only selects if I select
-                    // it very quickly").
-                    if gpui_kit::base::TextSelection::is_selectable_at(e.position, window, cx) {
-                        return;
-                    }
-                    this.begin_press(body_press.clone(), BODY_PRESS, e, window, cx)
-                }),
-            )
+            .when(background_moves, |d| {
+                d.on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |this, e: &MouseDownEvent, window, cx| {
+                        // A press on words is the start of a selection, which wins
+                        // as an NSTextView's does over Swift's HoldDrag. The kit's
+                        // selection is the window's, not the text's, and never
+                        // stops the press, so it's asked. Without this, resting a
+                        // moment before dragging across a reply picked the thread
+                        // up instead (Mike, 12 Nov: "it only selects if I select
+                        // it very quickly").
+                        if gpui_kit::base::TextSelection::is_selectable_at(e.position, window, cx) {
+                            return;
+                        }
+                        this.begin_press(body_press.clone(), BODY_PRESS, e, window, cx)
+                    }),
+                )
+            })
             .context_menu(menu);
 
         v_flex()
@@ -825,7 +860,10 @@ impl DockView {
             panel.to_string(),
             panel.to_string(),
             panel.to_string(),
-            self.move_tip(panel, cx),
+            match content.tip(panel, cx) {
+                Some(about) => format!("{about}. {}", self.move_tip(panel, cx)),
+                None => self.move_tip(panel, cx),
+            },
             panel.to_string(),
             panel.to_string(),
         );
@@ -951,6 +989,9 @@ impl DockView {
                 menu = menu.item(
                     PopupMenuItem::new("Open in New Window").icon(Icon::new(Lucide::ExternalLink)).on_click(move |_, _, cx| m2.update(cx, |m, cx| m.open_in_window(&p2, cx))),
                 );
+            }
+            for extra in content.menu_items(&panel, cx) {
+                menu = menu.item(crate::content::popup_item(extra));
             }
             if content.closable(&panel, cx) {
                 let (m3, p3) = (model.clone(), panel.clone());

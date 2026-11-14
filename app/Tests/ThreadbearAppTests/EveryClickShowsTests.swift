@@ -33,6 +33,7 @@ final class EveryClickShowsTests: XCTestCase {
     private static let showsItsOwnWay: [String: String] = [
         "RemoteRunners.swift setRunnerOrder": "the rows move at once",
         "RemoteRunners.swift sendNewThread": "creatingThread: the Send button spins",
+        "NewApp.swift start": "starting: Start using the new app spins and is disabled",
         "ThreadSession.swift tickAsk": "the box changes at once",
         "ThreadSession.swift answerSecret": "async: the card awaits it and shows its own state",
         "PaneModel.swift removeHighlight": "the row goes at once",

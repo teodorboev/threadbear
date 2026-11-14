@@ -33,6 +33,10 @@ struct OutlineWindow {
 }
 
 impl FloatingWindows {
+    /// The window a panel was taken into, for scripted window inspection.
+    pub fn handle(&self, panel: &str) -> Option<AnyWindowHandle> {
+        self.windows.get(panel).copied()
+    }
     /// Opens a window for each floating panel without one, closes those
     /// whose panel went back into the dock or was closed. A panel with
     /// nothing to show right now (a thread's patch panel while another
@@ -531,6 +535,9 @@ impl FloatingPanelView {
             let mut menu = menu.item(PopupMenuItem::new(if hidden { "Show Title" } else { "Hide Title" }).on_click(move |_, _, cx| m1.update(cx, |m, cx| m.set_title_hidden(&p1, !hidden, cx))));
             let (m2, p2) = (model.clone(), panel.clone());
             menu = menu.item(PopupMenuItem::new("Put Back in Main Window").on_click(move |_, _, cx| m2.update(cx, |m, cx| m.put_back(&p2, cx))));
+            for extra in content.menu_items(&panel, cx) {
+                menu = menu.item(crate::content::popup_item(extra));
+            }
             if content.closable(&panel, cx) {
                 let (m3, p3) = (model.clone(), panel.clone());
                 let title = content.title(&panel, cx);

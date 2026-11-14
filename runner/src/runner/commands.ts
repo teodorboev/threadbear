@@ -104,6 +104,8 @@ export const commandsPart = {
           break;
         }
         case 'clear':
+          delete rec.interruptedMessages;
+          delete rec.messageRecoveries;
           // A fresh native session from the next message; the CLI that has
           // the old one goes once this turn is over.
           if (rt.session) rt.releaseWhenIdle = true;

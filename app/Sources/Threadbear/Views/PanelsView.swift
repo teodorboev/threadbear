@@ -1328,11 +1328,10 @@ private struct ImagePanel: View {
                 PanelDebug.note(panel.id, result, image: result?.image.flatMap { NSImage(contentsOfFile: $0.path) })
                 #endif
                 // A new NSImage each time: the file's name doesn't change.
-                // Another Mac's picture is that Mac's file, fetched from it,
-                // never this Mac's file at that path (Codex review, 7 Nov).
-                if let path = result?.image?.path, let thread = app.threads[threadId], thread.isRemote {
-                    let copy = try? await app.remoteCopy(path, in: thread)
-                    image = copy.flatMap { $0.truncated ? nil : NSImage(contentsOf: $0.url) }
+                // Another Mac's picture is that Mac's file, never this Mac's
+                // file at that path (Codex review, 7 Nov), so none shows.
+                if app.threads[threadId]?.isRemote == true {
+                    image = nil
                 } else {
                     image = result?.image.flatMap { NSImage(contentsOfFile: $0.path) }
                 }
@@ -1343,7 +1342,15 @@ private struct ImagePanel: View {
 
     static func openSimulator() {
         guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.iphonesimulator") else { return }
-        NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration())
+        // Any .app can claim Simulator's id: start it only if it's Apple's
+        // (Daybreak 112, as the GPUI app's apple_simulator).
+        Task.detached(priority: .userInitiated) {
+            guard let simulator = SignedApp.checked(url, SignedApp.appleSimulator) else {
+                await MainActor.run { OpenGate.refuse("The registered Simulator isn't Apple's Simulator, so Threadbear didn't open it.") }
+                return
+            }
+            await MainActor.run { NSWorkspace.shared.openApplication(at: simulator, configuration: NSWorkspace.OpenConfiguration()) }
+        }
     }
 }
 

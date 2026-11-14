@@ -69,7 +69,7 @@ Feature: Decisions on the Projects page
     And I make the project "Photo sync" its own project
     Then the project page says it's a part of nothing
 
-  @projects.tabs @project-decisions @gpui-pending
+  @projects.tabs @project-decisions
   Scenario: A project's page opens on its decisions, and remembers the tab picked
     When I open the project "Threadbear"
     Then the project page shows its "decisions" tab
@@ -79,3 +79,13 @@ Feature: Decisions on the Projects page
     Then the project page shows its "project" tab
     When I open the project "Threadbear"
     Then the project page shows its "project" tab
+
+  @projects.tabs @project-decisions
+  Scenario: Go's Show Next Tab and Show Previous Tab step between a project's tabs
+    When I open the project "Threadbear"
+    Then the "Go" menu has "Show Next Tab" on "⇧⌘]"
+    And the "Go" menu has "Show Previous Tab" on "⇧⌘["
+    When I choose "Show Next Tab" from the menu bar
+    Then the project page shows its "project" tab
+    When I choose "Show Previous Tab" from the menu bar
+    Then the project page shows its "decisions" tab

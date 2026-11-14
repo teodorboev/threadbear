@@ -1259,6 +1259,10 @@ fn spent_today<Tz: TimeZone>(stats: Option<&Stats>, ids: &[&str], now: i64, zone
 /// `show_model_weeks` is the panel's own switch (`usage.showModelWeeks`): off,
 /// the logins leave out a model's own week ("Weekly Fable").
 pub fn cards<Tz: TimeZone>(pools: &[Pool], accounts: &[Account], stats: Option<&Stats>, show_model_weeks: bool, now: i64, zone: &Tz) -> Vec<Card> {
+    cards_named(pools, accounts, stats, show_model_weeks, now, zone, provider_title)
+}
+
+pub fn cards_named<Tz: TimeZone>(pools: &[Pool], accounts: &[Account], stats: Option<&Stats>, show_model_weeks: bool, now: i64, zone: &Tz, name: impl Fn(&str) -> String) -> Vec<Card> {
     let (_, own) = notices(accounts);
     groups(pools, accounts)
         .iter()
@@ -1267,14 +1271,14 @@ pub fn cards<Tz: TimeZone>(pools: &[Pool], accounts: &[Account], stats: Option<&
             let mixed = group.providers.len() > 1;
             Card {
                 id: group.id.clone(),
-                title: group.title.clone(),
+                title: if group.pool.is_none() && group.providers.len() == 1 && group.id != UNPOOLED { name(&group.providers[0].provider) } else { group.title.clone() },
                 symbol: group.pool.map_or_else(|| "tray".to_owned(), |p| pool_symbol(p, accounts)),
                 today: spent_today(stats, &ids, now, zone),
                 sections: group
                     .providers
                     .iter()
                     .map(|section| CardSection {
-                        title: mixed.then(|| provider_title(&section.provider)),
+                        title: mixed.then(|| name(&section.provider)),
                         logins: section.accounts.iter().map(|a| login_row(a, own.get(&a.id).map(String::as_str), stats, show_model_weeks, now, zone)).collect(),
                     })
                     .collect(),
@@ -1360,6 +1364,10 @@ pub const PARTIAL: &str = "Still reading the transcripts, so these are partial."
 /// the CLIs, which are the Updates panel's): the spend, then each login's
 /// room by pool (`#`) and provider (`##`), then where the numbers came from.
 pub fn lines<Tz: TimeZone>(pools: &[Pool], accounts: &[Account], stats: Option<&Stats>, now: i64, zone: &Tz) -> Vec<String> {
+    lines_named(pools, accounts, stats, now, zone, provider_title)
+}
+
+pub fn lines_named<Tz: TimeZone>(pools: &[Pool], accounts: &[Account], stats: Option<&Stats>, now: i64, zone: &Tz, name: impl Fn(&str) -> String) -> Vec<String> {
     let mut out = Vec::new();
     if let Some(stats) = stats {
         let ids: Vec<&str> = accounts.iter().map(|a| a.id.as_str()).collect();
@@ -1376,7 +1384,7 @@ pub fn lines<Tz: TimeZone>(pools: &[Pool], accounts: &[Account], stats: Option<&
             out.push(format!("# {}", group.title));
         }
         for section in &group.providers {
-            out.push(format!("{}{}", if pooled { "## " } else { "# " }, provider_title(&section.provider)));
+            out.push(format!("{}{}", if pooled { "## " } else { "# " }, name(&section.provider)));
             for account in &section.accounts {
                 let mut line = account.name();
                 if let Some(plan) = &account.plan {

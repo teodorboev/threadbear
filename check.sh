@@ -21,8 +21,11 @@
 #                 tests, when they changed (below)
 #   --quick       runner typecheck and unit tests (about a minute), plus
 #                 the Swift Mac app's release build when it changed,
-#                 and the desktop app's core and client tests when
-#                 desktop/ changed
+#                 the desktop app's core and client tests when
+#                 desktop/ changed, the public site's build (site/)
+#                 when it or the guide changed, and the GPUI specs'
+#                 pairing check (features/verify-pairing.mjs) when a
+#                 spec, its steps or docs/gpui-port/features.md changed
 #   --runner      only the runner's typecheck and unit tests, nothing else
 #                 that --quick adds (Convex, web, app tools, iPhone kit), on
 #                 main too: the runner's self-update runs this (deploy.mjs),
@@ -105,11 +108,28 @@ fi
 # runner.json's checkHost. Read before the THREADBEAR_* names go below.
 RUNNER_JSON="${THREADBEAR_HOME:-$HOME/Library/Application Support/Threadbear}/runner.json"
 if [ "$LOCAL" = 0 ] && [ "$E2E" = 0 ]; then
-  if [ -n "${THREADBEAR_CHECK_HOST+set}" ]; then
+  configured_hosts() {
+    [ -x "$NODE" ] && [ -f "$RUNNER_JSON" ] && "$NODE" -e '
+      try { const j = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")); const h = Array.isArray(j.checkHosts) ? j.checkHosts : j.checkHost; const l = (Array.isArray(h) ? h : [h]).filter((x) => typeof x === "string" && /^[A-Za-z0-9][A-Za-z0-9._@-]*$/.test(x)); if (l.length) console.log(l.join(",")) } catch {}' "$RUNNER_JSON"
+  }
+  # A grouped landing's check (tb land sets THREADBEAR_CHECK_GROUP, and
+  # THREADBEAR_CHECK_PREFER from what each landing in it asked for) goes to
+  # the configured hosts, those asked for tried first (scripts/check-remote.sh):
+  # never just the holder's own THREADBEAR_CHECK_HOST, which could leave out
+  # every Mac the group needs, or with an empty one run everyone's check on
+  # this Mac (Codex's reviews). With nothing configured or asked for, it's the
+  # holder's, as before.
+  GROUP_HOSTS=""
+  if [ -n "${THREADBEAR_CHECK_GROUP:-}${THREADBEAR_CHECK_PREFER:-}" ]; then
+    GROUP_HOSTS="$(configured_hosts)"
+    [ -n "$GROUP_HOSTS" ] || GROUP_HOSTS="${THREADBEAR_CHECK_PREFER:-}"
+  fi
+  if [ -n "$GROUP_HOSTS" ]; then
+    CHECK_HOST="$GROUP_HOSTS"
+  elif [ -n "${THREADBEAR_CHECK_HOST+set}" ]; then
     CHECK_HOST="$THREADBEAR_CHECK_HOST"
   else
-    CHECK_HOST="$( [ -x "$NODE" ] && [ -f "$RUNNER_JSON" ] && "$NODE" -e '
-      try { const j = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")); const h = Array.isArray(j.checkHosts) ? j.checkHosts : j.checkHost; const l = (Array.isArray(h) ? h : [h]).filter((x) => typeof x === "string" && /^[A-Za-z0-9][A-Za-z0-9._@-]*$/.test(x)); if (l.length) console.log(l.join(",")) } catch {}' "$RUNNER_JSON")"
+    CHECK_HOST="$(configured_hosts)"
   fi
   if [ -n "$CHECK_HOST" ]; then
     "$ROOT/scripts/check-remote.sh" "$CHECK_HOST" ${ARGS[@]+"${ARGS[@]}"}
@@ -151,7 +171,8 @@ FALLBACK="${THREADBEAR_CHECK_FALLBACK:-}"
 # THREADBEAR_CHECK_BUSY_EXIT is only for sending this run to a host: the
 # check-remote tests run under it would otherwise exit with it (Codex, 9 Nov).
 unset THREADBEAR_HOME THREADBEAR_DATA_DIR THREADBEAR_PORT THREADBEAR_URL THREADBEAR_LOG \
-  THREADBEAR_THREAD_ID THREADBEAR_THREAD_KEY THREADBEAR_RUNNER_VERSION THREADBEAR_RUNNER_HOME THREADBEAR_CHECK_BUSY_EXIT THREADBEAR_CHECK_FALLBACK
+  THREADBEAR_THREAD_ID THREADBEAR_THREAD_KEY THREADBEAR_RUNNER_VERSION THREADBEAR_RUNNER_HOME THREADBEAR_CHECK_BUSY_EXIT THREADBEAR_CHECK_FALLBACK \
+  THREADBEAR_CHECK_PREFER THREADBEAR_CHECK_GROUP
 # And their old names, which the runner and tb would otherwise take for these.
 for v in $(compgen -e | grep '^THREADBARE_' || true); do unset "$v"; done
 # The jobs the tests' runners start get no lower than the check itself
@@ -322,6 +343,27 @@ if [ "$APP_ONLY" = 0 ] && [ "$RUNNER_ONLY" = 0 ]; then
   step "convex typecheck" "$ROOT" npm run convex:typecheck
   step "web typecheck" "$ROOT" npm run web:typecheck
   step "web tests" "$ROOT" npm run web:test
+  # The public site (site/) makes its docs pages from docs/guide.md (and the
+  # experiments list from docs/experiments.md), and its build refuses some
+  # guide content: a section with no icon in site/docs-icons.json, a link
+  # that isn't #slug or https://. Twice on 13 Nov a guide change landed that
+  # it refused, and only the next deploy found out. Plain node, no packages
+  # and no git (--check), well under a second.
+  if needed '^site/|^docs/(guide|experiments)\.md$'; then
+    step "site build" "$ROOT/site" node scripts/build.mjs --check
+  else
+    skip "site build" "nothing the site reads changed"
+  fi
+  # The GPUI specs (features/) line up with their step files, and every
+  # scenario has a features.md id tag of its own: the Desktop workflow's
+  # first step. On 13 Nov a spec tagged on its Feature line only passed
+  # tb land, then failed that workflow on all three systems and held up
+  # every desktop landing after it. Plain node, no packages, under a second.
+  if needed '^features/|^docs/gpui-port/features\.md$'; then
+    step "feature pairing" "$ROOT/features" node verify-pairing.mjs
+  else
+    skip "feature pairing" "no spec, step file or features.md changed"
+  fi
 fi
 if [ "$APP_ONLY" = 0 ]; then
   runner_unit_tests
@@ -342,13 +384,15 @@ fi
 # landed on main, exactly what core's open_gate_source test is there to catch.
 # --quick runs the small crates' tests (the core logic, the golden
 # transcripts, the open-gate source check, the client against the mock),
-# which build without GPUI. The full check also builds everything else
+# which build without GPUI, and a cargo check of the GPUI app when
+# something it builds from changed. The full check also builds everything else
 # (cargo check of the GPUI app, the dock and every test), a few minutes from
 # cold. On a check host cargo's target folder is kept between runs
 # (scripts/check-remote.sh), so --quick stays about a minute.
-DESKTOP_NEEDS='^desktop/|^app/Tools/mock-runner/|^runner/src/|^app/Tests/Fixtures/|^app/Sources/Threadbear/Resources/Art/|^app/Sources/Threadbear/Resources/Rich/'
-# What cargo builds from outside desktop/ (include_bytes!), for the hashing below.
-DESKTOP_BUILT_IN=(app/Sources/Threadbear/Resources/Art app/Sources/Threadbear/Resources/Rich)
+DESKTOP_NEEDS='^desktop/|^features/support/sample\.png$|^site/app-doc-slugs\.json$|^app/Tools/mock-runner/|^runner/src/|^app/Tests/Fixtures/|^app/Sources/Threadbear/Resources/Art/|^app/Sources/Threadbear/Resources/Rich/'
+# What cargo builds from outside desktop/ (include_bytes!, include_str!), folders
+# or files, for the hashing below.
+DESKTOP_BUILT_IN=(app/Sources/Threadbear/Resources/Art app/Sources/Threadbear/Resources/Rich site/app-doc-slugs.json features/support/sample.png)
 #
 # That kept target is shared by every checkout that sends a run, and cargo
 # calls a crate fresh when none of its files is newer than its last build: a
@@ -382,7 +426,7 @@ cargo_step() {
     record="$CARGO_TARGET_DIR/.check-sums-$(printf '%s' "$name" | tr -c 'a-zA-Z0-9' '-')"
     sums="$LOGS/desktop-sums"
     local old="$LOGS/desktop-sums-old" inputs=(desktop) d
-    for d in "${DESKTOP_BUILT_IN[@]}"; do [ ! -d "$ROOT/$d" ] || inputs+=("$d"); done
+    for d in "${DESKTOP_BUILT_IN[@]}"; do [ ! -e "$ROOT/$d" ] || inputs+=("$d"); done
     if [ -f "$record" ]; then mv "$record" "$old"; else : >"$old"; fi
     if ! (cd "$ROOT" && find "${inputs[@]}" \( -type f -o -type l \) -not -path 'desktop/target/*' -print0 | xargs -0 shasum -a 256 | LC_ALL=C sort) >"$sums" \
       || ! LC_ALL=C comm -23 "$sums" "$old" | sed -E 's/^[0-9a-f]+  //' | (cd "$ROOT" && while IFS= read -r f; do touch "$f" || exit 1; done); then
@@ -422,6 +466,16 @@ if [ "$APP_ONLY" = 0 ] && [ "$RUNNER_ONLY" = 0 ]; then
       step "mock runner packages" "$ROOT/app/Tools/mock-runner" npm ci --no-audit --no-fund
     fi
     cargo_step "desktop core tests" test --locked --no-fail-fast -p threadbear-core -p threadbear-client
+    # The GPUI app itself, which the core tests never build: main's app
+    # stopped compiling twice in the week to 13 Nov (tour.rs's
+    # panel_available, fixed in 92c48ee73) with every landing's --quick
+    # green. With automation on, as the specs and dev apps build it, and its
+    # tests, so a test module that stopped compiling fails here too. Only
+    # when something it builds from changed: the runner code the mock
+    # imports can't break it.
+    if [ "$QUICK" = 1 ] && needed '^desktop/|^app/Sources/Threadbear/Resources/(Art|Rich)/|^features/support/sample\.png$'; then
+      cargo_step "desktop app check" check --locked -p threadbear-gpui --features automation --all-targets
+    fi
     [ "$QUICK" = 1 ] || cargo_step "desktop build" check --locked --workspace --all-targets
   fi
 fi

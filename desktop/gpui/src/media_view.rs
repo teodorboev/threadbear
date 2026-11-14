@@ -40,6 +40,8 @@ pub(crate) enum Kind {
     CellVideo = 2,
     /// A PDF in the pane, in place of Quick Look.
     PaneDocument = 3,
+    /// Read-only Quick Look thumbnail, with no links or document actions.
+    PaneQuickLook = 4,
 }
 
 /// What a view is showing, for the scripted app's dump.
@@ -180,6 +182,8 @@ thread_local! {
     /// Every menu the kit has made that's still about (`init`), to see if
     /// one's open over a view.
     static MENUS: RefCell<Vec<WeakEntity<PopupMenu>>> = const { RefCell::new(Vec::new()) };
+    /// Windows with a look again booked (`open_menus`).
+    static RECHECK: RefCell<std::collections::HashSet<WindowId>> = RefCell::new(std::collections::HashSet::new());
     /// Where the views' calls back into Rust go (`tb_media_said_link`,
     /// `tb_media_said_changed`), for the app to act on (`init`).
     static SAID: RefCell<Option<futures::channel::mpsc::UnboundedSender<Said>>> = const { RefCell::new(None) };
@@ -262,26 +266,56 @@ fn drag_folder() -> Option<std::path::PathBuf> {
 #[cfg(target_os = "macos")]
 #[no_mangle]
 pub extern "C" fn tb_media_snapshot(fd: i32, name: *const std::ffi::c_char, out: *mut std::ffi::c_char, capacity: i32) -> bool {
+    let Some(folder) = drag_folder() else { return false };
+    snapshot_fd(fd, name, out, capacity, &folder, DRAG_COPY_LIMIT).is_ok()
+}
+
+/// Quick Look reads a private copy too, made off the main thread. It is
+/// removed after thumbnail generation; interrupted copies expire in a day.
+#[cfg(target_os = "macos")]
+#[no_mangle]
+pub extern "C" fn tb_preview_snapshot(fd: i32, name: *const std::ffi::c_char, out: *mut std::ffi::c_char, capacity: i32, limit: u64) -> i32 {
+    if limit == 0 || limit > 256 * 1024 * 1024 { return -1 }
+    let Some(folder) = drag_folder().and_then(|p| p.parent().map(|p| p.join("previews"))) else { return 0 };
+    match snapshot_fd(fd, name, out, capacity, &folder, limit) {
+        Ok(()) => 1,
+        Err(error) if error.kind() == std::io::ErrorKind::FileTooLarge => -1,
+        Err(_) => 0,
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn snapshot_fd(fd: i32, name: *const std::ffi::c_char, out: *mut std::ffi::c_char, capacity: i32, folder: &std::path::Path, limit: u64) -> std::io::Result<()> {
     use std::os::fd::FromRawFd as _;
     use std::os::unix::ffi::OsStrExt as _;
     if fd < 0 || name.is_null() || out.is_null() || capacity <= 0 {
-        return false;
+        return Err(std::io::Error::other("No snapshot destination"));
     }
     let name = unsafe { std::ffi::CStr::from_ptr(name) }.to_string_lossy().into_owned();
     // Borrowed: the view still owns and closes it.
     let file = std::mem::ManuallyDrop::new(unsafe { std::fs::File::from_raw_fd(fd) });
-    let Some(folder) = drag_folder() else { return false };
-    let Ok(path) = threadbear_core::private_file::snapshot(&file, &folder, &name, DRAG_COPY_LIMIT) else { return false };
+    let meta = file.metadata()?;
+    // Drag exports use an unlimited clone (limit 0); previews have a hard
+    // byte cap even on APFS, where a clone itself needn't copy any bytes.
+    if limit > 0 && meta.is_file() && meta.len() > limit {
+        return Err(std::io::Error::new(std::io::ErrorKind::FileTooLarge, "The document is too big to preview"));
+    }
+    let path = if meta.is_dir() {
+        threadbear_core::private_file::snapshot_package(&file, folder, &name, limit)
+    } else {
+        threadbear_core::private_file::snapshot(&file, folder, &name, limit)
+    }?;
+    let too_big = limit > 0 && std::fs::metadata(&path).is_ok_and(|m| m.is_file() && m.len() > limit);
     let bytes = path.as_os_str().as_bytes();
-    if bytes.len() + 1 > capacity as usize || bytes.contains(&0) {
-        let _ = std::fs::remove_file(&path);
-        return false;
+    if too_big || bytes.len() + 1 > capacity as usize || bytes.contains(&0) {
+        if let Some(parent) = path.parent() { let _ = std::fs::remove_dir_all(parent); }
+        return Err(std::io::Error::new(if too_big { std::io::ErrorKind::FileTooLarge } else { std::io::ErrorKind::InvalidInput }, "The document couldn't be previewed"));
     }
     unsafe {
         std::ptr::copy_nonoverlapping(bytes.as_ptr().cast(), out, bytes.len());
         *out.add(bytes.len()) = 0;
     }
-    true
+    Ok(())
 }
 
 fn frame_of(window: WindowId) -> u64 {
@@ -304,14 +338,14 @@ pub(crate) fn slot(key: &str, window: &Window, open: impl FnOnce(Opening) -> Res
     // `sweeper`) can show one: elsewhere it would sit unplaced and never go
     // (a panel in a window of its own, Codex's review, 12 Nov).
     if !FRAMES.with(|f| f.borrow().contains_key(&id)) {
-        return Err("Videos and PDFs show here when the pane is in the main window.".to_owned());
+        return Err("Videos, PDFs and document previews show here when the pane is in the main window.".to_owned());
     }
     // A film AVFoundation couldn't play says why in its place, from then on.
     let failed = SLOTS.with(|s| s.borrow().iter().find(|s| s.key == key && s.window == id).and_then(|s| s.media.as_ref().ok()).and_then(Media::failure));
     if let Some(why) = failed {
         // Every key ends with the file's path.
         let name = threadbear_core::highlights::last_component(key).to_owned();
-        let pdf = SLOTS.with(|s| s.borrow().iter().any(|s| s.key == key && s.window == id && s.media.as_ref().is_ok_and(|m| m.kind == Kind::PaneDocument)));
+        let pdf = SLOTS.with(|s| s.borrow().iter().any(|s| s.key == key && s.window == id && s.media.as_ref().is_ok_and(|m| matches!(m.kind, Kind::PaneDocument | Kind::PaneQuickLook))));
         let said = format!("Threadbear couldn't {} {name}: {why}", if pdf { "show" } else { "play" });
         // Taken out of the list before it's dropped, which closes it.
         let gone = SLOTS.with(|s| s.borrow_mut().iter_mut().find(|s| s.key == key && s.window == id).map(|slot| std::mem::replace(&mut slot.media, Err(said))));
@@ -433,7 +467,11 @@ pub(crate) fn sweeper(window: &Window, cover: Cover) -> AnyElement {
 
 fn sweep(id: WindowId, frame: u64, cover: &Cover, window: &mut Window, cx: &mut App) {
     use gpui_kit::component::WindowExt as _;
-    let modal = cover.everything || window.has_active_dialog(cx) || window.has_active_sheet(cx) || menu_open(window, cx);
+    let kit_menu = menu_open(window, cx);
+    let modal = cover.everything || window.has_active_dialog(cx) || window.has_active_sheet(cx) || kit_menu;
+    if kit_menu && SLOTS.with(|s| s.borrow().iter().any(|slot| slot.window == id && slot.media.is_ok())) {
+        look_again_soon(window, cx);
+    }
     let gone = SLOTS.with(|s| {
         let mut slots = s.borrow_mut();
         let (keep, gone): (Vec<Slot>, Vec<Slot>) = std::mem::take(&mut *slots).into_iter().partition(|slot| slot.window != id || slot.drawn.get().0 == frame);
@@ -459,16 +497,43 @@ fn sweep(id: WindowId, frame: u64, cover: &Cover, window: &mut Window, cx: &mut 
     }
 }
 
-/// Whether one of the kit's menus is open in this window: an open menu has
-/// the keyboard, and closes when it loses it. Where it is isn't always the
+/// Whether one of the kit's menus is showing in this window (`open_menus`;
+/// it used to go by the keyboard, which a hovered submenu never has). Where
+/// it is isn't always the
 /// app's to know (a panel bar's right-click menu is the dock's, Codex's
 /// review, 12 Nov), and a native view would sit over it and take its clicks.
 fn menu_open(window: &Window, cx: &App) -> bool {
+    !open_menus(window, cx).is_empty()
+}
+
+/// Where the kit's menus showing in this window are, submenus included (a
+/// zero-sized one hasn't been drawn yet: `PopupMenu::showing`). Not by focus:
+/// a hovered submenu never has it, and a menu that lost it can still be up
+/// (Codex's review, 13 Nov). web_panels.rs hides a page under one, as a
+/// panel tab's right-click menu went behind a web page (Mike, 13 Nov).
+pub(crate) fn open_menus(window: &Window, cx: &App) -> Vec<Bounds<Pixels>> {
     MENUS.with(|m| {
         let mut menus = m.borrow_mut();
         menus.retain(|menu| menu.upgrade().is_some());
-        menus.iter().filter_map(WeakEntity::upgrade).any(|menu| menu.focus_handle(cx).contains_focused(window, cx))
+        menus.iter().filter_map(WeakEntity::upgrade).filter_map(|menu| menu.read(cx).showing(window, cx)).flatten().collect()
     })
+}
+
+/// While a menu hides a native view, the window's drawn again a moment
+/// later: `showing` reads the last frame, so a menu whose host stopped
+/// drawing it would otherwise keep the view hidden until something else
+/// redraws. Only then, so an open menu over nothing native costs nothing.
+pub(crate) fn look_again_soon(window: &Window, cx: &mut App) {
+    let handle = window.window_handle();
+    if !RECHECK.with(|r| r.borrow_mut().insert(handle.window_id())) {
+        return;
+    }
+    cx.spawn(async move |cx| {
+        cx.background_executor().timer(std::time::Duration::from_millis(250)).await;
+        RECHECK.with(|r| r.borrow_mut().remove(&handle.window_id()));
+        let _ = handle.update(cx, |_, window, _| window.refresh());
+    })
+    .detach();
 }
 
 /// A stage clip going: its mute and volume are where the next one starts.
@@ -563,6 +628,51 @@ mod tests {
             }
             _ => panic!("Open Link didn't go to the open gate"),
         }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn quicklook_snapshots_use_the_descriptor_and_each_callers_byte_cap() {
+        use std::{ffi::{CStr, CString}, os::{fd::AsRawFd, unix::{ffi::OsStrExt, fs::symlink}}};
+        let work=tempfile::tempdir().unwrap();
+        let source=work.path().join("source.pdf");
+        std::fs::write(&source,b"held document").unwrap();
+        let file=std::fs::File::open(&source).unwrap();
+        std::fs::remove_file(&source).unwrap();
+        symlink("/missing/replaced-source",&source).unwrap();
+        let name=CString::new("document.pdf").unwrap();
+        let mut path=[0 as std::ffi::c_char;4096];
+        let folder=work.path().join("previews");
+        super::snapshot_fd(file.as_raw_fd(),name.as_ptr(),path.as_mut_ptr(),path.len() as i32,&folder,16*1024*1024).unwrap();
+        let copied=std::path::Path::new(std::ffi::OsStr::from_bytes(unsafe{CStr::from_ptr(path.as_ptr())}.to_bytes()));
+        assert_eq!(std::fs::read(copied).unwrap(),b"held document");
+        assert!(file.metadata().is_ok(),"snapshot borrows the gate's descriptor");
+        let large=std::fs::File::create(work.path().join("large.pdf")).unwrap();
+        large.set_len(16*1024*1024+1).unwrap();
+        let error=super::snapshot_fd(large.as_raw_fd(),name.as_ptr(),path.as_mut_ptr(),path.len() as i32,&folder,16*1024*1024).unwrap_err();
+        assert_eq!(error.kind(),std::io::ErrorKind::FileTooLarge);
+        let large=std::fs::File::open(work.path().join("large.pdf")).unwrap();
+        super::snapshot_fd(large.as_raw_fd(),name.as_ptr(),path.as_mut_ptr(),path.len() as i32,&folder,256*1024*1024).unwrap();
+        let copied=std::path::Path::new(std::ffi::OsStr::from_bytes(unsafe{CStr::from_ptr(path.as_ptr())}.to_bytes()));
+        assert_eq!(std::fs::metadata(copied).unwrap().len(),16*1024*1024+1);
+        // Packages carry length zero through the pane; snapshot_fd still
+        // walks held directory descriptors and enforces the total byte cap.
+        let package=work.path().join("deck.key");
+        std::fs::create_dir(&package).unwrap();
+        std::fs::write(package.join("slide.bin"),b"held slide").unwrap();
+        let directory=std::fs::File::open(&package).unwrap();
+        let package_name=CString::new("deck.key").unwrap();
+        super::snapshot_fd(directory.as_raw_fd(),package_name.as_ptr(),path.as_mut_ptr(),path.len() as i32,&folder,256*1024*1024).unwrap();
+        let copied=std::path::Path::new(std::ffi::OsStr::from_bytes(unsafe{CStr::from_ptr(path.as_ptr())}.to_bytes()));
+        assert_eq!(std::fs::read(copied.join("slide.bin")).unwrap(),b"held slide");
+        let large_slide=std::fs::File::create(package.join("oversize.bin")).unwrap();
+        large_slide.set_len(16*1024*1024+1).unwrap();
+        assert_eq!(super::snapshot_fd(directory.as_raw_fd(),package_name.as_ptr(),path.as_mut_ptr(),path.len() as i32,&folder,16*1024*1024).unwrap_err().kind(),std::io::ErrorKind::FileTooLarge);
+        std::fs::remove_file(package.join("oversize.bin")).unwrap();
+        symlink("/missing/package-link",package.join("link")).unwrap();
+        assert!(super::snapshot_fd(directory.as_raw_fd(),package_name.as_ptr(),path.as_mut_ptr(),path.len() as i32,&folder,256*1024*1024).is_err());
+        assert_eq!(super::tb_preview_snapshot(-1,std::ptr::null(),std::ptr::null_mut(),0,0),-1);
+        assert_eq!(super::tb_preview_snapshot(-1,std::ptr::null(),std::ptr::null_mut(),0,256*1024*1024+1),-1);
     }
 
     /// Stepping from one clip to the next on the stage: the next starts at

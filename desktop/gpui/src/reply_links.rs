@@ -392,8 +392,8 @@ fn opens_in_its_app(path: &str) -> bool {
 }
 
 /// Whether the pane draws the file itself: text, code, Markdown, pages and
-/// pictures. PDFs and films open in their app until the pane has viewers
-/// for them (`file.quicklook`, `file.video`).
+/// pictures. On macOS the picture viewer also hosts native PDF and video
+/// previews (`file.quicklook`, `file.video`); elsewhere they open in their app.
 fn pane_draws(path: &str) -> bool {
     match hl::viewer_for_path(path) {
         hl::Viewer::Text | hl::Viewer::Web => true,
@@ -442,7 +442,7 @@ fn link_menu(menu: PopupMenu, pane: &WeakEntity<ThreadPane>, row: &Row, window: 
     match target {
         None => {
             let open = entity.read(cx).row_open(row);
-            ThreadPane::row_context_menu(row.clone(), menu, pane.clone(), open)
+            ThreadPane::row_context_menu(row.clone(), menu, pane.clone(), open, window, cx)
         }
         Some(LinkTarget::Web(url)) => {
             let profiles = offered_profiles();
@@ -718,6 +718,7 @@ enum Card {
 #[derive(Clone)]
 enum FilePicture {
     Image(ImageSource),
+    Thumbnail(ImageSource, &'static str),
     /// Its first lines, read once the card's due.
     Lines(PathBuf, Option<Vec<String>>),
     Symbol(&'static str),
@@ -736,6 +737,33 @@ impl Card {
             other => other,
         }
     }
+}
+
+/// The asset cache runs this work once for a file version and redraws the
+/// card when it finishes; both reply links and card buttons share it.
+struct MediaThumbnail;
+
+impl Asset for MediaThumbnail {
+    type Source = (String, Option<threadbear_core::open_policy::MediaVersion>);
+    type Output = Result<std::sync::Arc<RenderImage>, ImageCacheError>;
+
+    fn load((path, expected): Self::Source, cx: &mut App) -> impl std::future::Future<Output = Self::Output> + Send + 'static {
+        let renderer = cx.svg_renderer();
+        let background = cx.background_executor().clone();
+        static DECODER: futures::lock::Mutex<()> = futures::lock::Mutex::new(());
+        async move {
+            let _decoding = DECODER.lock().await;
+            let bytes = background.spawn(async move { open_gate::media_thumbnail(&path, Origin::ThisMac, expected) }).await
+                .ok_or_else(|| std::io::Error::other("No media thumbnail"))?;
+            Image::from_bytes(ImageFormat::Png, bytes).to_image_data(renderer).map_err(Into::into)
+        }
+    }
+}
+
+fn media_picture(path: &str, meta: Option<&std::fs::Metadata>) -> ImageSource {
+    let version = meta.and_then(policy::media_version);
+    let key = (path.to_owned(), version);
+    ImageSource::Custom(std::sync::Arc::new(move |window, cx| window.use_asset::<MediaThumbnail>(&key, cx)))
 }
 
 /// The start of a file, as its card's lines.
@@ -762,6 +790,7 @@ impl ThreadPane {
                 let words = rules::file_peek(&file.path, exists, None, &crate::files::home_dir());
                 let picture = match (exists, rules::peek_picture(&file.path)) {
                     (true, PeekPicture::Image) => FilePicture::Image(crate::rows::markdown::file_picture(&file.path)),
+                    (true, PeekPicture::Thumbnail) if cfg!(target_os = "macos") && meta.as_ref().is_some_and(|m| m.is_file()) => FilePicture::Thumbnail(media_picture(&file.path, meta.as_ref()), hl::file_symbol(&file.path)),
                     (true, PeekPicture::Lines) => FilePicture::Lines(PathBuf::from(&file.path), None),
                     _ => FilePicture::Symbol(if meta.is_some_and(|m| m.is_dir()) { "folder" } else { hl::file_symbol(&file.path) }),
                 };
@@ -810,6 +839,7 @@ impl ThreadPane {
                 let words = rules::file_peek(&file.path, exists, None, &crate::files::home_dir());
                 let picture = match (exists, rules::peek_picture(&file.path)) {
                     (true, PeekPicture::Image) => FilePicture::Image(crate::rows::markdown::file_picture(&file.path)),
+                    (true, PeekPicture::Thumbnail) if cfg!(target_os = "macos") && meta.as_ref().is_some_and(|m| m.is_file()) => FilePicture::Thumbnail(media_picture(&file.path, meta.as_ref()), hl::file_symbol(&file.path)),
                     _ => FilePicture::Symbol(if meta.is_some_and(|m| m.is_dir()) { "folder" } else { hl::file_symbol(&file.path) }),
                 };
                 Some(Card::File { words, picture })
@@ -821,7 +851,7 @@ impl ThreadPane {
     fn link_words(&self, row: &str, url: &str) -> Option<String> {
         let row = self.feed.model().rows().iter().find(|r| r.id == row)?;
         let source = match &row.content {
-            RowContent::Assistant(item) => crate::rows::markdown::prepare(&item.text),
+            RowContent::Assistant(item) => crate::rows::markdown::prepare(&item.text, &self.summary.id),
             RowContent::User(message) => message.agent_header()?.body,
             _ => return None,
         };
@@ -873,6 +903,14 @@ fn file_card(words: &rules::PeekWords, picture: &FilePicture, cx: &App) -> AnyEl
     let picture_box = || div().w(px(BOX.0)).h(px(BOX.1)).rounded(px(4.)).bg(style::primary_opacity(cx, 0.05)).overflow_hidden();
     let shown = match picture {
         FilePicture::Image(path) => Some(picture_box().flex().items_center().justify_center().child(img(path.clone()).max_w(px(BOX.0)).max_h(px(BOX.1)).rounded(px(3.)).object_fit(ObjectFit::Contain)).into_any_element()),
+        FilePicture::Thumbnail(source, symbol) => {
+            let symbol = *symbol;
+            Some(picture_box().flex().items_center().justify_center().child(
+                img(source.clone()).max_w(px(BOX.0)).max_h(px(BOX.1)).object_fit(ObjectFit::Contain)
+                    .with_loading(move || crate::spinner::TurningArc::new(14., secondary).into_any_element())
+                    .with_fallback(move || crate::icons::symbol(symbol).size(px(28.)).into_any_element())
+            ).into_any_element())
+        }
         FilePicture::Lines(_, Some(lines)) => Some(
             picture_box()
                 .p(px(8.))
@@ -937,7 +975,7 @@ pub(crate) fn peek_command(app: &Entity<crate::app::Threadbear>, cmd: &serde_jso
         hide_peek(cx);
         return Some(Ok(json!("ok")));
     }
-    let links = reply_links_in(&crate::rows::markdown::prepare(&item.text));
+    let links = reply_links_in(&crate::rows::markdown::prepare(&item.text, &pane.read(cx).summary.id));
     let named = |url: &str| -> Option<String> {
         match pane.read(cx).link_target(url)? {
             LinkTarget::Web(web) => Some(web),
@@ -980,6 +1018,13 @@ pub(crate) fn peek_command(app: &Entity<crate::app::Threadbear>, cmd: &serde_jso
         window.render_frame(cx);
         return Some(Ok(json!("ok")));
     }
+    let picture_key = if cmd["picture"].as_bool() == Some(true) && !pane.read(cx).summary.is_remote() {
+        match pane.read(cx).link_target(&url) {
+            Some(LinkTarget::File(Some(file))) => policy::local_metadata(Path::new(&file.path)).ok()
+                .and_then(|meta| policy::media_version(&meta)).map(|version| (file.path, Some(version))),
+            _ => None,
+        }
+    } else { None };
     // Its card, as resting the pointer there shows it.
     hide_peek(cx);
     let Some(card) = pane.read(cx).peek_card(&url, &row.id) else { return Some(Err(format!("{words} has no card"))) };
@@ -994,7 +1039,12 @@ pub(crate) fn peek_command(app: &Entity<crate::app::Threadbear>, cmd: &serde_jso
     PEEK.with(|p| p.borrow_mut().hovered = Some(Hovered { pane: pane.downgrade(), thread: pane.read(cx).summary.id.clone(), row: row.id.clone(), url, spot, card: Some(card) }));
     pane.update(cx, |_, cx| cx.notify());
     window.render_frame(cx);
-    Some(Ok(json!("ok window 0")))
+    let picture = picture_key.map(|key| match window.get_asset::<MediaThumbnail>(&key, cx) {
+        Some(Ok(image)) => { let size = image.size(0); format!("ok thumbnail {}x{}", size.width.0, size.height.0) },
+        Some(Err(_)) => "ok thumbnail failed".to_owned(),
+        None => "ok thumbnail loading".to_owned(),
+    });
+    Some(Ok(json!(picture.unwrap_or_else(|| "ok window 0".to_owned()))))
 }
 
 /// `peek` with `menu`, `click` or `default`: the right-click (`peek_command`),

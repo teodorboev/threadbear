@@ -133,6 +133,8 @@ private struct InboxList: View {
             .fixedSize(horizontal: false, vertical: true)
             .padding(.horizontal, SidebarMetrics.outerInset)
             .padding(.top, zoomed(4))
+            // The new app, above Starred (NewApp.swift). Not while searching.
+            if !searching { NewAppCard() }
             let order = open.flatMap { drawn($0).map(\.id) }
             // Section and thread, so a thread changing section animates
             // even when the order of ids alone stays the same.

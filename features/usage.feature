@@ -47,3 +47,11 @@ Feature: The Usage panel and its honey pot
     And the honey pot's tooltip says "Claude: 40% left"
     When "claude-main"'s week resets
     Then the honey pot is 100% full, for "claude-main"
+
+  # Swift's scripted form switch waits for an actual mouse-up.
+  @usage.pools @swift-pending
+  Scenario: Clicking the model limit switch changes the card
+    When I click the honey pot in the activity bar
+    And I scroll to settings in Usage
+    And I press "A login's own limit on one model. Hide it if you don't use that model" in the Usage panel
+    Then in the "Claude" card, "mike@example.com" has "Weekly 78% left"

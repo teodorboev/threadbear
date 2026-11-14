@@ -36,11 +36,19 @@ public struct Pairing: Sendable, Hashable {
         return keys
     }
 
-    /// Convex cloud deployments, or a self-hosted backend on Mike's tailnet
-    /// (`https://<mac>.<tailnet>.ts.net:<port>`, docs/self-hosting.md), over
-    /// https. `allowLocal` (Debug builds, for the simulator) also takes the
-    /// local dev backend on this Mac, `http://127.0.0.1:3210`. Whichever it
-    /// is, PairingRequest asks before it's used.
+    /// Convex cloud deployments, or a self-hosted backend at any https
+    /// address (docs/self-hosting.md): on the tailnet
+    /// (`https://<mac>.<tailnet>.ts.net:<port>`), or an address of the
+    /// user's own in front of it (setup --url, 14 Nov 2026), as however the
+    /// phone gets there is theirs to choose. `allowLocal` (Debug builds, for
+    /// the simulator) also takes the local dev backend on this Mac,
+    /// `http://127.0.0.1:3210`. Whichever it is, PairingRequest asks before
+    /// it's used, naming the server.
+    ///
+    /// Before 14 Nov only Convex cloud and ts.net hosts were taken. That was
+    /// never what kept a stranger's link out: anyone can make a Convex
+    /// deployment or a tailnet. The question, and its "only if you just
+    /// scanned the code on your own Mac", is.
     public static func parse(_ url: URL, allowLocal: Bool = false) -> Pairing? {
         guard url.scheme == "threadbear", url.host() == "pair",
               let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems,
@@ -52,41 +60,54 @@ public struct Pairing: Sendable, Hashable {
         if allowLocal, deployment.scheme == "http", host == "127.0.0.1" || host == "localhost" {
             return Pairing(deploymentURL: deployment, token: token, runnerKeys: keys)
         }
-        if let tailnet = tailnetBackend(deployment, host: host) {
-            return Pairing(deploymentURL: tailnet, token: token, runnerKeys: keys)
+        guard deployment.scheme == "https" else { return nil }
+        let name = host.lowercased()
+        if isCloud(name) {
+            // The client talks to .convex.cloud; a .site link works too.
+            let cloud = name.hasSuffix(".convex.site")
+                ? URL(string: "https://" + name.replacingOccurrences(of: ".convex.site", with: ".convex.cloud"))!
+                : deployment
+            return Pairing(deploymentURL: cloud, token: token, runnerKeys: keys)
         }
-        guard deployment.scheme == "https", host.hasSuffix(".convex.cloud") || host.hasSuffix(".convex.site") else { return nil }
-        // The client talks to .convex.cloud; a .site link works too.
-        let cloud = host.hasSuffix(".convex.site")
-            ? URL(string: "https://" + host.replacingOccurrences(of: ".convex.site", with: ".convex.cloud"))!
-            : deployment
-        return Pairing(deploymentURL: cloud, token: token, runnerKeys: keys)
+        guard let selfHosted = selfHostedBackend(deployment, host: name) else { return nil }
+        return Pairing(deploymentURL: selfHosted, token: token, runnerKeys: keys)
     }
 
-    /// A self-hosted backend served on the tailnet (`tailscale serve`): https,
-    /// a MagicDNS name under ts.net, any port, and nothing else in the URL
-    /// (no login, path, query or fragment), so the client gets just its origin.
-    static func tailnetBackend(_ url: URL, host: String) -> URL? {
-        let name = host.lowercased()
-        guard url.scheme == "https", name.hasSuffix(".ts.net"), name.split(separator: ".").count >= 4,
+    static func isCloud(_ host: String) -> Bool {
+        host.hasSuffix(".convex.cloud") || host.hasSuffix(".convex.site")
+    }
+
+    /// A self-hosted backend: https, any host but this phone's own loopback
+    /// (a link to it would send the phone to itself), any port, and nothing
+    /// else in the URL (no login, path, query or fragment), so the client
+    /// gets just its origin.
+    static func selfHostedBackend(_ url: URL, host: String) -> URL? {
+        guard url.scheme == "https", !host.isEmpty, !isLoopback(host),
               url.user() == nil, url.password() == nil, url.query() == nil, url.fragment() == nil,
               url.path().isEmpty || url.path() == "/"
         else { return nil }
         var c = URLComponents()
         c.scheme = "https"
-        c.host = name
+        c.host = host
         c.port = url.port
         return c.url
     }
 
+    static func isLoopback(_ host: String) -> Bool {
+        let h = host.trimmingCharacters(in: CharacterSet(charactersIn: "[]")).lowercased()
+        return h == "localhost" || h == "::1" || h.hasPrefix("127.") || h.hasSuffix(".localhost")
+    }
+
     /// A server's name for asking, showing and keeping things under. A
-    /// self-hosted backend on the tailnet is its host and port, as two on one
-    /// Mac differ only by port. Anything else is its host alone, exactly as
-    /// every pairing was keyed before (a saved cloud URL with a port, too),
-    /// so an update never loses a token or a pinned key.
+    /// self-hosted backend is its host and port, as two on one Mac (or behind
+    /// one proxy) can differ only by port. Convex cloud and this Mac's dev
+    /// backend are their host alone, exactly as every pairing was keyed
+    /// before (a saved cloud URL with a port, too), so an update never loses
+    /// a token or a pinned key.
     public static func serverName(_ url: URL) -> String {
         guard let host = url.host() else { return url.absoluteString }
-        guard host.lowercased().hasSuffix(".ts.net"), let port = url.port else { return host }
+        let name = host.lowercased()
+        guard !isCloud(name), !isLoopback(name), let port = url.port else { return host }
         return "\(host):\(port)"
     }
 

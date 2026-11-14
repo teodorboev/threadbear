@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { makeHarness } from '../helpers/fakes.ts';
 import { findWorktreePatch } from '../../src/patches.ts';
-import { cleanUpWorktree, git, land, makeWorktree, MAX_SPARES } from '../../src/worktrees.ts';
+import { cleanUpWorktree, clearBuildCaches, git, land, makeWorktree, MAX_SPARES } from '../../src/worktrees.ts';
 import { HOOK_PATCH, KEEP, archiveAfterEdit, capture, commit, harness, hookRuns, isLocked, makeBranch, makeRepo, notes, sh, slowWorktreeRemoval, threadWithWorktree, toldAgent, until, write } from '../helpers/worktrees-harness.ts';
 
 test('with keep, an archived landed worktree is kept as a spare, and the next thread takes it, build cache and all', async () => {
@@ -412,4 +412,45 @@ test('adopting a thread still owed a cleanup leaves it, as the old runner\'s git
   const next = makeHarness(h.home, {}, { actionShell: ['/bin/sh', '-c'] });
   await until(() => notes(next, id).some((n) => n.startsWith('Removed')), 'the cleanup at the next start');
   assert.ok(!fs.existsSync(w.path));
+});
+
+test("with keep, an archived worktree that has to stay loses its build caches, as no other thread can use them", async () => {
+  const { main } = makeRepo(KEEP);
+  const h = harness();
+  const a = await threadWithWorktree(h, main);
+  commit(a.w.path, { 'runner/b.ts': '2\n' }, 'Not landed');
+  write(a.w.path, { 'app/.build/cache.o': 'warm\n', 'scratch.txt': 'untracked\n' });
+  h.runner.update({ threadId: a.id, archived: true });
+  await until(() => notes(h, a.id).some((n) => n.includes(' stay: ')), 'the cleanup');
+  assert.match(notes(h, a.id).at(-1)!, / Its build caches \(app\/\.build\) were cleared to save space, and get built again if it carries on\.$/);
+  assert.ok(!fs.existsSync(path.join(a.w.path, 'app/.build')), 'the build cache went');
+  assert.deepEqual(fs.readdirSync(a.w.path).filter((f) => f.startsWith('.threadbear-clearing')), [], 'nothing left set aside');
+  assert.equal(fs.readFileSync(path.join(a.w.path, 'scratch.txt'), 'utf8'), 'untracked\n', 'the thread\'s own files stay');
+  assert.equal(sh(a.w.path, 'git rev-parse --abbrev-ref HEAD'), a.w.branch, 'still on its branch, with its work');
+  assert.ok(!isLocked(main, a.w.path), 'not a spare');
+});
+
+test('clearBuildCaches leaves a cache folder reached through a link, and a folder that is another checkout now', async () => {
+  const { root, main } = makeRepo(KEEP);
+  const t = makeBranch(main);
+  const elsewhere = path.join(root, 'elsewhere');
+  write(elsewhere, { 'precious.o': 'keep me\n' });
+  fs.mkdirSync(path.join(t.path, 'app'), { recursive: true });
+  fs.symlinkSync(elsewhere, path.join(t.path, 'app/.build'));
+  const rec = { repo: 'proj', mainCheckout: main, path: t.path, branch: t.branch, base: sh(main, 'git rev-parse main'), keep: ['app/.build'] };
+  assert.deepEqual(await clearBuildCaches(rec), []);
+  assert.equal(fs.readFileSync(path.join(elsewhere, 'precious.o'), 'utf8'), 'keep me\n');
+  assert.ok(fs.lstatSync(path.join(t.path, 'app/.build')).isSymbolicLink(), 'the link stays too');
+
+  // The folder switched to another branch: someone else's now.
+  fs.rmSync(path.join(t.path, 'app/.build'));
+  write(t.path, { 'app/.build/theirs.o': 'in use\n' });
+  sh(t.path, 'git checkout -q -b someone-else');
+  assert.deepEqual(await clearBuildCaches(rec), []);
+  assert.equal(fs.readFileSync(path.join(t.path, 'app/.build/theirs.o'), 'utf8'), 'in use\n');
+
+  // Back on its own branch, a real folder: it goes.
+  sh(t.path, `git checkout -q ${t.branch}`);
+  assert.deepEqual(await clearBuildCaches(rec), ['app/.build']);
+  assert.ok(!fs.existsSync(path.join(t.path, 'app/.build')));
 });

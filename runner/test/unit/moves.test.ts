@@ -41,7 +41,15 @@ async function world() {
     };
     return {
       watch(onMoves) {
-        const l = async () => onMoves((await call(b.ctx, moves.moves, { key, runnerId })) as MoveRow[]);
+        // As a Convex subscription does: only when the answer changed.
+        let last: string | undefined;
+        const l = async () => {
+          const rows = (await call(b.ctx, moves.moves, { key, runnerId })) as MoveRow[];
+          const now = JSON.stringify(rows);
+          if (now === last) return;
+          last = now;
+          onMoves(rows);
+        };
         listeners.push(l);
         void l();
         return () => listeners.splice(listeners.indexOf(l), 1);
@@ -68,7 +76,10 @@ async function world() {
       },
     };
   };
-  return { b, backendFor };
+  const refresh = async () => {
+    for (const l of listeners) await l();
+  };
+  return { b, backendFor, refresh };
 }
 
 const names: Record<string, string> = { [M5]: 'M5', [BRUCE]: 'bruce' };
@@ -240,4 +251,33 @@ test("a thread moved away and back is this runner's again, and the old move's do
   await new Promise((r) => setImmediate(r));
   assert.equal(once.gone('T1'), true);
   assert.equal(putAway, 1);
+});
+
+// An update that came while a step was running was dropped: cancelled
+// while Bruce packed, the cancel was never stepped (the packing step's
+// own failure is a no-op on a cancelled move), so the thread stayed
+// "Moving" there, queueing every message, until the runner restarted
+// (13 Nov 2026, the implicit state machines scan). The latest row now
+// goes once the step that was running ends.
+test('a move cancelled while the thread is being packed stops showing as moving', async () => {
+  const w = await world();
+  await call(w.b.ctx, sync.upsertThreads, { key: BRUCE_KEY, threads: [{ threadId: 'T9', runnerId: BRUCE, ...THREAD_BASICS, title: 'T', view: 'inbox', needsYou: false }] });
+  const s = source('T9');
+  let release: (() => void) | undefined;
+  const pack = s.host.pack!;
+  s.host.pack = async (...args) => {
+    await new Promise<void>((r) => (release = r));
+    return pack(...args);
+  };
+  const t = target({ cwd: '/x', accountId: 'a', leftBehind: [] });
+  runners(w, s, t);
+  await call(w.b.ctx, moves.startMove, { key: OWNER, threadId: 'T9', to: M5 });
+  await until(() => Boolean(release), 'packing');
+  await call(w.b.ctx, moves.cancelMove, { key: OWNER, moveId: moveRow(w).moveId });
+  // The backend's watch tells both runners of the cancel, while the pack runs.
+  await w.refresh();
+  release!();
+  await until(() => s.seen.at(-1)?.state === 'cancelled', 'Bruce shows it was cancelled');
+  assert.equal(moveRow(w).state, 'cancelled');
+  assert.equal(s.putAway, 0);
 });

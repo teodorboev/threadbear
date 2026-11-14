@@ -36,6 +36,15 @@ Then('the {string} menu has no row {string}', async function (this: ThreadbearWo
   assert.fail(`the ${menu} menu still has "${row}":\n${lines.join('\n')}`);
 });
 
+// The model chip clicked, as a person does, which opens its popover.
+When('I open the model picker', async function (this: ThreadbearWorld) {
+  await this.app.do({ cmd: 'composer-menu', menu: 'model', show: true });
+});
+
+When('I search the model picker for {string} and press Return', async function (this: ThreadbearWorld, words: string) {
+  await this.app.do({ cmd: 'composer-menu', menu: 'model', search: words });
+});
+
 When('I pick {string} from the {string} menu', async function (this: ThreadbearWorld, title: string, menu: string) {
   await this.app.do({ cmd: 'composer-menu', menu, click: title });
 });

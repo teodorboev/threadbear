@@ -4,6 +4,11 @@ import type { QueryCtx, MutationCtx } from './_generated/server';
 import type { Id } from './_generated/dataModel';
 import { callerFrom, FORBIDDEN, forbiddenMessage, isOwnerKey, mayCall, validRunnerId, type Caller } from './runnerAccess';
 
+// A runner's word that Mike is at its Mac counts while it's still checking
+// in; a Mac that's asleep or offline counts as away (devices.ts
+// threadForPush, sync.ts sendStaleHeldPushes).
+export const PRESENCE_FRESH_MS = 3 * 60_000;
+
 // The runner's functions carry the key from its secrets/convex-key: the
 // owner key (the deployment's RUNNER_KEY, set with `npx convex env set
 // RUNNER_KEY <key>`) or a runner key (runnerKeys, `tb runner add`). Every

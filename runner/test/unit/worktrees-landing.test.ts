@@ -10,7 +10,7 @@ import { cleanUpWorktree, git, land, landTargetFromGit, makeWorktree, overwritte
 import { RpcServer } from '../../src/rpc.ts';
 import { readToken } from '../../src/config.ts';
 import { nullLogger } from '../../src/log.ts';
-import { PATCH, addBorrowScript, capture, commit, harness, isLocked, lines, makeBranch, makeRepo, notes, runTb, sh, startTb, threadWithWorktree, until, write } from '../helpers/worktrees-harness.ts';
+import { PATCH, addBorrowScript, capture, commit, harness, holdUntil, isLocked, lines, makeBranch, makeRepo, notes, runTb, sh, startTb, threadWithWorktree, until, write } from '../helpers/worktrees-harness.ts';
 
 // --------------------------------------------------------------- landing
 
@@ -39,7 +39,7 @@ test('land serializes separate CLIs before rebasing, so each checks the commit i
 echo checked >> '${root}/checks'
 if test -f first.txt && ! test -f second.txt; then
   touch '${root}/checking'
-  while ! test -f '${root}/release'; do sleep 0.05; done
+  ${holdUntil(`${root}/release`)}
 fi
 if test -f second.txt; then test -f first.txt && test "$1" = --latest; fi
 ` }, 'Add check');
@@ -50,10 +50,12 @@ if test -f second.txt; then test -f first.txt && test "$1" = --latest; fi
   commit(b.path, { 'second.txt': 'second\n' }, 'Second');
   const env = { THREADBEAR_HOME: path.join(root, 'no-runner'), THREADBEAR_THREAD_ID: undefined };
   const first = runTb(['land'], a.path, env);
-  await until(() => fs.existsSync(path.join(root, 'checking')), 'first check');
-  const second = startTb(['land'], b.path, env);
+  let second: ReturnType<typeof startTb> | undefined;
+  // Released however the waits end, so neither CLI is left holding.
   try {
-    await until(() => second.output().includes('Waiting for another landing'), 'second CLI waiting for landing');
+    await until(() => fs.existsSync(path.join(root, 'checking')), 'first check');
+    second = startTb(['land'], b.path, env);
+    await until(() => second!.output().includes('Waiting for another landing'), 'second CLI waiting for landing');
   } finally {
     write(root, { release: '' });
   }
@@ -79,7 +81,7 @@ test('land refuses a branch changed by the check instead of merging an unchecked
 });
 
 test('land releases its lock when a CLI is killed during the check', async () => {
-  const { root, main } = makeRepo(PATCH(`{ check: "touch ../checking; while ! test -f ../release; do sleep 0.05; done" }`));
+  const { root, main } = makeRepo(PATCH(`{ check: "touch ../checking; ${holdUntil('../release')}" }`));
   const t = makeBranch(main);
   commit(t.path, { 'first.txt': 'first\n' }, 'First');
   const env = { THREADBEAR_HOME: path.join(root, 'no-runner'), THREADBEAR_THREAD_ID: undefined };

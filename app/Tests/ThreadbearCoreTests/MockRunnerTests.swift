@@ -504,9 +504,9 @@ final class MockRunnerTests: XCTestCase {
         XCTAssertEqual(render.items?.map(\.tone), [.done, .attention, .failed, nil, nil])
     }
 
-    /// Other runners' threads: listed by this runner, opened on their own
-    /// (the mock plays bruce at /bruce/rpc), as the app does it.
-    func testRemoteThreadsOpenOnTheirOwnRunner() async throws {
+    /// Other runners' threads: listed by this runner, and read through it
+    /// (the mock plays bruce's side of the backend), as the app does it.
+    func testRemoteThreadsOpenThroughThisRunner() async throws {
         let client = try await connect()
         defer { client.close() }
         _ = try await client.hello(version: "test")
@@ -523,7 +523,7 @@ final class MockRunnerTests: XCTestCase {
         // Not this runner's to list...
         let own = try await client.listThreads(include: [.inbox, .snoozed, .archived])
         XCTAssertFalse(own.contains { $0.id.hasPrefix("bruce_") })
-        // ...but it answers for them through the backend, the app's default
+        // ...but it answers for them through the backend, the app's only
         // way in (docs/protocol.md, "Other runners' threads through the backend").
         let relayed = try await client.events(threadId: "bruce_backup")
         XCTAssertFalse(relayed.events.isEmpty)
@@ -534,107 +534,6 @@ final class MockRunnerTests: XCTestCase {
         } catch RPCError.server(let code, _) {
             XCTAssertEqual(code, RPCError.threadNotFound)
         }
-
-        try await Self.openOnBruce(bruce, local: client)
-    }
-
-    /// The app's side: RemoteClients is the main actor's.
-    @MainActor
-    private static func openOnBruce(_ bruce: RemoteRunner, local client: RPCClient) async throws {
-        // Bruce's own connection, from its rpcUrl and token file.
-        let clients = RemoteClients(version: "test")
-        let away = try await clients.client(for: bruce)
-        defer { clients.closeAll() }
-        let theirs = try await away.listThreads()
-        XCTAssertEqual(Set(theirs.map(\.id)), ["bruce_backup", "bruce_media", "bruce_render"])
-        let page = try await away.events(threadId: "bruce_backup")
-        let images = page.events.flatMap { event -> [ImageRef] in
-            if case .userMessage(_, let images, _, _, _, _) = event.payload { return images }
-            return []
-        }
-        XCTAssertEqual(images.count, 1)
-        XCTAssertFalse(FileManager.default.fileExists(atPath: images[0].path), "a path on bruce")
-
-        // A send there streams back over bruce's connection, and this
-        // runner's clients hear the sidebar row change.
-        var feed = ThreadFeed(model: TranscriptModel(events: page.events))
-        feed.beginSubscribe()
-        let subscribed = try await away.subscribe(threadId: "bruce_backup", afterSeq: feed.acceptedSeq)
-        _ = feed.finishSubscribe(subscribed.events, inProgress: subscribed.inProgress)
-        var heard: [String] = []
-        clients.onNotification = { _, notification in
-            if case .threadEvent(let id, let event) = notification, event.isTransient == false { heard.append(id) }
-        }
-        let rowChanged = Task {
-            for await notification in client.notifications {
-                if case .remoteThreadsUpdated(let list) = notification, list.threads.contains(where: { $0.threadId == "bruce_backup" && $0.status == .running }) { return true }
-            }
-            return false
-        }
-        _ = try await away.send(threadId: "bruce_backup", text: "Yes, keep it awake")
-        for _ in 0..<400 where !heard.contains("bruce_backup") { try await Task.sleep(for: .milliseconds(10)) }
-        XCTAssertTrue(heard.contains("bruce_backup"))
-        // A stream's iteration ends when its task is cancelled.
-        let timeout = Task { try? await Task.sleep(for: .seconds(5)); rowChanged.cancel() }
-        let changed = await rowChanged.value
-        timeout.cancel()
-        XCTAssertTrue(changed, "remoteThreads.updated after bruce's thread changed")
-    }
-
-    /// Bruce's files come over its connection (files.read), and a new
-    /// thread made over it is bruce's, not this runner's.
-    func testFilesAndNewThreadsOnBruce() async throws {
-        let client = try await connect()
-        defer { client.close() }
-        _ = try await client.hello(version: "test")
-        let remote = try await client.remoteThreads()
-        let bruce = try XCTUnwrap(remote.runners.first)
-        try await Self.filesAndNewThreadOnBruce(bruce, local: client)
-    }
-
-    @MainActor
-    private static func filesAndNewThreadOnBruce(_ bruce: RemoteRunner, local client: RPCClient) async throws {
-        let clients = RemoteClients(version: "test")
-        let away = try await clients.client(for: bruce)
-        defer { clients.closeAll() }
-        let hello = try await away.hello(version: "test")
-        XCTAssertEqual(hello.defaults.cwd, "/Users/bruce/dev/me/misc", "its own folder")
-
-        // The demo picture is a real PNG; asked again with what came, it's unchanged.
-        let page = try await away.events(threadId: "bruce_backup")
-        let picture = try XCTUnwrap(page.events.lazy.compactMap { event -> String? in
-            if case .userMessage(_, let images, _, _, _, _) = event.payload { return images.first?.path }
-            return nil
-        }.first)
-        let read = try await away.readFile(path: picture)
-        XCTAssertEqual(read.mediaType, "image/png")
-        XCTAssertEqual(read.data?.prefix(4), Data([0x89, 0x50, 0x4e, 0x47]))
-        XCTAssertEqual(read.data?.count, read.stamp.size)
-        let again = try await away.readFile(path: picture, known: read.stamp)
-        XCTAssertTrue(again.unchanged)
-        XCTAssertNil(again.data)
-        do {
-            _ = try await away.readFile(path: "/Users/bruce/not-there.txt")
-            XCTFail("a missing file is an error")
-        } catch RPCError.server(let code, _) {
-            XCTAssertEqual(code, -32602)
-        }
-
-        // A new thread there, in a folder on bruce, on one of its logins.
-        let made = try await away.createThread(NewThreadRequest(text: "Check the drive", cwd: "/Volumes/CannMedia", accountId: "codex-main", permissionMode: .full))
-        XCTAssertEqual(made.cwd, "/Volumes/CannMedia")
-        XCTAssertEqual(made.accountId, "codex-main")
-        let theirs = try await away.listThreads()
-        XCTAssertTrue(theirs.contains { $0.id == made.id })
-        let own = try await client.listThreads(include: [.inbox, .snoozed, .archived])
-        XCTAssertFalse(own.contains { $0.id == made.id }, "not this runner's")
-        // Its canned reply comes over bruce's connection.
-        var replied = false
-        for _ in 0..<400 where !replied {
-            try await Task.sleep(for: .milliseconds(10))
-            replied = try await away.events(threadId: made.id).events.contains { if case .assistantText = $0.payload { return true } else { return false } }
-        }
-        XCTAssertTrue(replied)
     }
 
     func testWrongTokenIsUnauthorized() async throws {

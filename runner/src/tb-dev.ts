@@ -449,6 +449,7 @@ export function formatStatus(s: RunnerStatus, threads: ThreadSummary[], now: num
     if (p.reason) lines.push(`  Reason: ${p.reason}`);
     if (p.resumeThreadId) lines.push(`  Then carries on: ${threadLine(p.resumeThreadId, threads, self)}`);
   }
+  if (s.webRuntimeProblem) lines.push(s.webRuntimeProblem);
   const u = s.update;
   if (u) lines.push(formatUpdate(u, now));
   // Said on its own line: it's the thing that sat unnoticed for three days.
@@ -462,7 +463,7 @@ export function formatStatus(s: RunnerStatus, threads: ThreadSummary[], now: num
   if (s.sync?.scrub) lines.push(...formatSecrets(s.sync.scrub, s.secretCheck, now, s.sync.full));
   // Releases never touch the LaunchAgent (launch.mjs, the plist, Threadbear
   // Runner.app); only Mike's install-runner.sh does.
-  if (u?.launcherChanged) lines.push(`${u.launcherReason ?? 'launch.mjs on main differs from the installed one.'} The user runs ${u.checkout ? `${u.checkout}/runner/` : 'runner/'}scripts/install-runner.sh once nothing is busy.`);
+  if (u?.launcherChanged) lines.push(`${u.launcherReason ?? 'launch.mjs on main differs from the installed one.'} Reinstall now in the app's Updates panel fixes it once nothing is busy (or the runner does by itself, with the selfReinstall experiment).`);
   if (s.macScreen?.fullDiskAccess === false) lines.push('Threadbear Runner has no Full Disk Access here, so macOS can stop and wait for someone to answer a prompt. System Settings > Privacy & Security > Full Disk Access turns it on.');
   if (s.macScreen?.dialogs) lines.push(`${plural(s.macScreen.dialogs, 'dialog', 'dialogs')} waiting on this Mac's screen${s.macScreen.dialogsSince ? `, for ${duration(now - Date.parse(s.macScreen.dialogsSince))}` : ''}. A privacy prompt can hold up other apps until someone answers it.`);
   // Other runners' names and problems (their own heartbeats), thread titles
@@ -493,7 +494,23 @@ function formatSync(y: NonNullable<RunnerStatus['sync']>, now: number): string {
       ? '\nFull sync: on, but the backend is too old to take tool output yet.'
       : `\nFull sync: on: ${plural(f.bodies, 'tool', 'tools')} (${Math.round(f.bytes / 1024)} KB) sent since this runner started, ${f.withheld} held back as they can hold secrets${f.unsent ? `, ${f.unsent} not sent` : ''}${f.pending ? `, ${f.pending} waiting` : ''}.`
     : '';
-  return `Convex mirror: on${where} as ${y.name ?? y.runnerId ?? 'this runner'}${last}${pending}${behind}${held}${rotating}${local}${push}${full}`;
+  // An estimate from what this runner sent (convex-use.ts): a runner can't read
+  // its team's real usage, and the Free plan's limits are the team's.
+  const u = y.use;
+  const use = u
+    ? u.warning
+      ? `\n${u.warning}`
+      : now - Date.parse(u.since) < 86_400_000
+        // Its first day counts as a whole one (convex-use.ts), so a monthly
+        // figure from a few minutes reads far too low: say what's been sent.
+        ? `\nConvex use, from this runner: ${mbText(u.sent)} sent since ${new Date(u.since).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}; a monthly estimate comes after its first day.`
+        : `\nConvex use, estimated from this runner: about ${mbText(u.io)} of I/O a month and ${mbText(u.storage)} of stored tool output (Free has 1 GB and 0.5 GB).`
+    : '';
+  return `Convex mirror: on${where} as ${y.name ?? y.runnerId ?? 'this runner'}${last}${pending}${behind}${held}${rotating}${local}${push}${full}${use}`;
+}
+
+function mbText(bytes: number): string {
+  return bytes >= 1e9 ? `${(bytes / 1e9).toFixed(1)} GB` : `${Math.max(1, Math.round(bytes / 1e6))} MB`;
 }
 
 // What stands between this runner's threads and the Convex deployment

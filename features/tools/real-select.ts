@@ -15,6 +15,9 @@ import path from 'node:path';
 import { GpuiDriver } from '../support/gpui.ts';
 import { sleep, type Dump } from '../support/driver.ts';
 import { assertInFront, windowFrame, work } from './real-screen.ts';
+import { ensurePerfLock } from './perf-lock.ts';
+
+await ensurePerfLock();
 
 const tool = path.join(work, 'realselect');
 execFileSync('swiftc', ['-O', path.join(import.meta.dirname, 'realselect.swift'), '-o', tool]);

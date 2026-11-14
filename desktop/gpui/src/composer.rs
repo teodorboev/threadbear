@@ -7,6 +7,7 @@
 // U+FFFC mark per chip, the chip drawn by the renderer below, and the input
 // keeps them atomic through edits and undo. That mark is exactly what the
 // Swift draft holds (InlinePictures), so the two apps' drafts read the same.
+use crate::a11y::A11yRole as _;
 use crate::app::Threadbear;
 use crate::composer_card::CardState;
 use crate::composer_chips::ModelPickerView;
@@ -14,10 +15,11 @@ use crate::style;
 use crate::thread::ThreadPane;
 use gpui_kit::assets::IconName;
 use gpui_kit::component::input::{Copy, Cut, Enter, Escape, IndentInline, InlineToken, InlineTokenContext, InlineTokenHoverEvent, InputEvent, MoveDown, MoveUp, Textarea, TextareaState};
-use gpui_kit::component::spinner::Spinner;
+use crate::spinner::Spinner;
 use gpui_kit::component::{h_flex, v_flex, ActiveTheme as _, Icon, Sizable as _};
 use gpui_kit::prelude::*;
 use gpui_kit::*;
+use gpui_kit::base::A11yDisabledExt as _;
 // The zoom-aware px (style.rs), in place of GPUI's.
 use crate::style::px;
 use serde_json::{json, Value};
@@ -70,15 +72,20 @@ pub struct Composer {
     #[cfg(feature = "automation")]
     pub(crate) debug_opened: Option<(Vec<String>, usize)>,
     /// Stop was pressed and the turn hasn't ended yet: a spinner in its place.
-    stopping: bool,
+    /// When Stop was pressed (`still_stopping`).
+    stopping: Option<i64>,
+    /// When Return last sent, for the arrow's hop (`sendNudges`).
+    sent_hop: Option<std::time::Instant>,
     /// A refused send's draft, to put back at the next render.
     restore: Option<RestoreDraft>,
     /// The model picker's search and column, kept while it's open.
     pub(crate) model_picker: Option<Entity<ModelPickerView>>,
     /// What's picked on the open card, and how the card's showing.
     pub(crate) card: CardState,
+    /// Which card was last seen arriving, for it to settle in (composer_card.rs).
+    pub(crate) card_arrival: crate::composer_card::CardArrival,
     /// The card's text style, one per appearance (`card_reading_style`).
-    pub(crate) card_style: Option<((bool, u32), gpui_kit::base::TextViewStyle)>,
+    pub(crate) card_style: Option<(crate::style::ReadingStyleKey, gpui_kit::base::TextViewStyle)>,
     shown_placeholder: SharedString,
     /// The slash palette's own state (`PaletteState`), and the list this
     /// opening of it has asked for (the thread's, or a new thread's login
@@ -101,6 +108,11 @@ pub struct Composer {
     /// What the box is to hold at the next render (an edit sent puts back
     /// what was in it before; that needs the window).
     pending_box: Option<(String, Vec<ImageRef>)>,
+    /// The box's spelling marks and the text they were found in
+    /// (composer_spelling.rs).
+    pub(crate) spell: crate::composer_spelling::SpellState,
+    /// Board clicks wait for the box's own window and any saved draft restore.
+    pending_mentions: Vec<threadbear_core::board::PendingMention>,
     _subs: Vec<Subscription>,
 }
 
@@ -178,14 +190,19 @@ impl Composer {
             // what's in the box.
             InputEvent::Change => {
                 this.palette_text_changed(cx);
+                // Marks, and a correction as a word ends (composer_spelling.rs).
+                this.spelling_after_edit(window, cx);
                 // Kept across a quit (drafts.rs).
                 if let Some(app) = this.app.upgrade() {
                     app.update(cx, |app, cx| app.drafts_changed(cx));
                 }
                 cx.notify();
             }
+            // Leaving the box marks the word it was in, as NSTextView does.
+            InputEvent::Blur => this.refresh_spelling_marks(false, false, cx),
             _ => {}
         });
+        crate::text_services::register_text_box(&input);
         Composer {
             thread_id,
             client,
@@ -201,20 +218,24 @@ impl Composer {
             hover_serial: 0,
             #[cfg(feature = "automation")]
             debug_opened: None,
-            stopping: false,
+            stopping: None,
+            sent_hop: None,
             restore: None,
             model_picker: None,
             card: CardState::default(),
+            card_arrival: Default::default(),
             card_style: None,
             shown_placeholder: "Message".into(),
             editing: None,
             pending_box: None,
+            pending_mentions: vec![],
             palette: PaletteState::default(),
             palette_asked: None,
             palette_scroll: ScrollHandle::new(),
             card_width: Rc::new(Cell::new(style::MAX_CONTENT_WIDTH)),
             controls_fit: Rc::new(Cell::new((0., 0.))),
             box_top: Rc::new(Cell::new(f32::MAX)),
+            spell: Default::default(),
             _subs: vec![sub],
         }
     }
@@ -238,6 +259,10 @@ impl Composer {
         self.thread_id.is_none() && self.app.upgrade().is_some_and(|a| a.read(cx).new_thread.creating)
     }
 
+    pub(crate) fn can_take_pictures(&self, cx: &App) -> bool {
+        !self.creating(cx) && self.moving_line(cx).is_none()
+    }
+
     /// The thread exists: what was sent leaves the box, if it's still what
     /// the box holds (it was locked while the runner made it).
     pub(crate) fn clear_sent_draft(&mut self, stored: &str, window: &mut Window, cx: &mut Context<Self>) {
@@ -252,14 +277,14 @@ impl Composer {
     /// What Schedule… takes from the box: its words, without the pictures'
     /// marks (a schedule sends only text), and how many pictures there are.
     pub(crate) fn schedule_draft(&self, cx: &App) -> (String, usize) {
-        let (text, images) = self.draft(cx);
-        (text.replace(PICTURE_MARK, "").trim().to_owned(), images.len())
+        let (text, _) = self.draft(cx);
+        (text.replace(PICTURE_MARK, "").trim().to_owned(), self.chips(cx).len())
     }
 
     /// The schedule's made from the box's words: they leave it. Pictures are
     /// chips in the text, so a box with any is left as it is.
     pub(crate) fn clear_scheduled_draft(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.draft(cx).1.is_empty() {
+        if self.chips(cx).is_empty() {
             self.input.update(cx, |s, cx| s.set_value("", window, cx));
             self.pictures.clear();
             self.mentions.clear();
@@ -309,7 +334,7 @@ impl Composer {
             .pb(px(10.))
             .text_size(px(style::size::LABEL))
             .line_height(px(16.))
-            .child(h_flex().items_start().gap(px(8.)).child(div().flex_none().pt(px(1.)).child(mark)).child(crate::highlights::tipped(div().id("limit-text").flex_1().min_w_0(), text.clone()).child(text)));
+            .child(h_flex().items_start().gap(px(8.)).child(div().flex_none().pt(px(1.)).child(mark)).child(crate::highlights::tipped_as(div().id("limit-text").flex_1().min_w_0(), text.clone(), gpui_kit::Role::GenericContainer).child(text)));
         if !advice.targets.is_empty() || advice.stopped {
             // Wraps in a narrow window rather than running past the box's edge.
             let mut row = h_flex().flex_wrap().gap(px(10.)).items_center();
@@ -321,9 +346,9 @@ impl Composer {
                 let tip = "Pin this thread to that login and carry on there now, from where it stopped";
                 let (account, title) = picked.clone();
                 let (app_c, id) = (self.app.clone(), thread.id.clone());
-                let carry_on = advice.stopped;
+                let carry_on = advice.carry_on;
                 row = row.child(
-                    div().id("limit-switch").test_support().aria_label(tip).child(Button::new("limit-switch-button").label("Continue now on").small().secondary().tooltip(tip).on_click(move |_, _, cx| {
+                    div().id("limit-switch").test_support().a11y_role(Role::GenericContainer).aria_label(tip).child(Button::new("limit-switch-button").label("Continue now on").small().secondary().tooltip(tip).on_click(move |_, _, cx| {
                         app_c.update(cx, |a, cx| a.continue_now_on(&id, account.clone(), carry_on, cx)).ok();
                     })),
                 );
@@ -363,7 +388,7 @@ impl Composer {
                     }
                     menu
                 });
-                row = row.child(h_flex().gap(px(6.)).items_center().child(div().text_color(secondary).child("Carry on by itself")).child(div().id("limit-carry-on").test_support().aria_label(tip).child(menu)));
+                row = row.child(h_flex().gap(px(6.)).items_center().child(div().text_color(secondary).child("Carry on by itself")).child(div().id("limit-carry-on").test_support().a11y_role(Role::GenericContainer).aria_label(tip).child(menu)));
             }
             column = column.child(row);
         }
@@ -393,11 +418,19 @@ impl Composer {
         if let Some(restore) = &self.restore {
             all = RestoreDraft::joined(restore.clone(), all);
         }
-        all.for_saving()
+        let (mut text, images) = all.for_saving();
+        for mention in &self.pending_mentions { text = threadbear_core::board::adding(&mention.reference, &text); }
+        (text, images)
     }
 
     /// Whether the box holds anything a restart would lose: words, or a
     /// picture, one still being copied in included (app_update.rs).
+    /// A picture still being copied in: not in the draft yet (`draft`), so a
+    /// handover waits for it rather than lose it.
+    pub(crate) fn copying_picture(&self, cx: &App) -> bool {
+        self.box_chips(cx).iter().any(|(_, chip)| matches!(chip, threadbear_core::inline_chips::BoxChip::Picture(None)))
+    }
+
     pub(crate) fn holds_anything(&self, cx: &App) -> bool {
         let text = self.input.read(cx).value().to_string();
         threadbear_core::inline_chips::holds_anything(&text, &self.box_chips(cx))
@@ -477,8 +510,19 @@ impl Composer {
 
     // ---- Sending ----
 
+    fn loading_pictures(&self, cx: &App) -> bool {
+        let mut inputs = if self.editing.is_some() { Vec::new() } else { self.card.answer_inputs() };
+        inputs.push(self.input.clone());
+        inputs.iter().flat_map(|input| Self::chips_in(input, cx))
+            .any(|(_, id)| self.pictures.get(&id).is_some_and(|p| p.image.is_none()))
+    }
+
     /// Whether there's anything to send (ComposerView.canSend).
     fn can_send(&self, cx: &App) -> bool {
+        !self.loading_pictures(cx) && self.has_send_content(cx)
+    }
+
+    fn has_send_content(&self, cx: &App) -> bool {
         let (text, images) = self.draft(cx);
         composer::can_send(&text, images.len()) || !self.card.picks.is_empty() || !self.card.next_picks.is_empty() || !self.card.explain.is_empty()
     }
@@ -487,6 +531,12 @@ impl Composer {
     /// at the end of the transcript until the runner has it; it comes back
     /// if the runner doesn't take it.
     pub(crate) fn send(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.loading_pictures(cx) { return; }
+        // The arrow hops as Return lands, when there's something to send
+        // (Mike picked it, 13 Nov). None under Reduce Motion.
+        if self.can_send(cx) && !cx.reduce_motion() {
+            self.sent_hop = Some(std::time::Instant::now());
+        }
         // Return still reaches here with the box locked for a move.
         if self.moving_line(cx).is_some() {
             return;
@@ -556,10 +606,17 @@ impl Composer {
 
     /// The Stop button (⌘. goes through ThreadPane::stop too).
     fn stop(&mut self, cx: &mut Context<Self>) {
-        self.stopping = true;
+        self.stopping = Some(crate::now_ms());
         if let Some(pane) = self.pane() {
             pane.update(cx, |p, cx| p.stop(cx));
         }
+        // Drawn again once the spinner's time is up, in case nothing else
+        // draws it (a turn that ignored Stop and went quiet).
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(std::time::Duration::from_millis(threadbear_core::composer::STOPPING_SHOWN_MS as u64)).await;
+            this.update(cx, |_, cx| cx.notify()).ok();
+        })
+        .detach();
         cx.notify();
     }
 
@@ -591,6 +648,33 @@ impl Composer {
         cx.notify();
     }
 
+    /// Append a board card as its usual chip, preserving pictures (including
+    /// ones still being copied) and the rest of the draft.
+    pub(crate) fn mention_card(&mut self, task: &threadbear_core::projects::Task, cx: &mut Context<Self>) {
+        let mention = threadbear_core::board::PendingMention { reference: task.reference(), edit: self.editing.as_ref().map(|e| e.seq) };
+        if !self.pending_mentions.contains(&mention) { self.pending_mentions.push(mention); }
+        cx.notify();
+    }
+
+    fn append_card_reference(&mut self, reference: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let text = self.input.read(cx).value().to_string();
+        let added = threadbear_core::board::adding(reference, &text);
+        if added != text {
+            let blank = text.trim().is_empty();
+            let range = if blank { 0..text.len() } else { text.len()..text.len() };
+            self.input.update(cx, |s, cx| s.set_selected_range(range, cx));
+            let tail = if blank { added.as_str() } else { &added[text.len()..] };
+            self.insert_pieces(threadbear_core::inline_chips::draft_pieces(tail, 0), &[], window, cx);
+        }
+    }
+
+    /// The box holding exactly `text` from the next frame: the tour's first
+    /// message, written for them.
+    pub(crate) fn replace_text(&mut self, text: String, cx: &mut Context<Self>) {
+        self.pending_box = Some((text, vec![]));
+        cx.notify();
+    }
+
     /// The box holding exactly `text`, its marks as chips of `images`.
     fn set_box(&mut self, text: String, images: Vec<ImageRef>, window: &mut Window, cx: &mut Context<Self>) {
         self.input.update(cx, |s, cx| s.set_value("", window, cx));
@@ -611,6 +695,8 @@ impl Composer {
         if text.is_empty() && images.is_empty() {
             return;
         }
+        // The runner it's shown on, as a send says it (thread.rs, Daybreak 113).
+        let Some(runner_id) = self.app.upgrade().and_then(|app| app.read(cx).threads.get(&thread_id).map(|t| t.runner_id.clone())) else { return };
         if let Some(edit) = self.editing.as_mut() {
             edit.sending = true;
         }
@@ -621,7 +707,7 @@ impl Composer {
         cx.spawn(async move |this, cx| {
             let mut stop_background = false;
             loop {
-                let mut params = json!({ "threadId": thread_id, "seq": seq, "text": text, "stopBackground": stop_background });
+                let mut params = json!({ "threadId": thread_id, "seq": seq, "text": text, "stopBackground": stop_background, "runnerId": runner_id });
                 if !images_json.is_empty() {
                     params["images"] = json!(images_json);
                 }
@@ -750,9 +836,22 @@ impl Composer {
         self.take_clipboard_in(&target, item, window, cx)
     }
 
+    fn take_native_paste(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        if !self.can_take_pictures(cx) { return false; }
+        let target = self.native_paste_target(window, cx);
+        let Some(target) = target else { return false };
+        let Some(paths) = crate::composer_media::read(false) else { return false };
+        self.take_paths_in(&target, paths, window, cx);
+        true
+    }
+
     /// A paste into `target`: the box, or one of the card's Something else
     /// boxes, which takes pictures as chips just the same (AskAnswerBox).
     pub(crate) fn take_clipboard_in(&mut self, target: &Entity<TextareaState>, item: &ClipboardItem, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        if let Some(paths) = crate::composer_media::read(false) {
+            self.take_paths_in(target, paths, window, cx);
+            return true;
+        }
         let mut paths = Vec::new();
         let mut images = Vec::new();
         let mut has_text = false;
@@ -792,8 +891,20 @@ impl Composer {
         self.take_paths_in(&target, paths, window, cx);
     }
 
+    pub(crate) fn take_drop_in(&mut self, target: &Entity<TextareaState>, paths: Vec<PathBuf>, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.can_take_pictures(cx) { return; }
+        let paths = crate::composer_media::read(true).unwrap_or(paths);
+        if paths.is_empty() {
+            if let Some(pane) = self.pane() {
+                pane.update(cx, |p, cx| p.show_error("Couldn't read that picture".into(), cx));
+            }
+            return;
+        }
+        self.take_paths_in(target, paths, window, cx);
+    }
+
     pub(crate) fn take_paths_in(&mut self, target: &Entity<TextareaState>, paths: Vec<PathBuf>, window: &mut Window, cx: &mut Context<Self>) {
-        let (images, others): (Vec<_>, Vec<_>) = paths.into_iter().partition(|p| is_picture(p));
+        let (images, others): (Vec<_>, Vec<_>) = paths.into_iter().map(keep_picture).partition(|p| is_picture(p));
         if !others.is_empty() {
             Self::insert_paths(target, others, window, cx);
         }
@@ -819,7 +930,7 @@ impl Composer {
         });
     }
 
-    fn text_and_selection(target: &Entity<TextareaState>, cx: &App) -> (String, Range<usize>) {
+    pub(crate) fn text_and_selection(target: &Entity<TextareaState>, cx: &App) -> (String, Range<usize>) {
         let state = target.read(cx);
         (state.value().to_string(), state.selected_range())
     }
@@ -829,6 +940,10 @@ impl Composer {
     /// side, each copied in through the runner as it shows, dimmed until it's
     /// in; one that can't be read goes again.
     pub(crate) fn insert_pictures_in(&mut self, target: &Entity<TextareaState>, paths: Vec<PathBuf>, window: &mut Window, cx: &mut Context<Self>) {
+        self.insert_pictures(target, paths, true, window, cx);
+    }
+
+    fn insert_pictures(&mut self, target: &Entity<TextareaState>, paths: Vec<PathBuf>, focus: bool, window: &mut Window, cx: &mut Context<Self>) {
         let ids: Vec<SharedString> = paths.iter().map(|_| self.fresh_picture_id()).collect();
         let tokens: Vec<InlineToken> = ids.iter().map(picture_token).collect();
         let (text, selection) = Self::text_and_selection(target, cx);
@@ -850,8 +965,10 @@ impl Composer {
             if !next_is_space {
                 s.insert(" ", window, cx);
             }
-            s.focus(window, cx);
-            crate::web_panels::keyboard_to_app(window);
+            if focus {
+                s.focus(window, cx);
+                crate::web_panels::keyboard_to_app(window);
+            }
         });
         for (id, path) in ids.into_iter().zip(paths) {
             self.pictures.insert(id.clone(), PictureChip { source: path.clone(), image: None });
@@ -862,15 +979,54 @@ impl Composer {
 
     fn import_picture(&mut self, id: SharedString, path: PathBuf, target: WeakEntity<TextareaState>, window: &mut Window, cx: &mut Context<Self>) {
         let client = self.client.clone();
-        let params = json!({ "path": path.to_string_lossy() });
         cx.spawn_in(window, async move |this, cx| {
-            let result = crate::call(client, "media.import", params).await;
+            let mut imported = path.clone();
+            let grace = cx.background_executor().timer(std::time::Duration::from_millis(500));
+            let ready = crate::composer_media::ready(&path, grace);
+            let timeout = cx.background_executor().timer(std::time::Duration::from_secs(60));
+            futures::pin_mut!(ready, timeout);
+            let prepared = match futures::future::select(ready, timeout).await {
+                futures::future::Either::Left((result, _)) => result,
+                futures::future::Either::Right(_) => Err("The picture took too long to arrive".into()),
+            };
+            let result = match prepared {
+                Ok(mut prepared) => {
+                    if let Some(first) = prepared.paths.first() { imported = first.clone(); }
+                    let extra = prepared.paths.split_off(1);
+                    if !extra.is_empty() {
+                        let discard = extra.clone();
+                        if this.update_in(cx, |this, window, cx| this.insert_promised_extra(&id, &target, extra, window, cx)).is_err() {
+                            for path in discard { unstage(&path); }
+                        }
+                    }
+                    crate::call(client, "media.import", json!({ "path": imported.to_string_lossy() })).await
+                },
+                Err(message) => Err(threadbear_client::runner::RpcError { code: -32602, message, data: None }),
+            };
             // The runner keeps its own copy (or said no): a pasted picture's
             // staged file goes now, whatever happens to the chip.
             unstage(&path);
+            unstage(&imported);
             this.update_in(cx, |this, window, cx| this.settle_picture(id, result, target, window, cx)).ok();
         })
         .detach();
+    }
+
+    /// A legacy file promise can deliver several pictures for one item. Add
+    /// the rest beside its placeholder, preserving the user's current caret
+    /// and focus; a chip already deleted never makes pictures reappear.
+    fn insert_promised_extra(&mut self, id: &SharedString, target: &WeakEntity<TextareaState>, paths: Vec<PathBuf>, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(target) = target.upgrade().filter(|target| Self::chip_range(target, id, cx).is_some()) else {
+            for path in paths { unstage(&path); }
+            return;
+        };
+        let at = Self::chip_range(&target, id, cx).unwrap().end;
+        let (before, selection) = Self::text_and_selection(&target, cx);
+        target.update(cx, |s, cx| s.set_selected_range(at..at, cx));
+        self.insert_pictures(&target, paths, false, window, cx);
+        let added = target.read(cx).value().len().saturating_sub(before.len());
+        let moved = |offset| if offset >= at { offset + added } else { offset };
+        target.update(cx, |s, cx| s.set_selected_range(moved(selection.start)..moved(selection.end), cx));
     }
 
     /// ComposerTextView.settle: a chip's picture is in, or couldn't be read.
@@ -1060,18 +1216,21 @@ impl Composer {
         let at = match strip {
             Some(index) => {
                 let label = format!("Picture {}", index + 1);
-                let found = |label: &str, window: &Window| window.elements().into_iter().filter(|e| e.visible() && e.label() == Some(label)).last().map(|e| e.bounds());
-                let tile = found(&label, &*window).ok_or_else(|| format!("no thumbnail {} over the box", index + 1))?;
-                window.pointer_move(tile.center(), None, cx);
+                // Its whole bounds, for where the × sits on it, and what's
+                // drawn of it, for where the pointer goes: a thumbnail
+                // scrolled partly out of the strip has its middle outside.
+                let found = |label: &str, window: &Window| window.elements().into_iter().filter(|e| e.visible() && e.label() == Some(label)).last().map(|e| (e.bounds(), e.visible_bounds()));
+                let (tile, drawn) = found(&label, &*window).ok_or_else(|| format!("no thumbnail {} over the box", index + 1))?;
+                window.pointer_move(drawn.center(), None, cx);
                 window.render_frame(cx);
-                let x = found(REMOVE_LABEL, &*window).ok_or("no × on the thumbnail while it's hovered")?;
+                let (x, x_drawn) = found(REMOVE_LABEL, &*window).ok_or("no × on the thumbnail while it's hovered")?;
                 let corner = Bounds::from_corners(point(tile.center().x, tile.origin.y), point(tile.right(), tile.center().y));
                 if !(corner.contains(&x.origin) && corner.contains(&point(x.right() - gpui_kit::px(1.), x.bottom() - gpui_kit::px(1.)))) {
                     return Err(format!("the × is at {x:?}, not in the top right corner of the thumbnail at {tile:?}"));
                 }
                 if remove {
                     let before = this.read(cx).chips(cx).len();
-                    click(x.center(), window, cx);
+                    click(x_drawn.center(), window, cx);
                     let (after, opened) = (this.read(cx).chips(cx).len(), this.read(cx).debug_opened.clone());
                     if let Some((paths, _)) = opened {
                         return Err(format!("the × opened the viewer on {paths:?}"));
@@ -1079,7 +1238,7 @@ impl Composer {
                     return if after + 1 == before { Ok(json!("ok removed")) } else { Err(format!("{before} pictures before the × and {after} after")) };
                 }
                 // Away from the × in the corner.
-                point(tile.origin.x + tile.size.width / 4., tile.bottom() - tile.size.height / 4.)
+                point(drawn.origin.x + drawn.size.width / 4., drawn.bottom() - drawn.size.height / 4.)
             }
             None => {
                 let number = number.ok_or("press needs a number")?;
@@ -1170,7 +1329,7 @@ impl Composer {
                 .test_support()
                 // "Picture N", as its chip among the words says, for VoiceOver
                 // and for scripts (`composer-peek` with `strip`).
-                .aria_label(SharedString::from(format!("Picture {}", index + 1)))
+                .role(Role::Button).aria_label(SharedString::from(format!("Picture {}", index + 1)))
                 .group("tile")
                 .relative()
                 .cursor_pointer()
@@ -1199,23 +1358,28 @@ impl Composer {
         let can_send = self.can_send(cx);
         let side = px(style::size::SEND_BUTTON);
         let circle = || div().flex().items_center().justify_center().size(side).rounded_full();
+        if self.loading_pictures(cx) && (!running || self.has_send_content(cx)) {
+            return circle().id("composer-loading-picture").test_support().role(Role::ProgressIndicator).aria_label("Loading picture")
+                .bg(style::send_faint_fill(cx)).child(Spinner::new().color(style::quiet_text(cx)).with_size(px(14.)))
+                .tip("Loading picture").into_any_element();
+        }
         // The runner is making the thread: a spinner in the button's place
         // until it has, however long a busy Mac makes that (SendButton).
         if creating {
             return circle()
                 .id("composer-starting")
                 .test_support()
-                .aria_label("Starting the thread")
+                .role(Role::ProgressIndicator).aria_label("Starting the thread")
                 .bg(style::send_faint_fill(cx))
                 .child(Spinner::new().color(style::quiet_text(cx)).with_size(px(14.)))
                 .tip("Starting the thread")
                 .into_any_element();
         }
-        if running && !can_send && self.stopping {
+        if running && !can_send && self.stopping.is_some() {
             return circle()
                 .id("composer-stopping")
                 .test_support()
-                .aria_label("Stopping")
+                .role(Role::ProgressIndicator).aria_label("Stopping")
                 .bg(style::send_faint_fill(cx))
                 .child(Spinner::new().color(style::quiet_text(cx)).with_size(px(14.)))
                 .tip("Stopping")
@@ -1226,7 +1390,7 @@ impl Composer {
             return circle()
                 .id("composer-stop")
                 .test_support()
-                .aria_label("Stop")
+                .role(Role::Button).aria_label("Stop")
                 .cursor_pointer()
                 .bg(bg)
                 // A filled square, as the Swift app's `stop.fill` at 9 pt bold:
@@ -1245,12 +1409,28 @@ impl Composer {
         circle()
             .id("composer-send")
             .test_support()
-            .aria_label("Send")
+            .role(Role::Button).aria_label("Send")
             .when(can_send, |s| s.cursor_pointer())
             .bg(bg)
-            .child(Icon::from(IconName::ArrowUp).with_size(px(14.)).text_color(fg))
+            .child(self.hopping(Icon::from(IconName::ArrowUp).with_size(px(14.)).text_color(fg).into_any_element()))
             .when(can_send, |s| s.on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.send(window, cx))))
             .tip(tip)
+            // Dimmed with nothing to send, as SendButton's `.disabled`.
+            .a11y_disabled(!can_send)
+            .into_any_element()
+    }
+
+    /// The send arrow, nudging up and back once after a send: 3 points in
+    /// 0.05 s and home in 0.07 (`ComposerControls`' send button).
+    fn hopping(&self, arrow: AnyElement) -> AnyElement {
+        let Some(at) = self.sent_hop.filter(|at| at.elapsed() < threadbear_core::juice::SEND_HOP) else { return arrow };
+        let length = threadbear_core::juice::SEND_HOP;
+        div()
+            .relative()
+            .child(arrow)
+            .with_animation(SharedString::from(format!("send-hop-{at:?}")), Animation::new(length), move |el, t| {
+                el.top(px(threadbear_core::juice::send_hop(t * length.as_secs_f32())))
+            })
             .into_any_element()
     }
 
@@ -1265,7 +1445,9 @@ impl Composer {
         let thread_drop = this.clone();
         let file_drop = this.clone();
         let drop_target = this;
-        div()
+        let menu_owner = cx.entity().downgrade();
+        let menu_input = self.input.clone();
+        self.spelling_actions(div(), cx)
             .w_full()
             // Greyed and locked while a new thread is being made from it, or
             // while its thread moves to another machine.
@@ -1317,23 +1499,38 @@ impl Composer {
             }))
             .on_drop(move |paths: &ExternalPaths, window, cx| {
                 if let Some(this) = drop_target.upgrade() {
-                    this.update(cx, |this, cx| this.take_paths(paths.paths().to_vec(), window, cx));
+                    // Where it's let go, over the words (`performDragOperation`).
+                    let at = window.mouse_position();
+                    this.update(cx, |this, cx| {
+                        let target = this.input.clone();
+                        this.caret_to_drop(&target, at, cx);
+                        this.take_drop_in(&target, paths.paths().to_vec(), window, cx);
+                    });
                 }
             })
             .on_drop(move |drag: &crate::composer_inline::DraggedThread, window, cx| {
                 if let Some(this) = thread_drop.upgrade() {
-                    this.update(cx, |this, cx| this.take_thread_drop(drag, window, cx));
+                    let at = window.mouse_position();
+                    this.update(cx, |this, cx| this.take_thread_drop(drag, at, window, cx));
                 }
             })
             // A file or picture dragged from inside the app (file_drag.rs).
             .on_drop(move |file: &crate::file_drag::DraggedFile, window, cx| {
                 if let (Some(this), Some(real)) = (file_drop.upgrade(), file.still_grabbed()) {
-                    this.update(cx, |this, cx| this.take_paths(vec![real], window, cx));
+                    let at = window.mouse_position();
+                    this.update(cx, |this, cx| {
+                        let target = this.input.clone();
+                        this.caret_to_drop(&target, at, cx);
+                        this.take_paths(vec![real], window, cx);
+                    });
                 }
             })
             .child(
                 bare_textarea(Textarea::new(&self.input))
                     .disabled(creating)
+                    // NSTextView's right-click menu: spelling, then Cut, Copy and
+                    // Paste, then Spelling and Grammar to Speech.
+                    .context_menu(move |_, window, cx| crate::composer_spelling::context_menu(&menu_owner, &menu_input, window, cx))
                     .text_size(px(style::size::COMPOSER))
                     .line_height(px(style::size::BODY_LINE))
                     .token(move |ctx, _window, cx| match token_owner.upgrade() {
@@ -1393,6 +1590,16 @@ impl Render for Composer {
                 self.apply_restore(restore, window, cx);
             }
         }
+        let mentions = threadbear_core::board::take_mentions(&mut self.pending_mentions, self.editing.as_ref().map(|e| e.seq), self.restore.is_some());
+        if !mentions.is_empty() {
+            for reference in mentions {
+                self.append_card_reference(&reference, window, cx);
+            }
+            // This is the window actually drawing the box now. A Highlights
+            // window never activates or focuses a hidden box elsewhere.
+            self.focus(window, cx);
+            crate::web_panels::keyboard_to_app(window);
+        }
         self.renumber_chips(cx);
         // With answers picked the box is for anything else; under asks with
         // none picked it's the way to answer in other words.
@@ -1407,8 +1614,8 @@ impl Render for Composer {
             self.input.update(cx, |s, cx| s.set_placeholder(placeholder, window, cx));
         }
         let running = self.pane().is_some_and(|p| p.read(cx).summary.busy());
-        if !running {
-            self.stopping = false;
+        if !running || !threadbear_core::composer::still_stopping(self.stopping, crate::now_ms()) {
+            self.stopping = None;
         }
         let strip = self.render_strip(cx);
         let creating = self.creating(cx);
@@ -1454,6 +1661,11 @@ impl Render for Composer {
         // The transcript's reading column: 780 wide at most, centred, with
         // the same side insets once the window is narrower.
         h_flex()
+            // Capture above the message and the card's answer boxes: a
+            // HEIC-only pasteboard can be empty to GPUI's textarea handler.
+            .capture_action(cx.listener(|this, _: &gpui_kit::base::input::Paste, window, cx| {
+                if this.take_native_paste(window, cx) { cx.stop_propagation(); }
+            }))
             .w_full()
             .justify_center()
             .px(px(style::SIDE_INSET))
@@ -1465,7 +1677,8 @@ impl Render for Composer {
                     .max_w(px(style::MAX_CONTENT_WIDTH))
                     .children(refusal)
                     // Overlapping the box's border, so the two read as one piece.
-                    .when_some(shelves, |s, shelves| s.child(div().px(px(style::COMPOSER_RADIUS)).mb(gpui_kit::px(-0.5)).child(shelves)))
+                    // The chips themselves measured for the tour's Patches step.
+                    .when_some(shelves, |s, shelves| s.child(div().px(px(style::COMPOSER_RADIUS)).mb(gpui_kit::px(-0.5)).child(h_flex().child(div().relative().flex_none().child(shelves).children(crate::tour::mark(threadbear_core::tour::Target::ActionChips))))))
                     .child(
                 div()
                     .relative()
@@ -1499,7 +1712,9 @@ impl Render for Composer {
                             window.refresh();
                         }
                     }, |_, _, _, _| {}).absolute().size_full())
-                    .children(palette),
+                    .children(palette)
+                    // The main panel's box, for the tour's first thread.
+                    .children(crate::tour::mark_composer(self.thread_id.as_deref())),
                     ),
             )
             .children(self.render_peek(cx))
@@ -1523,7 +1738,7 @@ pub(crate) fn remove_badge(id: impl Into<ElementId>) -> impl StatefulInteractive
     div()
         .id(id)
         .test_support()
-        .aria_label(REMOVE_LABEL)
+        .role(Role::Button).aria_label(REMOVE_LABEL)
         .size(px(18.))
         .flex()
         .items_center()
@@ -1574,11 +1789,54 @@ fn save_pasted_image(image: &gpui_kit::Image) -> Option<PathBuf> {
     stage_private(&paste_base(), &format!("pasted-{:x}.{ext}", image.id), &image.bytes)
 }
 
+pub(crate) fn keep_picture(path: PathBuf) -> PathBuf {
+    if !is_picture(&path) || is_staged(&path) || !transient_picture(&path) {
+        return path;
+    }
+    capture_picture(&path).unwrap_or(path)
+}
+
+/// Read with this app's grant, rather than testing access(2) or making the
+/// runner open the original. APFS clones keep the original bytes cheaply;
+/// other filesystems copy at most the runner's supported 100 MB.
+pub(crate) fn capture_picture(path: &Path) -> Option<PathBuf> {
+    let file = threadbear_core::open_policy::local_open(path).ok()?;
+    if !file.metadata().ok()?.is_file() { return None; }
+    snapshot_picture(&file, path).ok()
+}
+
+pub(crate) fn snapshot_picture(file: &std::fs::File, path: &Path) -> std::io::Result<PathBuf> {
+    let folder = private_folder(&paste_base()).ok_or_else(|| std::io::Error::other("Couldn't prepare a private picture folder"))?;
+    let name = path.file_name().and_then(|n| n.to_str()).ok_or_else(|| std::io::Error::other("The picture has no filename"))?;
+    let kept = threadbear_core::private_file::snapshot(file, folder.path(), name, 100 * 1024 * 1024)?;
+    STAGED.lock().unwrap_or_else(|e| e.into_inner()).push((kept.clone(), folder.keep()));
+    Ok(kept)
+}
+
+pub(crate) fn transient_picture(path: &Path) -> bool {
+    path.starts_with(std::env::temp_dir()) || path.starts_with("/var/folders") || path.starts_with("/private/var/folders")
+        || path.to_string_lossy().to_ascii_lowercase().contains(".photoslibrary/")
+}
+
+pub(crate) fn is_staged(path: &Path) -> bool {
+    STAGED.lock().unwrap_or_else(|e| e.into_inner()).iter().any(|(owned, _)| owned == path)
+}
+
+/// An asynchronous source mustn't recreate its folder after an import timed
+/// out and removed it. Serialize its write with unstage's ownership check.
+pub(crate) fn write_staged(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let staged = STAGED.lock().unwrap_or_else(|e| e.into_inner());
+    if !staged.iter().any(|(owned, _)| owned == path) {
+        return Err(std::io::Error::other("The picture is no longer being imported"));
+    }
+    threadbear_core::private_file::write(path, bytes)
+}
+
 /// Where pasted pictures wait for the runner: the session's own runtime
 /// folder on Linux (`XDG_RUNTIME_DIR`, which only this user can open), else
 /// the temp folder (already this user's own on a Mac and Windows; `/tmp` on
 /// a Linux without one, which everyone can list).
-fn paste_base() -> PathBuf {
+pub(crate) fn paste_base() -> PathBuf {
     std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from).filter(|d| d.is_absolute() && d.is_dir()).unwrap_or_else(std::env::temp_dir)
 }
 
@@ -1587,42 +1845,42 @@ fn paste_base() -> PathBuf {
 /// `/tmp` nobody else can read it, list it, or make the folder first and
 /// have it written into theirs (Daybreak, 10 Nov 2026, finding 63). The
 /// folder goes once the runner has its own copy (`import_picture`).
-fn stage_private(base: &std::path::Path, name: &str, bytes: &[u8]) -> Option<PathBuf> {
-    use std::io::Write as _;
+pub(crate) fn stage_private(base: &std::path::Path, name: &str, bytes: &[u8]) -> Option<PathBuf> {
+    // Never let a clipboard-supplied name escape its fresh private folder.
+    if Path::new(name).file_name().and_then(|n| n.to_str()) != Some(name) { return None; }
+    let folder = private_folder(base)?.keep();
+    let path = folder.join(name);
+    let written = threadbear_core::private_file::write(&path, bytes);
+    if written.is_err() {
+        let _ = std::fs::remove_dir_all(&folder);
+        return None;
+    }
+    STAGED.lock().unwrap_or_else(|e| e.into_inner()).push((path.clone(), folder));
+    Some(path)
+}
+
+pub(crate) fn private_folder(base: &Path) -> Option<tempfile::TempDir> {
     let mut builder = tempfile::Builder::new();
     builder.prefix("threadbear-paste-");
     // Without a mode the folder would take the umask's (0755 under 022).
     // Windows has none: a folder there takes the user's temp folder's access.
     #[cfg(unix)]
     builder.permissions(std::os::unix::fs::PermissionsExt::from_mode(0o700));
-    let folder = builder.tempdir_in(base).ok()?.keep();
-    let path = folder.join(name);
-    let mut options = std::fs::OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
-    let written = options.open(&path).and_then(|mut f| f.write_all(bytes));
-    if written.is_err() {
-        let _ = std::fs::remove_dir_all(&folder);
-        return None;
-    }
-    STAGED.lock().unwrap_or_else(|e| e.into_inner()).push(folder);
-    Some(path)
+    builder.tempdir_in(base).ok()
 }
 
 /// The folders `stage_private` made and hasn't removed: only these are
 /// ever deleted, never a folder that just has the same kind of name (Codex
 /// review, 10 Nov 2026: a picture dropped from `/tmp/threadbear-paste-x/`
 /// would have taken that whole folder with it).
-static STAGED: std::sync::Mutex<Vec<PathBuf>> = std::sync::Mutex::new(Vec::new());
+static STAGED: std::sync::Mutex<Vec<(PathBuf, PathBuf)>> = std::sync::Mutex::new(Vec::new());
 
 /// A staged picture's folder, once the runner has copied it (or couldn't).
 /// A dropped or pasted file's own folder is never touched.
-fn unstage(path: &std::path::Path) {
-    let Some(folder) = path.parent() else { return };
+pub(crate) fn unstage(path: &std::path::Path) {
     let mut staged = STAGED.lock().unwrap_or_else(|e| e.into_inner());
-    if let Some(at) = staged.iter().position(|f| f == folder) {
-        staged.remove(at);
+    if let Some(at) = staged.iter().position(|(owned, _)| owned == path) {
+        let (_, folder) = staged.remove(at);
         drop(staged);
         let _ = std::fs::remove_dir_all(folder);
     }
@@ -1630,8 +1888,48 @@ fn unstage(path: &std::path::Path) {
 
 #[cfg(test)]
 mod paste_tests {
-    use super::{stage_private, unstage};
+    use super::{keep_picture, stage_private, unstage, write_staged};
     use std::fs;
+
+    #[test]
+    fn a_screenshot_is_owned_before_the_drop_returns() {
+        let source = tempfile::tempdir().unwrap();
+        let original = source.path().join("Screenshot.png");
+        fs::write(&original, b"screenshot").unwrap();
+        let kept = keep_picture(original.clone());
+        fs::remove_file(&original).unwrap(); // macOS ends the drag
+        assert_eq!(fs::read(&kept).unwrap(), b"screenshot"); // runner reads later
+        unstage(&kept);
+        assert!(source.path().exists());
+    }
+
+    #[test]
+    fn a_supported_large_screenshot_is_kept_too() {
+        let source = tempfile::tempdir().unwrap();
+        let original = source.path().join("large.png");
+        fs::File::create(&original).unwrap().set_len(26 * 1024 * 1024).unwrap();
+        let kept = keep_picture(original.clone());
+        fs::remove_file(original).unwrap();
+        assert_eq!(fs::metadata(&kept).unwrap().len(), 26 * 1024 * 1024);
+        unstage(&kept);
+    }
+
+    #[test]
+    fn a_late_promise_cannot_recreate_a_removed_staging_folder() {
+        let base = tempfile::tempdir().unwrap();
+        let path = stage_private(base.path(), "promised.png", b"").unwrap();
+        unstage(&path);
+        assert!(write_staged(&path, b"late photo").is_err());
+        assert!(!path.parent().unwrap().exists());
+    }
+
+    #[test]
+    fn clipboard_names_cannot_escape_the_private_folder() {
+        let base = tempfile::tempdir().unwrap();
+        assert!(stage_private(base.path(), "../photo.png", b"private").is_none());
+        assert!(stage_private(base.path(), "/photo.png", b"private").is_none());
+        assert_eq!(fs::read_dir(base.path()).unwrap().count(), 0);
+    }
 
     /// Finding 63: under umask 022 the old folder was 0755 and the file
     /// 0644, in a fixed `/tmp/threadbear-paste` anyone could list or make

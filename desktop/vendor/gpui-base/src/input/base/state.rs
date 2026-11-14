@@ -196,6 +196,16 @@ pub(crate) fn init(cx: &mut App) {
             },
             Some(CONTEXT),
         ),
+        // Option-Return is a new line too, as AppKit's text views take it
+        // (Threadbear's message box: ComposerView's keyDown treats Option as Shift).
+        KeyBinding::new(
+            "alt-enter",
+            Enter {
+                secondary: false,
+                shift: true,
+            },
+            Some(CONTEXT),
+        ),
         KeyBinding::new(
             if cx.platform_info().is_mac() {
                 "cmd-enter"
@@ -1263,6 +1273,7 @@ impl<M: InputModeKind> InputBaseState<M> {
     ) {
         let content = value.into();
         self.inline_tokens = None;
+        self.extras.value_set();
         self.undo_manager.set_ignoring(true);
         self.emit_events = false;
         self.replace_text(content.text().clone(), window, cx);
@@ -3529,6 +3540,25 @@ impl<M: InputModeKind> InputBaseState<M> {
         self.last_layout.as_ref().map(|l| l.line_height)
     }
 
+    /// Changes whenever the document is edited, including Undo and Redo.
+    /// Consumers can refresh a selection snapshot without copying the text
+    /// on every caret blink or layout notification.
+    pub fn document_revision(&self) -> u64 { self.document_revision }
+
+    /// Secret fields stay out of system text consumers even when their
+    /// mask has been revealed. This shares the presentation's privacy flag.
+    pub fn is_sensitive(&self) -> bool {
+        self.masked || self.accessibility.as_ref().is_some_and(|a| !a.value_exposed())
+    }
+
+    /// Whether a replacement can target just the active selection. A
+    /// system text service returns one string, not a multi-cursor edit.
+    pub fn is_single_selection(&self) -> bool { self.selections.is_single() }
+
+    /// A service must not replace an IME clause while its larger preedit is
+    /// still marked: normal replacement would consume that whole preedit.
+    pub fn has_composition(&self) -> bool { self.ime_marked_range.is_some() }
+
     /// Returns the active selection as a byte range into the text.
     ///
     /// With multiple cursors, this reads only the active selection.
@@ -3646,6 +3676,13 @@ impl<M: InputModeKind> InputBaseState<M> {
     /// end of that row rather than at the start of the next one. Callers that place or extend a
     /// selection must pass it on, or clicking past the last glyph of a wrapped row leaves a
     /// caret one row below the pointer.
+    /// The text offset nearest a window point, as a click there would put
+    /// the caret: past a row's end is that row's end, above or below the text
+    /// its first or last row. For a drop to go where it's let go.
+    pub fn offset_for_point(&self, position: Point<Pixels>) -> usize {
+        self.index_for_mouse_position(position).0
+    }
+
     pub(crate) fn index_for_mouse_position(&self, position: Point<Pixels>) -> (usize, bool) {
         let (offset, line_end_affinity, _) = self.resolve_mouse_position(position);
         (offset, line_end_affinity)

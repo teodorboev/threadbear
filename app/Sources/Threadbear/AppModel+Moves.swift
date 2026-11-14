@@ -115,21 +115,62 @@ extension AppModel {
         }
     }
 
-    /// The thread's old runner let it go during a move. It's on its way to
-    /// the other runner, which lists it in a moment: keep its row, its
-    /// place and the selection, as that runner's from now on, and let its
-    /// transcript open again from there. Any state short of failing counts,
-    /// as a move between two other runners only ever shows as starting
-    /// here. False when it isn't a move, and the thread should go.
+    /// The thread's old runner let it go during a move (its row left the
+    /// index, or this Mac's runner deleted it). Its row stays, with its
+    /// place and the selection, as it was: the old runner's, locked with
+    /// its move, until where it's going lists it (this Mac's own runner for
+    /// a move here, that runner's index row for one to another). A row gone
+    /// from its old runner says nothing about where the thread is, and a
+    /// secondary runner can take its row out and put it back at will
+    /// (Daybreak 113, 13 Nov 2026): taken as arrived, the thread looked like
+    /// this Mac's and took messages that went to the old runner. Any state
+    /// short of failing counts, as a move between two other runners only
+    /// ever shows as starting here. False when it isn't a move, and the
+    /// thread should go.
     func movedAway(_ threadId: String) -> Bool {
-        guard var thread = threads[threadId], let moving = thread.moving, !moving.ended else { return false }
-        let selfId = runners.first(where: \.isSelf)?.id
-        thread.runnerId = moving.to == selfId ? nil : moving.to
-        thread.moving = nil
-        if thread.runnerId != nil { madeRemote.insert(threadId) }
-        liveRemote.remove(threadId)
+        guard let thread = threads[threadId], let moving = thread.moving, !moving.ended, !moving.to.isEmpty else { return false }
+        madeRemote.insert(threadId)
         if let session = sessions.removeValue(forKey: threadId) { session.unsubscribe() }
-        threads[threadId] = thread
         return true
+    }
+
+    /// Other runners' threads gone from the index with no move showing: a
+    /// move here can drop its label (claimed) before its old row goes, so
+    /// one this Mac's runner now lists has arrived and stays, as this
+    /// Mac's; the rest were deleted there and go.
+    func forgetUnlessHere(_ ids: [String]) {
+        guard let client else { ids.forEach(forget); return }
+        Task { [self] in
+            let list = (try? await client.listThreads(include: [.inbox, .snoozed, .archived])) ?? []
+            for id in ids {
+                guard threads[id]?.isRemote == true else { continue }
+                if let here = list.first(where: { $0.id == id }) {
+                    madeRemote.remove(id)
+                    if let session = sessions.removeValue(forKey: id) { session.unsubscribe() }
+                    arrivedHere = [id]
+                    threads[id] = here
+                    arrivedHere = []
+                } else if !remoteIndex.summaries.contains(where: { $0.id == id }) {
+                    forget(id)
+                }
+            }
+        }
+    }
+
+    /// A thread on its way here from another runner: once this Mac's runner
+    /// lists it, it's this Mac's (the list is the only word on that; a
+    /// summary of it could be the old runner's, relayed).
+    func confirmArrival(_ threadId: String) {
+        guard let client else { return }
+        Task { [self] in
+            guard let list = try? await client.listThreads(include: [.inbox, .snoozed, .archived]),
+                  let arrived = list.first(where: { $0.id == threadId }),
+                  threads[threadId]?.isRemote == true else { return }
+            madeRemote.remove(threadId)
+            if let session = sessions.removeValue(forKey: threadId) { session.unsubscribe() }
+            arrivedHere = [threadId]
+            threads[threadId] = arrived
+            arrivedHere = []
+        }
     }
 }

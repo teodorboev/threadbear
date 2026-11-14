@@ -342,6 +342,14 @@ const sys = (subtype: string, extra: Record<string, unknown> = {}) => ({ type: '
 const life = (state: string, uuid: string) => ({ type: 'command_lifecycle', command_uuid: uuid, state });
 const result = (extra: Record<string, unknown> = {}) => ({ type: 'result', subtype: 'success', is_error: false, duration_ms: 5, total_cost_usd: 0.01, ...extra });
 
+test('input receipts distinguish a queued cancellation from a message the CLI started', () => {
+  const n = new ClaudeNormalizer(ctx());
+  assert.deepEqual(n.handle(life('queued', 'u1')), [{ kind: 'messageState', id: 'u1', state: 'queued' }]);
+  assert.deepEqual(n.handle(life('cancelled', 'u1')), [{ kind: 'messageState', id: 'u1', state: 'cancelled' }]);
+  assert.deepEqual(n.handle(life('started', 'u2')), [{ kind: 'messageState', id: 'u2', state: 'started' }]);
+  assert.deepEqual(n.handle({ ...life('started', 'sub'), parent_tool_use_id: 'tool' }), [], 'subagent receipts cannot acknowledge the root input');
+});
+
 test('turns the CLI starts itself are reported, with the finished task as a note', () => {
   const n = new ClaudeNormalizer(ctx());
   n.sent();

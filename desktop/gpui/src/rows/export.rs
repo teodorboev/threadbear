@@ -194,14 +194,27 @@ fn transcript_text(title: &str, rows: &[Row]) -> String {
 impl ThreadPane {
     /// `menu(forRow:)`: Copy message, Expand or Collapse, Copy transcript as
     /// Markdown, and what an agent needs to find this row again.
-    pub(crate) fn row_context_menu(row: Row, menu: PopupMenu, pane: WeakEntity<ThreadPane>, open: bool) -> PopupMenu {
-        let mut menu = menu.min_w(px(CARD_PAD * 16.));
+    pub(crate) fn row_context_menu(row: Row, menu: PopupMenu, pane: WeakEntity<ThreadPane>, open: bool, window: &mut Window, cx: &mut App) -> PopupMenu {
+        let copying = pane.upgrade().is_some_and(|p| {
+            let p = p.read(cx);
+            p.app.upgrade().is_some_and(|app| app.read(cx).busy_notes.iter().any(|(key, _)| key == &format!("copying/{}", p.summary.id)))
+        });
+        let mut menu = crate::native_text::context_items(menu, pane.clone(), window, cx).min_w(px(CARD_PAD * 16.));
         for (title, action) in row_menu(&row, open) {
             if action == RowMenuAction::CopyDebugInfo {
                 menu = menu.separator();
             }
+            let symbol = match action {
+                RowMenuAction::CopyMessage => "doc.on.doc",
+                RowMenuAction::Toggle if open => "chevron.up",
+                RowMenuAction::Toggle => "chevron.down",
+                RowMenuAction::CopyTranscript => "doc.plaintext",
+                RowMenuAction::CopyDebugInfo => "ladybug",
+            };
+            let busy = copying && action == RowMenuAction::CopyTranscript;
+            let title = if busy { "Copying transcript…" } else { title };
             let (row, pane) = (row.clone(), pane.clone());
-            menu = menu.item(PopupMenuItem::new(title).on_click(move |_, _, cx| {
+            menu = menu.item(PopupMenuItem::new(title).icon(crate::icons::symbol(symbol)).disabled(busy).on_click(move |_, _, cx| {
                 let row = row.clone();
                 let _ = pane.update(cx, |this, cx| this.run_row_menu(action, &row, cx));
             }));

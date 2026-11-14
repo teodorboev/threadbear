@@ -20,7 +20,7 @@ const account: Account = { id: 'opencode-main', provider: 'opencode', title: 'Op
 function rig(agent: AcpAgent = ACP_AGENTS.opencode, env: Record<string, string> = {}, binary = FAKE) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'tb-oneshot-')));
   const logFile = path.join(root, 'log');
-  const ask = acpAsker({ agent, binary: () => binary, on: () => true, registry: new ProcessRegistry(path.join(root, 'run'), nullLogger), log: nullLogger, env: { PATH: process.env.PATH, FAKE_ACP_LOG: logFile, ...env }, timings: { closeWaitMs: 200 } });
+  const ask = acpAsker({ agent, binary: () => binary, registry: new ProcessRegistry(path.join(root, 'run'), nullLogger), log: nullLogger, env: { PATH: process.env.PATH, FAKE_ACP_LOG: logFile, ...env }, timings: { closeWaitMs: 200 } });
   const log = (): Record<string, unknown>[] => (fs.existsSync(logFile) ? fs.readFileSync(logFile, 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l)) : []);
   return { root, ask, log };
 }

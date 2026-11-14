@@ -85,3 +85,22 @@ test('many threads in a few folders: one shared cache lists each folder once and
   for (const set of sets) assert.deepEqual(set, fresh);
   assert.deepEqual(projectPanels(app, home, [], shared), fresh.panels);
 });
+
+// A listing read when an agent was about to write a patch file, landing
+// after clear() (the runner's "something changed, read again"), put the
+// old listing back, so the reads after it missed the new file until the
+// cache expired (Codex, reviewing the second-Trust fix, 13 Nov 2026).
+test('a read still going when the cache is cleared is not kept', async () => {
+  const dir = tmpDir();
+  const c = new FolderCache();
+  const warming = c.warmFolders([dir]);
+  c.clear();
+  await warming;
+  fs.writeFileSync(path.join(dir, 'new.ts'), '');
+  assert.deepEqual(c.names(dir), ['new.ts']);
+  // One started after a clear is kept as usual.
+  c.clear();
+  await c.warmFolders([dir]);
+  fs.writeFileSync(path.join(dir, 'later.ts'), '');
+  assert.deepEqual(c.names(dir), ['new.ts']);
+});

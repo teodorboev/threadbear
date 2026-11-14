@@ -487,7 +487,7 @@ test('interrupt while the turn is still held behind start drops it and its follo
   h.session.send({ id: 'm1', text: 'one', images: [] });
   h.session.send({ id: 'm2', text: 'two', images: [] });
   await h.session.interrupt();
-  assert.deepEqual(h.rec.results(), [{ outcome: 'interrupted', durationMs: 0, answers: 'm1', answered: ['m1', 'm2'], queuedTurns: 0 }]);
+  assert.deepEqual(h.rec.results(), [{ outcome: 'interrupted', durationMs: 0, answers: 'm1', answered: ['m1', 'm2'], unreceived: ['m1', 'm2'], queuedTurns: 0 }]);
   await started(h);
   await sleep(50);
   assert.equal(h.conn.sent('turn/start').length, 0, 'Stop means stop');
@@ -509,7 +509,7 @@ test('interrupt before the turn id is known waits for it, then interrupts that t
   h.conn.respond(intr.id, {});
   complete(h, 'u1', 'interrupted');
   await waitFor(() => h.rec.results().length === 1);
-  assert.deepEqual(h.rec.results()[0], { outcome: 'interrupted', durationMs: 1200, answers: 'm1', answered: ['m1', 'm2'], queuedTurns: 0 });
+  assert.deepEqual(h.rec.results()[0], { outcome: 'interrupted', durationMs: 1200, answers: 'm1', answered: ['m1', 'm2'], unreceived: ['m2'], queuedTurns: 0 });
   assert.equal(h.conn.sent('turn/steer').length, 0, 'the dropped message was never steered');
   await h.session.end();
 });

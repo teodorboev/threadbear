@@ -330,6 +330,8 @@ struct RootView: View {
         // Back and forward's arrow while a trackpad swipe is under way.
         .overlay { SwipeNavigationArrow() }
         .overlay { TourOverlay().animation(.easeOut(duration: 0.2), value: Tour.shared.step == nil) }
+        // Telling people about the GPUI app, once at launch (NewApp.swift).
+        .overlay { NewAppWindow().animation(.easeOut(duration: 0.2), value: NewAppOffer.shared.windowShown) }
         // Up under where the title bar was: the panels' bars take its place.
         .ignoresSafeArea(.container, edges: .top)
         // The window's title (Window menu, Mission Control); nothing shows

@@ -45,7 +45,6 @@ import androidx.compose.ui.unit.dp
 import com.mikerosoft.threadbear.kit.ApprovalOption
 import com.mikerosoft.threadbear.kit.PendingApproval
 import com.mikerosoft.threadbear.kit.PhoneAsk
-import com.mikerosoft.threadbear.kit.PhoneAskRun
 import com.mikerosoft.threadbear.kit.Question
 import com.mikerosoft.threadbear.kit.RunnerKeyPins
 
@@ -229,10 +228,8 @@ fun AsksCard(
     asks: List<PhoneAsk>,
     picks: Map<Int, Int>,
     busy: Boolean,
-    pressing: Set<String>,
     pick: (Int, Int?) -> Unit,
     send: () -> Unit,
-    run: (PhoneAskRun) -> Unit,
 ) {
     val colors = MaterialTheme.colorScheme
     // Through the thread's links, so another app's link asks first (LinkGate), as on the iPhone.
@@ -252,7 +249,6 @@ fun AsksCard(
                     MarkdownText(ask.paragraph, style = MaterialTheme.typography.bodyLarge.copy(color = if (ticked) colors.onSurfaceVariant else colors.onSurface))
                 }
                 if (!ticked) {
-                    ask.run?.let { RunBlock(it, it.running == true || it.buttonId in pressing) { run(it) } }
                     val links = ask.links.orEmpty()
                     val choose = { choice: Int ->
                         if (asks.size == 1) { pick(index, choice); send() } else pick(index, if (picks[index] == choice) null else choice)
@@ -284,18 +280,6 @@ fun AsksCard(
         if (asks.size > 1 && picks.isNotEmpty()) {
             Pill("Send", send, Modifier.fillMaxWidth(), filled = true, spinning = busy)
         }
-    }
-}
-
-@Composable
-private fun RunBlock(run: PhoneAskRun, going: Boolean, press: () -> Unit) {
-    val colors = MaterialTheme.colorScheme
-    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        Text(run.command, style = MaterialTheme.typography.bodySmall.copy(fontFamily = Mono),
-            modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(colors.surfaceContainerHighest).padding(10.dp))
-        run.cwd?.let { Text("In $it", style = MaterialTheme.typography.labelSmall, color = colors.onSurfaceVariant) }
-        run.failed?.let { Text(it, style = MaterialTheme.typography.labelSmall, color = LocalSignals.current.failed) }
-        Pill(if (going) "Running" else if (run.failed == null) "Run" else "Run again", press, filled = true, spinning = going, icon = Line.Play)
     }
 }
 

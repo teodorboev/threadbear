@@ -1,0 +1,8 @@
+{
+  "threads": [
+    { "id": "good", "title": "A readable thread", "contextTokens": "wrong type" },
+    42,
+    { "id": 42 },
+    { "title": "Missing identity" }
+  ]
+}

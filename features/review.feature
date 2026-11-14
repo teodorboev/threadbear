@@ -176,13 +176,13 @@ Feature: Design reviews
     And I press "C. Account pools" in the review
     Then the stage plays the clip
 
-  # The GPUI window can't show a page in place yet: it shows the still with
-  # a button that opens the page in the browser (docs/gpui-port/PARITY.md).
-  # It plays a clip on a Mac; on Windows and Linux a clip is the same still,
-  # with a button that opens it in its own app.
-  @review.media @gpui-pending
+  # A page shows in place, sealed with its scripts off, as the pane's local
+  # pages do: the GPUI window through the web runtime, which isn't on
+  # Windows and Linux yet (there it's the still, with Open the page).
+  @review.media @web-runtime @windows-pending @linux-pending
   Scenario: A page shows in place on the stage
-    Given the agent shows options with several shots each
+    Given the web runtime is installed
+    And the agent shows options with several shots each
     When I open that review
     And I press "B. One picker, shot 2" in the review
     Then the stage shows the page

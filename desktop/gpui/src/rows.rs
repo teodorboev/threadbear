@@ -11,20 +11,20 @@ pub(crate) mod list;
 pub(crate) mod markdown;
 pub(crate) use markdown::reading_style;
 pub(crate) mod metrics;
+mod phone;
 mod work;
 
 use self::metrics::*;
 use crate::style::{self, size, MAX_CONTENT_WIDTH, SIDE_INSET};
 use crate::thread::ThreadPane;
+use crate::tips::Tip as _;
 use gpui_kit::base::{SelectableText, TextView};
-use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::menu::ContextMenuExt as _;
-use gpui_kit::component::{h_flex, v_flex, ActiveTheme as _, Sizable as _, StyledExt as _};
+use gpui_kit::component::{h_flex, v_flex, Sizable as _};
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 // The zoom-aware px (style.rs), in place of GPUI's.
 use crate::style::px;
-use serde_json::json;
 use std::collections::{HashMap, HashSet};
 use std::sync::{LazyLock, Mutex};
 use threadbear_core::reducer::{
@@ -44,7 +44,7 @@ pub(crate) struct RowsState {
     pub(crate) documents: HashMap<String, Entity<gpui_kit::base::TextViewState>>,
     pub(crate) document_order: Vec<String>,
     /// Keyed by appearance and zoom: its sizes are zoomed when it's built.
-    pub(crate) reading_style: Option<((bool, u32), gpui_kit::base::TextViewStyle)>,
+    pub(crate) reading_style: Option<(crate::style::ReadingStyleKey, gpui_kit::base::TextViewStyle)>,
     /// Question cards' "Something else" fields, and their typed text.
     pub(crate) others: HashMap<String, Entity<gpui_kit::component::input::InputState>>,
     /// Secret cards' masked fields. Never kept past the card's own answer.
@@ -66,6 +66,13 @@ pub(crate) struct RowsState {
     /// The list's width at its last layout (for picture grids, which lay out
     /// to it). The list can't be asked mid-layout.
     pub(crate) list_width: f32,
+    /// Messages lifting off the composer, by their words, and when Return
+    /// went (`SendLift`): by the words so the runner's own row for it,
+    /// coming in mid-lift, carries on with it.
+    pub(crate) lifts: HashMap<String, std::time::Instant>,
+    /// Each message row that's lifted in this pane, so one drawn again
+    /// doesn't lift twice.
+    pub(crate) lifted: HashSet<String>,
     /// Where to come back to once older pages have brought its row in: the
     /// pane is new each time a thread opens, with only the newest page.
     pub(crate) pending_restore: Option<ScrollMemory>,
@@ -93,6 +100,88 @@ pub(crate) fn remember_scroll(thread_id: &str, memory: ScrollMemory) {
 
 pub(crate) fn recalled_scroll(thread_id: &str) -> Option<ScrollMemory> {
     SCROLL_MEMORY.lock().ok().and_then(|map| map.get(thread_id).cloned())
+}
+
+/// How many threads' places a restart keeps: the settings file holds them,
+/// so not every thread ever opened.
+const KEPT_ACROSS_RESTART: usize = 200;
+
+/// Every thread's place that isn't its end, for a restart to keep
+/// (app_update.rs, `restore_state`): `live` (the panes open now, measured
+/// as the restart starts) over what was remembered as threads were left.
+/// `{ "<thread id>": { "anchor": "<row id>", "offset": <f32> } }`.
+pub(crate) fn scroll_memories_json(live: &[(String, ScrollMemory)]) -> serde_json::Value {
+    let mut all: HashMap<String, ScrollMemory> = SCROLL_MEMORY.lock().map(|m| m.clone()).unwrap_or_default();
+    all.extend(live.iter().cloned());
+    encode_memories(&all)
+}
+
+fn encode_memories(all: &HashMap<String, ScrollMemory>) -> serde_json::Value {
+    let mut out = serde_json::Map::new();
+    let mut ids: Vec<&String> = all.keys().collect();
+    ids.sort();
+    for id in ids {
+        let memory = &all[id];
+        let Some(anchor) = memory.anchor_id.as_ref().filter(|_| !memory.pinned) else { continue };
+        if out.len() >= KEPT_ACROSS_RESTART {
+            break;
+        }
+        out.insert(id.clone(), serde_json::json!({ "anchor": anchor, "offset": memory.offset }));
+    }
+    serde_json::Value::Object(out)
+}
+
+fn decode_memories(saved: &serde_json::Value) -> Vec<(String, ScrollMemory)> {
+    saved
+        .as_object()
+        .into_iter()
+        .flatten()
+        .filter_map(|(id, v)| {
+            let anchor = v["anchor"].as_str().filter(|a| !a.is_empty())?;
+            let offset = v["offset"].as_f64().filter(|o| o.is_finite()).unwrap_or(0.) as f32;
+            Some((id.clone(), ScrollMemory { pinned: false, anchor_id: Some(anchor.to_owned()), offset }))
+        })
+        .collect()
+}
+
+/// A handover's "go": each open thread's place as it is now, its end too,
+/// so the new copy can follow a scroll made while it loaded.
+pub(crate) fn live_scroll_json(live: &[(String, ScrollMemory)]) -> serde_json::Value {
+    let mut out = serde_json::Map::new();
+    for (id, memory) in live {
+        let entry = match memory.anchor_id.as_ref().filter(|_| !memory.pinned) {
+            Some(anchor) => serde_json::json!({ "anchor": anchor, "offset": memory.offset }),
+            None => serde_json::json!({ "pinned": true }),
+        };
+        out.insert(id.clone(), entry);
+    }
+    serde_json::Value::Object(out)
+}
+
+pub(crate) fn decode_live_scroll(saved: &serde_json::Value) -> Vec<(String, ScrollMemory)> {
+    let mut all = decode_memories(saved);
+    for (id, v) in saved.as_object().into_iter().flatten() {
+        if v["pinned"].as_bool() == Some(true) {
+            all.push((id.clone(), ScrollMemory { pinned: true, anchor_id: None, offset: 0. }));
+        }
+    }
+    all
+}
+
+/// Back from a restart: each thread's place, as if it had been left there in
+/// this run, so it opens where it was rather than at its end.
+pub(crate) fn recall_scroll_memories(saved: &serde_json::Value) {
+    for (id, memory) in decode_memories(saved) {
+        remember_scroll(&id, memory);
+    }
+}
+
+/// A scripted stand-in for a new launch (`updates` with `fresh`): no thread
+/// remembered yet.
+pub(crate) fn forget_scroll_memories() {
+    if let Ok(mut map) = SCROLL_MEMORY.lock() {
+        map.clear();
+    }
 }
 
 impl ThreadPane {
@@ -150,10 +239,10 @@ impl ThreadPane {
             .on_mouse_down(MouseButton::Left, crate::selection_bar::pressed(self.summary.id.clone(), &row))
             .children(glow)
             .child(body)
-            .context_menu(move |menu, _, cx| {
+            .context_menu(move |menu, window, cx| {
                 // An open tool or thinking row says Collapse, as a group does.
                 let open = weak.upgrade().is_some_and(|pane| pane.read(cx).row_open(&menu_row));
-                Self::row_context_menu(menu_row.clone(), menu, weak.clone(), open)
+                Self::row_context_menu(menu_row.clone(), menu, weak.clone(), open, window, cx)
             })
             .into_any_element()
     }
@@ -175,7 +264,7 @@ impl ThreadPane {
         let faded = pending.is_some();
         let mut col = v_flex().items_end().pt(px(USER_TOP)).pb(px(USER_BOTTOM));
         if !message.images.is_empty() {
-            col = col.child(self.user_images(&message.images, cx));
+            col = col.child(self.user_images(&message.images, ix, message.text.is_empty() && message.origin.as_deref() == Some("phone"), cx));
         }
         let show_text = !message.text.is_empty() || message.images.is_empty();
         if show_text {
@@ -183,8 +272,8 @@ impl ThreadPane {
             match pending {
                 // A spinner while it's on its way, a clock when queued behind
                 // the running turn; the note below says the rest.
-                Some(Pending::Sending) => line = line.child(mark_box().child(self.spinner(14., cx))),
-                Some(Pending::Queued) => line = line.child(mark_box().child(work::icon("clock", 14., quiet))),
+                Some(Pending::Sending) => line = line.child(mark_box().id(("sending", ix)).tip("Sending to the runner").child(self.spinner(14., cx))),
+                Some(Pending::Queued) => line = line.child(mark_box().id(("queued", ix)).tip("Waiting for the current turn to finish").child(work::icon("clock", 14., quiet))),
                 _ => {}
             }
             let text = if message.text.is_empty() { " ".to_string() } else { message.text.clone() };
@@ -222,7 +311,7 @@ impl ThreadPane {
                 .when_some(answered_words, |d, words| d.child(answers_body(ix, &words, cx)));
             // The pencil, left of the bubble and level with its last line, on
             // hover, as Codex and ChatGPT put theirs (`Cells.updateEdit`).
-            let editable = message.editable && pending.is_none() && threadbear_core::composer::can_rewind(&self.summary.provider) && self.subagent_id.is_none();
+            let editable = message.editable && pending.is_none() && self.can_rewind(cx) && self.subagent_id.is_none();
             if editable {
                 let (row_id, group) = (row.id.clone(), SharedString::from(format!("user-row-{ix}")));
                 let hover = style::primary_opacity(cx, 0.08);
@@ -248,12 +337,40 @@ impl ThreadPane {
                 );
                 col = col.group(group);
             }
+            if message.origin.as_deref() == Some("phone") {
+                line = line.child(div().mb(px(4.)).mr(px(-4.)).child(phone::mark(ix, cx)));
+            }
             col = col.child(line.child(bubble));
         }
         if pending == Some(Pending::WaitingForRunner) {
             col = col.child(div().mt(px(WAITING_NOTE_GAP)).pr(px(4.)).h(px(WAITING_NOTE_HEIGHT)).text_size(px(size::SMALL)).text_color(faint).child("Runner restarting. Sends when it's back."));
         }
+        let lift = self.send_lift(&row.id, &message.text, pending, window, cx);
+        let col = match lift {
+            Some((fade, below)) => div().relative().top(px(below)).opacity(fade).child(col).into_any_element(),
+            None => col.into_any_element(),
+        };
         row_wrap(row, col)
+    }
+
+    /// A message just sent lifting off the composer into the thread: Return
+    /// is the most-used thing in the app, so it's well under 200 ms and holds
+    /// nothing up (`SendLift`; the mockup Mike picked, 13 Nov). Only one on
+    /// its way now, not one queued behind a turn or from history. Its
+    /// (opacity, distance below its place) while it rises.
+    fn send_lift(&mut self, id: &str, text: &str, pending: Option<Pending>, window: &Window, cx: &mut Context<Self>) -> Option<(f32, f32)> {
+        let reduce = cx.reduce_motion();
+        let now = std::time::Instant::now();
+        self.rows.lifts.retain(|_, at| threadbear_core::juice::send_lifting(now - *at, reduce));
+        if pending == Some(Pending::Sending) && self.rows.lifted.insert(id.to_owned()) {
+            self.rows.lifts.insert(text.to_owned(), now);
+        }
+        if pending.is_some_and(|p| p != Pending::Sending) {
+            return None;
+        }
+        let at = *self.rows.lifts.get(text)?;
+        window.request_animation_frame();
+        Some(threadbear_core::juice::send_lift(now - at, reduce))
     }
 
     /// `runnerMessageText` and `scheduledMessageText`: a centred quiet note
@@ -337,7 +454,8 @@ impl ThreadPane {
                 let _ = weak.update(cx, |this, cx| this.follow_link(&url, &row_id, command, window, cx));
             })
             // `[title](button:<id>)` as a pill that presses it.
-            .plugin(crate::reply_buttons::Pills)
+            // Only this thread's own buttons, pressed as this thread.
+            .plugin(crate::reply_buttons::Pills { thread: self.summary.id.clone() })
             // Pictures from files on this Mac, in this Mac's threads only
             // (`markdown::picture_source`).
             .image_source(move |uri| markdown::picture_source(uri, local))
@@ -353,7 +471,7 @@ impl ThreadPane {
     /// go. `row.rs`'s `TextItem::text` is the whole reply so far; `prepare`
     /// escapes work links and `set_text` appends what's new.
     fn assistant_row(&mut self, ix: usize, row: &Row, item: &TextItem, cx: &mut Context<Self>) -> AnyElement {
-        let source = markdown::prepare(&markdown::pictures(&item.text, self.summary.runner_id.is_none()));
+        let source = markdown::prepare(&markdown::pictures(&item.text, self.summary.runner_id.is_none()), &self.summary.id);
         // Thread ids as chips (chips.rs).
         let source = self.with_thread_chips(source, cx);
         let doc = self.markdown_state(&item.item_id, &source, cx);
@@ -395,7 +513,7 @@ impl ThreadPane {
         // words only (`footerTip`).
         let words = div().truncate().child(footer_text(done));
         let words: AnyElement = match TurnTokens::from_usage(done.usage.as_ref()) {
-            Some(tokens) => crate::highlights::tipped(div().id(SharedString::from(format!("footer-{}", done.turn_id))).min_w_0().child(words), tokens.tip(done.cost_usd)).into_any_element(),
+            Some(tokens) => crate::highlights::tipped_as(div().id(SharedString::from(format!("footer-{}", done.turn_id))).min_w_0().child(words), tokens.tip(done.cost_usd), gpui_kit::Role::GenericContainer).into_any_element(),
             None => words.into_any_element(),
         };
         h_flex()
@@ -409,7 +527,11 @@ impl ThreadPane {
     /// A quiet centred system note.
     fn note_row(&mut self, row: &Row, note: &str, cx: &mut Context<Self>) -> AnyElement {
         let quiet = style::quiet_text(cx);
-        let content = div().py(px(ROW_TOP)).w_full().flex().justify_center().child(div().text_size(px(size::SMALL)).line_height(px(17.)).text_color(quiet).text_center().child(note.to_owned()));
+        // A block as wide as the column, centred line by line. It used to be
+        // a flex row centring a text box with no width of its own, so a long
+        // note (the same-work one naming several threads) never wrapped and
+        // ran off both sides of the window (13 Nov).
+        let content = div().py(px(ROW_TOP)).w_full().text_size(px(size::SMALL)).line_height(px(17.)).text_color(quiet).text_center().child(note.to_owned());
         row_wrap(row, content)
     }
 
@@ -429,14 +551,14 @@ impl ThreadPane {
         h_flex().w_full().px(px(SIDE_INSET)).justify_center().child(div().w_full().max_w(px(MAX_CONTENT_WIDTH)).child(box_)).into_any_element()
     }
 
-    pub(crate) fn spinner(&self, side: f32, cx: &App) -> impl IntoElement {
+    pub(crate) fn spinner(&self, side: f32, cx: &App) -> crate::spinner::Spinner {
         let color = style::quiet_text(cx);
-        gpui_kit::component::spinner::Spinner::new().with_size(gpui_kit::component::Size::Size(px(side))).color(color)
+        crate::spinner::Spinner::new().with_size(px(side)).color(color)
     }
 
     /// The reading column's text style, one per appearance (see `reading_style`).
     pub(crate) fn reading_style(&mut self, cx: &mut Context<Self>) -> gpui_kit::base::TextViewStyle {
-        let key = (cx.theme().is_dark(), style::zoom_percent());
+        let key = crate::style::reading_style_key(cx);
         match &self.rows.reading_style {
             Some((k, style)) if *k == key => style.clone(),
             _ => {
@@ -447,44 +569,42 @@ impl ThreadPane {
         }
     }
 
-    // The asks card is the composer agent's: unchanged from before (`Decisions`
-    // and `asksText` land with the composer's card).
+    /// A closed card left in the transcript (`asksText` once `isOpen` is
+    /// false): quiet, as nothing waits on it now. A done card is one grey
+    /// "✓ Done" line with Archive at its right (`doneText`); a card of asks
+    /// is a grey "Needed you" over the asks, numbered when there are several.
+    /// Every finished turn leaves a done card, so this is on screen all day:
+    /// it used to be a bold "Done" over every old follow-up (13 Nov audit).
     fn asks_row(&mut self, ix: usize, asks: &threadbear_core::reducer::AsksCard, cx: &mut Context<Self>) -> AnyElement {
-        let (muted, border, warning) = {
-            let theme = cx.theme();
-            (theme.muted_foreground, theme.border, theme.warning)
-        };
-        let column = |el: Div| h_flex().w_full().justify_center().child(el.w_full().max_w(px(760.)));
+        use crate::composer_card::{card_button, metrics, ButtonLook};
+        let (card_bg, border, secondary) = (style::card_background(cx), style::card_border(cx), style::secondary_label(cx));
+        let title = |words: &'static str| div().text_size(px(size::CARD_TITLE)).font_weight(FontWeight::MEDIUM).text_color(secondary).child(words);
+        let mut body = v_flex().w_full();
         if asks.is_done() {
-            let mut col = v_flex().gap_1().child(div().font_semibold().child("Done"));
-            for next in &asks.next {
-                col = col.child(div().text_sm().text_color(muted).child(next.clone()));
+            let app = self.app.clone();
+            body = body.child(
+                h_flex()
+                    .w_full()
+                    .h(px(metrics::PAGED_HEADING))
+                    .justify_between()
+                    .child(h_flex().items_center().gap(px(2.5)).child(crate::icons::tall_checkmark().with_size(px(16.)).text_color(style::tick_green(cx))).child(title("Done")))
+                    .child(card_button(("past-done-archive", ix), "Archive", ButtonLook::Plain, "Archive this thread", cx).on_click(move |_, window, cx| {
+                        if let Some(app) = app.upgrade() {
+                            app.update(cx, |app, cx| app.toggle_archive(window, cx));
+                        }
+                    })),
+            );
+        } else {
+            body = body.child(div().h(px(size::WORK_LINE)).flex().items_center().child(title("Needed you")));
+            let numbered = asks.asks.len() > 1;
+            for (n, ask) in asks.asks.iter().enumerate() {
+                let action = threadbear_core::sidebar::preview_plain(&ask.action);
+                let words = if numbered { format!("{}  {action}", n + 1) } else { action };
+                body = body.child(div().mt(px(metrics::ASK_BEFORE)).text_size(px(size::BODY)).line_height(px(size::BODY_LINE)).text_color(secondary).child(words));
             }
-            return column(card(border).child(col)).into_any_element();
         }
-        let mut card = card(if asks.is_open { warning } else { border });
-        // The reading column's style, so a link in a why is drawn as in a
-        // reply (no underline, the link blue), in the card's muted text.
-        let why_style = self.reading_style(cx).with_foreground(muted);
-        for (ai, ask) in asks.asks.iter().enumerate() {
-            let mut block = v_flex().gap_1().child(div().font_semibold().child(ask.action.clone()));
-            if let Some(why) = &ask.why {
-                block = block.child(div().text_sm().text_color(muted).child(crate::open_gate::reading_markdown_view(("why", ix * 10 + ai), why.clone(), self.origin(), &self.summary.cwd).style(why_style.clone())));
-            }
-            if asks.is_open && !ask.options.is_empty() {
-                let mut buttons = h_flex().gap_2().flex_wrap().pt_1();
-                for (oi, option) in ask.options.iter().enumerate() {
-                    let text = format!("{}\n{}", ask.action, option);
-                    let answers = json!([{ "action": ask.action, "answer": option }]);
-                    buttons = buttons.child(Button::new(("ask", ix * 100 + ai * 10 + oi)).small().label(option.clone()).when(ask.suggested == Some(oi), |b| b.primary()).on_click(cx.listener(
-                        move |this, _: &ClickEvent, _, cx| this.send(text.clone(), Some(answers.clone()), cx),
-                    )));
-                }
-                block = block.child(buttons);
-            }
-            card = card.child(block);
-        }
-        column(card).into_any_element()
+        let card = div().mt(px(ROW_TOP + 2.)).mb(px(ROW_BOTTOM + 2.)).px(px(CARD_PAD)).py(px(CARD_PAD - 2.)).rounded(px(10.)).bg(card_bg).border_1().border_color(border).child(body);
+        h_flex().w_full().px(px(SIDE_INSET)).justify_center().child(div().w_full().max_w(px(MAX_CONTENT_WIDTH)).child(card)).into_any_element()
     }
 }
 
@@ -549,27 +669,31 @@ pub(crate) fn row_wrap(row: &Row, inner: impl IntoElement) -> AnyElement {
 /// shown as it is. His words used to be dropped (thread 3fdaaeec, 12 Nov).
 pub(crate) struct AnsweredWords {
     pub lines: Vec<(String, String)>,
+    pub review: bool,
     pub extra: String,
 }
 
 pub(crate) fn answered_words(message: &UserMessage) -> Option<AnsweredWords> {
     if let Some(review) = &message.review {
-        return Some(AnsweredWords { lines: review.lines.iter().map(|l| (l.label.clone(), l.text.clone())).collect(), extra: String::new() });
+        return Some(AnsweredWords { lines: review.lines.iter().map(|l| (l.label.clone(), l.text.clone())).collect(), extra: String::new(), review: true });
     }
     let extra = threadbear_core::composer::answers_extra(&message.text, &message.answers)?;
-    Some(AnsweredWords { lines: message.answers.iter().map(|a| (a.action.clone(), a.answer.clone())).collect(), extra })
+    Some(AnsweredWords { lines: message.answers.iter().map(|a| (a.action.clone(), a.answer.clone())).collect(), extra, review: false })
 }
 
 /// The body of a message that answered asks or a review (`userWords`): each
 /// question small and quiet, its answer as his own words, then the rest.
 fn answers_body(ix: usize, words: &AnsweredWords, cx: &App) -> Div {
     let question = style::secondary_label(cx);
-    let AnsweredWords { lines, extra } = words;
+    let AnsweredWords { lines, extra, review } = words;
     let mut body = v_flex().gap(px(8.));
     for (i, (label, text)) in lines.iter().enumerate() {
+        let heading = h_flex().items_center().gap(px(4.)).text_size(px(size::SMALL)).line_height(px(18.)).text_color(question)
+            .when(*review && i == 0, |d| d.child(div().id(("review-answer", ix)).tip("Review").child(work::icon("rectangle.on.rectangle", size::SMALL, question))))
+            .child(label.clone());
         body = body.child(
             v_flex()
-                .when(!label.is_empty(), |d| d.child(div().text_size(px(size::SMALL)).line_height(px(18.)).text_color(question).child(label.clone())))
+                .when(!label.is_empty() || (*review && i == 0), |d| d.child(heading))
                 .child(SelectableText::new(("answer-text", ix * 1000 + i), text.clone())),
         );
     }
@@ -638,10 +762,6 @@ fn footer_text(done: &TurnCompletion) -> String {
 
 /// How long a lit step stays lit, its fade included (`light`: 2.5 s, then 0.8).
 pub(crate) const LIGHT_TIME: std::time::Duration = std::time::Duration::from_millis(3300);
-
-fn card(border: Hsla) -> Div {
-    v_flex().gap_3().p_3p5().rounded_xl().border_1().border_color(border)
-}
 
 /// What a code block's highlighter is.
 type CodeHighlighter = std::sync::Arc<dyn Fn(&gpui_kit::base::text::CodeBlock) -> Vec<(std::ops::Range<usize>, gpui_kit::HighlightStyle)> + Send + Sync>;
@@ -743,5 +863,34 @@ mod across_tests {
             })
             .expect("the test window");
         assert_eq!(selected.trim(), "Where do things stand\nHere is the answer");
+    }
+}
+
+#[cfg(test)]
+mod scroll_memory_tests {
+    use super::{decode_memories, encode_memories, ScrollMemory};
+    use std::collections::HashMap;
+
+    #[test]
+    fn a_restart_keeps_each_threads_place_but_not_the_ones_at_their_end() {
+        let mut all = HashMap::new();
+        all.insert("t1".to_owned(), ScrollMemory { pinned: false, anchor_id: Some("row-9".into()), offset: -42.5 });
+        all.insert("t2".to_owned(), ScrollMemory { pinned: true, anchor_id: None, offset: 0. });
+        let saved = encode_memories(&all);
+        assert_eq!(saved, serde_json::json!({ "t1": { "anchor": "row-9", "offset": -42.5 } }));
+        let back = decode_memories(&saved);
+        assert_eq!(back.len(), 1);
+        assert_eq!((back[0].0.as_str(), back[0].1.anchor_id.as_deref(), back[0].1.offset, back[0].1.pinned), ("t1", Some("row-9"), -42.5, false));
+        // What an older build saved, or nothing at all, puts nothing back.
+        assert!(decode_memories(&serde_json::Value::Null).is_empty());
+        assert!(decode_memories(&serde_json::json!({ "t3": { "offset": 4 } })).is_empty());
+    }
+
+    #[test]
+    fn a_handovers_go_carries_threads_at_their_end_too() {
+        let live = vec![("t1".to_owned(), ScrollMemory { pinned: false, anchor_id: Some("r".into()), offset: 3. }), ("t2".to_owned(), ScrollMemory { pinned: true, anchor_id: None, offset: 0. })];
+        let mut back = super::decode_live_scroll(&super::live_scroll_json(&live));
+        back.sort_by(|a, b| a.0.cmp(&b.0));
+        assert_eq!(back.iter().map(|(id, m)| (id.as_str(), m.pinned, m.anchor_id.clone())).collect::<Vec<_>>(), vec![("t1", false, Some("r".to_owned())), ("t2", true, None)]);
     }
 }

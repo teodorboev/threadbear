@@ -16,12 +16,12 @@
 // it as diagrams do, says why when it can't, and offers Open in browser, so
 // the app works without it.
 use crate::app::Threadbear;
-use crate::highlights::{icon, palette, tipped, Palette};
+use crate::highlights::{icon, palette, tipped, tipped_as, Palette};
 use crate::push_button::PushButton;
 use crate::style::{self, px};
 use crate::web_runtime::{self, Engine};
 use futures::StreamExt as _;
-use gpui_kit::component::spinner::Spinner;
+use crate::spinner::Spinner;
 use gpui_kit::component::{h_flex, v_flex, ActiveTheme as _, Sizable as _, WindowExt as _};
 use gpui_kit::prelude::*;
 use gpui_kit::*;
@@ -268,20 +268,32 @@ fn sweep(frame: u64, menu_at: Option<Point<Pixels>>, popover: bool, window: &mut
     let Some(panels) = panels(cx) else { return };
     let modal = window.has_active_dialog(cx) || window.has_active_sheet(cx) || popover;
     let height = f32::from(window.viewport_size().height);
+    // The kit's menus wherever they are, including ones the app doesn't
+    // place itself (a panel tab's right-click menu is the dock's): without
+    // them that menu opened behind the page (Mike, 13 Nov).
+    let kit_menus = crate::media_view::open_menus(window, cx);
     let mut covered_any = false;
+    let mut kit_covered = false;
     for kept in &panels.read(cx).pages {
         let (stamp, b) = kept.drawn.get();
         // A menu opens down and to the right of where it was asked for, about
         // this wide: one reaching the page's column covers it.
         let menu_over = menu_at.is_some_and(|at| at.x + px(300.) > b.origin.x && at.x < b.origin.x + b.size.width);
-        let covered = modal || menu_over;
+        // One not drawn yet could be anywhere, so it covers the page until
+        // its first frame says where it is.
+        let kit_over = kit_menus.iter().any(|m| m.size.width <= px(0.) || (m.origin.x < b.origin.x + b.size.width && m.origin.x + m.size.width > b.origin.x));
+        let covered = modal || menu_over || kit_over;
         covered_any |= covered && stamp == frame;
+        kit_covered |= kit_over && stamp == frame;
         if stamp == frame && !covered && f32::from(b.size.width) >= 1. && f32::from(b.size.height) >= 1. {
             kept.page.set_bounds(f32::from(b.origin.x), f32::from(b.origin.y), f32::from(b.size.width), f32::from(b.size.height), height);
             kept.page.set_hidden(false);
         } else {
             kept.page.set_hidden(true);
         }
+    }
+    if kit_covered {
+        crate::media_view::look_again_soon(window, cx);
     }
     if panels.read(cx).covered != covered_any {
         panels.update(cx, |p, _| p.covered = covered_any);
@@ -299,7 +311,7 @@ fn sweep(frame: u64, menu_at: Option<Point<Pixels>>, popover: bool, window: &mut
 }
 
 /// The window's own view, a page's parent.
-fn native_view(window: &Window) -> Option<*mut c_void> {
+pub(crate) fn native_view(window: &Window) -> Option<*mut c_void> {
     #[cfg(target_os = "macos")]
     {
         use raw_window_handle::{HasWindowHandle, RawWindowHandle};
@@ -406,8 +418,26 @@ pub(crate) fn reload_requested(thread: &ThreadSummary, panel_id: &str, cx: &mut 
             None => return,
         },
     };
-    if let Some(page) = panels.read(cx).page(&key).cloned() {
-        page.reload();
+    // And a pinned copy's (pinned_panels.rs), which is a page of its own.
+    for key in [pinned_key(&key), key] {
+        if let Some(page) = panels.read(cx).page(&key).cloned() {
+            page.reload();
+        }
+    }
+}
+
+/// A pinned panel's page is its own, apart from the same page in the
+/// ordinary panel (two threads in one Convex project, say), as one page can
+/// only be placed in one slot a frame.
+pub(crate) fn pinned_key(key: &str) -> String {
+    format!("pin:{key}")
+}
+
+fn page_key(key: String, pinned: bool) -> String {
+    if pinned {
+        pinned_key(&key)
+    } else {
+        key
     }
 }
 
@@ -430,6 +460,53 @@ fn slot(panels: &Entity<WebPanels>, key: &str, url: &str, kind: impl FnOnce() ->
     div().size_full().into_any_element()
 }
 
+thread_local! {
+    /// What the pane's local page last found, for the dump.
+    static LOCAL_PAGE: std::cell::RefCell<String> = const { std::cell::RefCell::new(String::new()) };
+}
+
+/// A local web page in the pane (`file.htmlpreview`), sealed: a page of the
+/// pool like a panel's, but in the sealed context, reading only its own
+/// folder's named assets (threadbear_web::preview_rules), with its scripts on
+/// only for `scripts_for`'s bytes. `real` is the file the open gate found;
+/// `opened` makes opening it again a fresh page, read again.
+pub(crate) fn local_page(real: &str, scripts_for: Option<&str>, opened: u64, main: bool, window: &mut Window, cx: &mut App) -> AnyElement {
+    let Some(panels) = panels(cx) else { return note("This page can't show here.", cx) };
+    let parent = match running("hl-page", "this page", main, None, window, cx) {
+        Ok(parent) => parent,
+        Err(instead) => {
+            LOCAL_PAGE.with(|l| *l.borrow_mut() = format!("waiting (main window: {main})"));
+            return instead;
+        }
+    };
+    LOCAL_PAGE.with(|l| *l.borrow_mut() = "running".into());
+    let key = format!("preview:{opened}:{}:{real}", scripts_for.unwrap_or(""));
+    if let Some(drawn) = panels.update(cx, |p, _| p.touch(&key)) {
+        return canvas(move |bounds, _, _| drawn.set((frame_now(), bounds)), |_, _, _, _| {}).size_full().into_any_element();
+    }
+    if let Some(why) = panels.read(cx).failed.get(&key).cloned() {
+        return note(&format!("Couldn't show this page: {why}"), cx);
+    }
+    if panels.update(cx, |p, _| p.making.insert(key.clone())) {
+        match threadbear_core::local_preview::Site::new(std::path::Path::new(real), scripts_for.map(str::to_owned)) {
+            Some(site) => {
+                let preview = threadbear_web::PreviewSite::new(Arc::new(site), scripts_for.is_some());
+                let (panels, url) = (panels.clone(), preview.page_url());
+                // After this frame, as a panel's page is made.
+                cx.defer(move |cx| panels.update(cx, |p, cx| p.make(key, url, PanelKind::Preview(preview), parent, cx)));
+            }
+            None => {
+                panels.update(cx, |p, cx| {
+                    p.making.remove(&key);
+                    p.failed.insert(key, "its folder couldn't be read".into());
+                    cx.notify();
+                });
+            }
+        }
+    }
+    div().size_full().into_any_element()
+}
+
 // ---------------------------------------------------------------- drawing
 
 /// What Open in browser opens, and its button's tip.
@@ -442,15 +519,18 @@ struct Opener {
 /// A panel's section in the pane, drawn here rather than by the side pane so
 /// its page is placed every frame (the side pane is a cached view, redrawn
 /// only when it changes). None for a panel that isn't a page.
-pub(crate) fn section(app: &Threadbear, thread: &ThreadSummary, panel_id: &str, window: &mut Window, cx: &mut App) -> Option<AnyElement> {
+/// `pinned`: drawn in a pinned copy of the panel (pinned_panels.rs), with a
+/// page of its own.
+pub(crate) fn section(app: &Threadbear, thread: &ThreadSummary, panel_id: &str, pinned: bool, window: &mut Window, cx: &mut App) -> Option<AnyElement> {
     let panel = thread.panels().into_iter().find(|p| p.id == panel_id && p.kind == "url")?;
     let panels = panels(cx)?;
     let main = window.window_handle() == app.main_window;
     let body = match &panel.convex {
-        Some(configured) => convex_view(&panels, thread, &panel, configured, main, window, cx),
-        None => page_view(&panels, &panel, main, window, cx),
+        Some(configured) => convex_view(&panels, thread, &panel, configured, main, pinned, window, cx),
+        None => page_view(&panels, &panel, main, pinned, window, cx),
     };
-    Some(div().id(SharedString::from(format!("web-panel-{panel_id}"))).size_full().child(body).into_any_element())
+    let id = if pinned { format!("web-panel-pin-{}-{panel_id}", thread.id) } else { format!("web-panel-{panel_id}") };
+    Some(div().id(SharedString::from(id)).size_full().child(body).into_any_element())
 }
 
 /// What a patch's url panel can be: a web page, or one of the app's own
@@ -460,7 +540,7 @@ fn loads_in_panel(url: &str) -> bool {
     threadbear_web::site(url).is_some() || url.starts_with("data:")
 }
 
-fn page_view(panels: &Entity<WebPanels>, panel: &Panel, main: bool, window: &mut Window, cx: &mut App) -> AnyElement {
+fn page_view(panels: &Entity<WebPanels>, panel: &Panel, main: bool, pinned: bool, window: &mut Window, cx: &mut App) -> AnyElement {
     let Some(url) = panel.url.clone().filter(|u| !u.trim().is_empty()) else {
         return note("This panel has no page to show.", cx);
     };
@@ -469,7 +549,7 @@ fn page_view(panels: &Entity<WebPanels>, panel: &Panel, main: bool, window: &mut
         return away("This panel's page isn't a web page, so it opens outside the app.", open, cx);
     }
     match running(&format!("web-panel-{}", panel.id), "this panel's page", main, open.clone(), window, cx) {
-        Ok(parent) => slot(panels, &url, &url, || PanelKind::Patch, parent, open, cx),
+        Ok(parent) => slot(panels, &page_key(url.clone(), pinned), &url, || PanelKind::Patch, parent, open, cx),
         Err(instead) => instead,
     }
 }
@@ -543,11 +623,15 @@ fn open_button(open: &Opener, _p: Palette, cx: &App) -> AnyElement {
 /// A pane panel's buttons at the end of its bar in the dock (`DockPaneButtons`):
 /// for a page, Back once it's moved on from its own page, Reload and Open in
 /// browser; for the Convex panel, New deploy key, Reload and Open in browser.
+/// A pinned panel's are for its own thread's panel and page.
 pub(crate) fn bar_buttons(app: &Threadbear, panel_id: &str, cx: &mut App) -> Option<AnyElement> {
-    let thread = app.pane_thread()?;
+    let (thread, panel_id, pinned) = match threadbear_core::pinned_panels::pinned(panel_id) {
+        Some((thread, id)) => ((**app.threads.get(thread)?).clone(), id, true),
+        None => (app.pane_thread()?, panel_id, false),
+    };
     let panel = thread.panels().into_iter().find(|p| p.id == panel_id && p.kind == "url")?;
     // Over a preview the side pane draws its own bar.
-    if app.side.read(cx).previews.get(&thread.id).is_some_and(|pv| pv.from == panel_id) {
+    if !pinned && app.side.read(cx).previews.get(&thread.id).is_some_and(|pv| pv.from == panel_id) {
         return None;
     }
     let panels = panels(cx)?;
@@ -555,7 +639,7 @@ pub(crate) fn bar_buttons(app: &Threadbear, panel_id: &str, cx: &mut App) -> Opt
     let mut row = h_flex().flex_none().items_center().pr(px(4.));
     if let Some(configured) = &panel.convex {
         let selected = panels.read(cx).selected(configured);
-        let key = format!("convex:{selected}");
+        let key = page_key(format!("convex:{selected}"), pinned);
         let page = panels.read(cx).page(&key).cloned();
         // A key and a reload only mean something with the dashboard here.
         let here = web_runtime::runtime(cx).is_some_and(|r| r.read(cx).engine == Engine::Running);
@@ -579,7 +663,7 @@ pub(crate) fn bar_buttons(app: &Threadbear, panel_id: &str, cx: &mut App) -> Opt
         return Some(row.into_any_element());
     }
     let url = panel.url.clone().filter(|u| !u.trim().is_empty())?;
-    let page = panels.read(cx).page(&url).cloned();
+    let page = panels.read(cx).page(&page_key(url.clone(), pinned)).cloned();
     // Its own page moved on to another (a same-site link, a script's
     // window.open): back a page at a time.
     if let Some(page) = page.clone().filter(|pg| pg.can_go_back()) {
@@ -726,6 +810,7 @@ impl WebPanels {
     /// New deploy key: drops the page with the old key and asks for a fresh one.
     fn renew(&mut self, deployment: &str, cx: &mut Context<Self>) {
         self.forget(&format!("convex:{deployment}"));
+        self.forget(&pinned_key(&format!("convex:{deployment}")));
         self.renewing.insert(deployment.to_owned());
         let states: Vec<String> = self.convex.iter().filter(|(_, s)| self.selected(&s.configured) == deployment).map(|(k, _)| k.clone()).collect();
         for key in states {
@@ -822,7 +907,7 @@ fn embedded() -> String {
     convex::EMBEDDED.to_owned()
 }
 
-fn convex_view(panels: &Entity<WebPanels>, thread: &ThreadSummary, panel: &Panel, configured: &Deployment, main: bool, window: &mut Window, cx: &mut App) -> AnyElement {
+fn convex_view(panels: &Entity<WebPanels>, thread: &ThreadSummary, panel: &Panel, configured: &Deployment, main: bool, pinned: bool, window: &mut Window, cx: &mut App) -> AnyElement {
     let state_key = format!("{}/{}", thread.id, panel.id);
     let selected = panels.read(cx).selected(configured);
     let open = convex::browser_url(&selected).map(|url| Opener { url, tip: format!("Open {selected} in browser") });
@@ -832,7 +917,7 @@ fn convex_view(panels: &Entity<WebPanels>, thread: &ThreadSummary, panel: &Panel
     let header = convex_header(panels, &state_key, configured, &selected, window, cx);
     let body = match parent {
         Err(instead) => instead,
-        Ok(parent) => convex_body(panels, &state_key, &selected, parent, open, cx),
+        Ok(parent) => convex_body(panels, &state_key, &selected, pinned, parent, open, cx),
     };
     v_flex().size_full().child(header).child(div().h(px(1.)).flex_none().bg(style::hairline(cx))).child(div().flex_1().min_h_0().child(body)).into_any_element()
 }
@@ -848,7 +933,7 @@ fn convex_header(panels: &Entity<WebPanels>, state_key: &str, configured: &Deplo
     let note = state.and_then(|s| s.note.clone());
     let mut row = h_flex().gap(px(8.)).items_center().min_w_0();
     if let (Some(project), Some(tip)) = (&configured.project, configured.project_tip()) {
-        row = row.child(tipped(div().id("convex-project").flex_none().text_size(px(style::size::LABEL)).font_weight(FontWeight::SEMIBOLD).text_color(p.fg).child(project.clone()), tip));
+        row = row.child(tipped_as(div().id("convex-project").flex_none().text_size(px(style::size::LABEL)).font_weight(FontWeight::SEMIBOLD).text_color(p.fg).child(project.clone()), tip, gpui_kit::Role::GenericContainer));
     }
     let view = native_view(window);
     let (menu_panels, menu_key, menu_configured) = (panels.clone(), state_key.to_owned(), configured.clone());
@@ -876,14 +961,14 @@ fn convex_header(panels: &Entity<WebPanels>, state_key: &str, configured: &Deplo
         });
     }
     row = row.child(tipped(menu, "Choose the deployment shown in this panel"));
-    row = row.child(tipped(div().id("convex-deployment").min_w_0().truncate().font_family(cx.theme().mono_font_family.clone()).text_size(px(style::size::SMALL)).text_color(p.secondary).child(selected.to_owned()), selected.to_owned()));
+    row = row.child(tipped_as(div().id("convex-deployment").min_w_0().truncate().font_family(cx.theme().mono_font_family.clone()).text_size(px(style::size::SMALL)).text_color(p.secondary).child(selected.to_owned()), selected.to_owned(), gpui_kit::Role::GenericContainer));
     row = row.child(div().flex_1());
     if loading {
         row = row.child(Spinner::new().color(p.secondary).with_size(px(10.)));
     }
     let mut header = v_flex().flex_none().gap(px(6.)).px(px(12.)).py(px(8.)).child(row);
     if let Some(note) = note {
-        header = header.child(tipped(div().id("convex-choices-note").text_size(px(style::size::SMALL)).line_height(px(15.)).text_color(p.secondary).line_clamp(2).child(note.clone()), note));
+        header = header.child(tipped_as(div().id("convex-choices-note").text_size(px(style::size::SMALL)).line_height(px(15.)).text_color(p.secondary).line_clamp(2).child(note.clone()), note, gpui_kit::Role::GenericContainer));
     }
     header.into_any_element()
 }
@@ -932,7 +1017,7 @@ fn open_deployment_menu(panels: &Entity<WebPanels>, state_key: &str, configured:
 
 /// The dashboard once there's a key, the sign-in under way, why there's no
 /// key with what to do about it, or a note while it's asked for.
-fn convex_body(panels: &Entity<WebPanels>, state_key: &str, selected: &str, parent: *mut c_void, open: Option<Opener>, cx: &mut App) -> AnyElement {
+fn convex_body(panels: &Entity<WebPanels>, state_key: &str, selected: &str, pinned: bool, parent: *mut c_void, open: Option<Opener>, cx: &mut App) -> AnyElement {
     let p = palette(cx);
     let (key, sign_in, failure, sign_in_failure, loading) = {
         let s = panels.read(cx).convex.get(state_key);
@@ -942,7 +1027,7 @@ fn convex_body(panels: &Entity<WebPanels>, state_key: &str, selected: &str, pare
         let url = embedded();
         let origin = convex::origin_of(&url);
         let script = move || PanelKind::Convex { credentials_script: convex::credentials_script(&key, &origin) };
-        return slot(panels, &format!("convex:{selected}"), &url, script, parent, open, cx);
+        return slot(panels, &page_key(format!("convex:{selected}"), pinned), &url, script, parent, open, cx);
     }
     let words = |text: String, color: Hsla, weight: FontWeight| div().max_w(px(320.)).text_center().text_size(px(style::size::LABEL)).line_height(px(18.)).font_weight(weight).text_color(color).child(text);
     let column = || v_flex().size_full().items_center().justify_center().gap(px(12.)).p(px(24.));
@@ -1014,6 +1099,13 @@ fn save_selections(selections: &HashMap<String, String>) {
 
 // ---------------------------------------------------------------- dumps
 
+/// A kept page's address as the dump gives it: a pinned copy's as its own,
+/// the Convex dashboard's as the embedded page.
+fn dumped_url(key: &str) -> String {
+    let key = key.strip_prefix("pin:").unwrap_or(key);
+    key.strip_prefix("convex:").map_or(key.to_owned(), |_| embedded())
+}
+
 fn page_dump(key: &str, kept: Option<&Kept>, frame: u64) -> Value {
     match kept {
         None => json!({ "key": key }),
@@ -1022,7 +1114,7 @@ fn page_dump(key: &str, kept: Option<&Kept>, frame: u64) -> Value {
             let (x, y, w, h) = k.page.bounds();
             json!({
                 "key": key,
-                "url": k.key.strip_prefix("convex:").map_or(k.key.clone(), |_| embedded()),
+                "url": dumped_url(&k.key),
                 "address": k.page.address(),
                 "title": k.page.title(),
                 "loading": k.page.loading(),
@@ -1048,6 +1140,9 @@ pub(crate) fn dump(cx: &App) -> Value {
         "pages": p.pages.iter().map(|k| page_dump(&k.key, Some(k), frame)).collect::<Vec<_>>(),
         "left": p.left,
         "covered": p.covered,
+        // Why a page couldn't be made, by its key.
+        "failed": p.failed,
+        "localPage": LOCAL_PAGE.with(|l| l.borrow().clone()),
         "edits": EDITS.with(|e| e.borrow().clone()),
     })
 }
@@ -1268,6 +1363,33 @@ pub(crate) async fn automation(cmd: &Value, cx: &mut AsyncApp) -> Result<Value, 
         other => return Err(format!("do must be eval, click, drop, focus, wait or choose, not {other:?}")),
     }
     Ok(cx.update(|cx| dump_page(&key, cx)))
+}
+
+/// Swift's `convex` command, using the same validated list and selection
+/// model as the deployment menu, even before a page has been made.
+#[cfg(feature = "automation")]
+pub(crate) async fn convex_command(app: &WeakEntity<Threadbear>, cmd: &Value, cx: &mut AsyncApp) -> Result<Value, String> {
+    let (thread, panel, configured, client) = app.read_with(cx, |app, _| {
+        let thread = app.open_thread()?;
+        let panel = thread.panels().into_iter().find(|p| p.convex.is_some())?;
+        Some((thread.id.clone(), panel.id.clone(), panel.convex?, app.client.clone()))
+    }).map_err(|e| e.to_string())?.ok_or("no Convex cloud panel")?;
+    if let Some(deployment) = cmd["deployment"].as_str() {
+        let answer = crate::call(client, "panels.convexDeployments", json!({ "threadId": thread, "panelId": panel })).await.map_err(|e| e.message)?;
+        let listed: convex::Choices = serde_json::from_value(answer).map_err(|e| e.to_string())?;
+        let choices = convex::with_configured(listed.deployments, &configured);
+        if !choices.iter().any(|c| c.deployment == deployment) { return Err("unknown deployment".into()); }
+        cx.update(|cx| {
+            let panels = panels(cx).ok_or("no web panels")?;
+            panels.update(cx, |p, cx| p.select(&configured, deployment, cx));
+            Ok::<_, String>(())
+        })?;
+    }
+    cx.update(|cx| {
+        let panels = panels(cx).ok_or("no web panels")?;
+        let selected = panels.read(cx).selected(&configured);
+        Ok(json!(format!("ok {selected} browser={}", convex::browser_url(&selected).unwrap_or_else(|| "none".into()))))
+    })
 }
 
 #[cfg(feature = "automation")]

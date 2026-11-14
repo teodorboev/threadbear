@@ -7,7 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { discoverAccounts } from '../../src/accounts.ts';
 import { readPools } from '../../src/pools.ts';
-import { activeProviders, cliName, PROVIDER_INFO, providerInfo, providerName, providersForHello } from '../../src/providers.ts';
+import { cliName, PROVIDER_INFO, providerInfo, providerName, providersForHello } from '../../src/providers.ts';
 import { PROVIDERS, type Account } from '../../src/protocol.ts';
 import { FakeAccounts, makeHarness, withCodex } from '../helpers/fakes.ts';
 
@@ -54,24 +54,12 @@ test('a thread with no provider is a Claude one, as a record from before Codex',
   assert.equal(providerName(''), 'Claude');
 });
 
-function home(on: boolean): string {
-  const d = fs.mkdtempSync(path.join(os.tmpdir(), 'tb-prov-'));
-  if (on) fs.writeFileSync(path.join(d, 'runner.json'), JSON.stringify({ experiments: { acpAgents: true } }));
-  return d;
-}
-
-test('the ACP agents are only offered with the experiment on', () => {
-  assert.deepEqual(activeProviders(home(false)), ['claude', 'codex']);
-  assert.deepEqual(activeProviders(home(true)), ['claude', 'codex', 'cursor', 'opencode']);
-});
-
-test('with the experiment off, an installed agent adds no account', () => {
+test('an installed ACP agent adds its account', () => {
   const d = fs.mkdtempSync(path.join(os.tmpdir(), 'tb-disc-'));
   const bin = path.join(d, 'oc');
   fs.writeFileSync(bin, '#!/bin/sh\n', { mode: 0o755 });
-  const cfg = { claudeMainDir: path.join(d, 'none'), claudeMainJson: path.join(d, 'none.json'), tokenStatsAccountsDir: path.join(d, 'none2'), opencodePath: bin, cursorPath: path.join(d, 'no-cursor') };
-  assert.deepEqual(discoverAccounts({ ...cfg, home: home(false) }), []);
-  assert.deepEqual(discoverAccounts({ ...cfg, home: home(true) }).map((a) => a.id), ['opencode-main']);
+  const cfg = { userHome: d, pathEnv: '', claudeMainDir: path.join(d, 'none'), claudeMainJson: path.join(d, 'none.json'), tokenStatsAccountsDir: path.join(d, 'none2'), opencodePath: bin, cursorPath: path.join(d, 'no-cursor') };
+  assert.deepEqual(discoverAccounts(cfg).map((a) => a.id), ['opencode-main']);
 });
 
 test('an ACP model is only ever the one its account lists', () => {
@@ -94,5 +82,5 @@ test('a saved pool of only an agent this runner does not offer is gone', () => {
 test('hello lists each provider this runner offers', () => {
   assert.deepEqual(providersForHello().map((p) => p.id), [...PROVIDERS]);
   const h = makeHarness(undefined, {}, { accounts: new FakeAccounts(withCodex()) });
-  assert.deepEqual(h.runner.hello().providers.map((p) => p.name), ['Claude', 'Codex']);
+  assert.deepEqual(h.runner.hello().providers.map((p) => p.name), ['Claude', 'Codex', 'Cursor', 'OpenCode']);
 });

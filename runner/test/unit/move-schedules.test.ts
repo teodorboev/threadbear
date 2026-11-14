@@ -66,6 +66,8 @@ test("a compromised old runner's schedule check and Always allow rules don't rea
     JSON.stringify({
       ...JSON.parse(recEntry.data.toString('utf8')),
       allowRules: ['Bash'],
+      interruptedMessages: [1],
+      messageRecoveries: [{ seq: 1, messages: [1] }],
       // A Run button on an open card, for a command and folder of its choosing.
       buttons: [{ id: 'abcd1234', title: 'Run', createdAt: 'x', run: { command: `touch '${marker}'`, cwd: '/' } }],
       needs: { seq: 1, needs: 'you', asks: [{ action: 'Run it', run: { command: `touch '${marker}'`, buttonId: 'abcd1234' } }] },
@@ -79,6 +81,8 @@ test("a compromised old runner's schedule check and Always allow rules don't rea
   const moved = t.runner.threads.get(id)!.rec;
   assert.equal(moved.permissionMode, 'ask');
   assert.equal(moved.allowRules, undefined);
+  assert.equal(moved.interruptedMessages, undefined, 'another runner cannot designate old instructions to replay');
+  assert.equal(moved.messageRecoveries, undefined, 'editing cannot restore replay instructions from another runner');
   assert.equal(moved.buttons, undefined);
   assert.equal((moved.needs?.asks?.[0] as { run?: unknown } | undefined)?.run, undefined);
   const notes = t.store.log(id).read(1, t.store.log(id).lastSeq).filter((e: any) => e.type === 'system.note').map((e: any) => e.text).join(' ');
@@ -293,7 +297,9 @@ test("a moved worktree that changes what trust covers is held to the stored hash
   const wt = path.join(fs.realpathSync(tmpDir('tb-move-wt-')), 'slot');
   g(repo, 'worktree', 'add', '-q', '-b', 'thread/x', wt, base);
   const w = { repo: 'r', mainCheckout: repo, path: wt, branch: 'thread/x', base };
-  const home = tmpDir('tb-move-home-');
+  // The home must contain the worktree: Claude scans every ancestor up
+  // to it. An unrelated sibling sends that walk into the real home.
+  const home = path.dirname(repo);
   const reset = () => {
     g(wt, 'reset', '-q', '--hard', base);
     g(wt, 'clean', '-qfdx');

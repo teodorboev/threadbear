@@ -9,7 +9,7 @@ use gpui::{
     Action, Anchor, AnyElement, App, AppContext, Bounds, Context, DismissEvent, Edges, Entity,
     EventEmitter, FocusHandle, Focusable, InteractiveElement, IntoElement, KeyBinding,
     ParentElement, Pixels, Render, Role, ScrollHandle, SharedString, StatefulInteractiveElement,
-    Styled, WeakEntity, Window, anchored, deferred, div, prelude::FluentBuilder, px,
+    Styled, WeakEntity, Window, WindowId, anchored, deferred, div, prelude::FluentBuilder, px,
 };
 use gpui::{ClickEvent, MouseDownEvent, OwnedMenuItem, Point, Subscription};
 use gpui_base::TestSupportExt as _;
@@ -297,6 +297,14 @@ pub struct PopupMenu {
     max_width: Option<Pixels>,
     max_height: Option<Pixels>,
     bounds: Bounds<Pixels>,
+    /// Threadbear's change: the window it was last drawn in, and whether it
+    /// has been dismissed (`PopupMenu::showing`).
+    drawn_in: Option<WindowId>,
+    dismissed: bool,
+    /// On an empty element inside the menu: the window's last frame holds
+    /// it under the menu's own focus node only if the menu was drawn in it,
+    /// cached views included (`showing`).
+    presence: FocusHandle,
     // Threadbear's change: every menu is macOS's size now (mac_look.rs).
     #[allow(dead_code)]
     size: Size,
@@ -353,6 +361,9 @@ impl PopupMenu {
             check_side: Side::Left,
             checkable: HashSet::new(),
             bounds: Bounds::default(),
+            drawn_in: None,
+            dismissed: false,
+            presence: cx.focus_handle(),
             scrollable: false,
             scroll_handle: ScrollHandle::default(),
             external_link_icon: true,
@@ -360,6 +371,45 @@ impl PopupMenu {
             submenu_anchor: (Anchor::TopLeft, Pixels::ZERO),
             priority: gpui_base::POPUP_PRIORITY,
             _subscriptions: vec![],
+        }
+    }
+
+    /// Threadbear's change: where this menu is showing in `window`, with its
+    /// open submenu (a hovered one has no focus) and that one's, or None if
+    /// it isn't: closed, a submenu (its parent says), or in another window.
+    /// A zero-sized rect is one not drawn yet, so it could be anywhere. The
+    /// app's native views (web pages, videos) sit over anything GPUI draws,
+    /// so it hides one a menu reaches. Every way a menu closes goes through
+    /// `dismiss`; a menu that's lost focus but not closed still shows. One
+    /// not drawn yet counts only while it has the focus, as a menu opening
+    /// does (one built and never shown would otherwise cover pages for good),
+    /// and its first frame asks for another, so the next one has its place.
+    ///
+    /// Drawn means in the window's last frame: a menu whose host stops
+    /// drawing it without dismissing it (the pane's menu when ⌘N clears the
+    /// thread, Codex's review, 13 Nov) stops counting there. That's a frame
+    /// behind, so a caller hiding something under a menu looks again soon.
+    pub fn showing(&self, window: &Window, cx: &App) -> Option<Vec<Bounds<Pixels>>> {
+        let shown_here = if self.drawn_in.is_some() {
+            self.focus_handle.contains(&self.presence, window)
+        } else {
+            self.focus_handle.contains_focused(window, cx)
+        };
+        if self.dismissed || self.parent_menu.is_some() || !shown_here {
+            return None;
+        }
+        let mut rects = Vec::new();
+        self.open_rects(cx, &mut rects, 0);
+        Some(rects)
+    }
+
+    fn open_rects(&self, cx: &App, rects: &mut Vec<Bounds<Pixels>>, depth: usize) {
+        rects.push(self.bounds);
+        if depth > 8 {
+            return;
+        }
+        if let Some(PopupMenuItem::Submenu { menu, .. }) = self.selected_index.and_then(|ix| self.menu_items.get(ix)) {
+            menu.read(cx).open_rects(cx, rects, depth + 1);
         }
     }
 
@@ -1107,6 +1157,7 @@ impl PopupMenu {
     /// The submenu is closed together with its parent, same as macOS menus.
     fn dismiss(&mut self, _: &Cancel, window: &mut Window, cx: &mut Context<Self>) {
         self.selected_index = None;
+        self.dismissed = true;
         cx.emit(DismissEvent);
 
         // Focus back to the previous focused handle, unless the item's click
@@ -1516,6 +1567,7 @@ impl Render for PopupMenu {
             .role(Role::Menu)
             .key_context(CONTEXT)
             .track_focus(&self.focus_handle)
+            .child(div().track_focus(&self.presence).absolute().size_0())
             .on_action(cx.listener(Self::select_up))
             .on_action(cx.listener(Self::select_down))
             .on_action(cx.listener(Self::select_left))
@@ -1563,9 +1615,18 @@ impl Render for PopupMenu {
                             .filter(|(ix, item)| !(*ix + 1 == items_count && item.is_separator()))
                             .map(|(ix, item)| self.render_item(ix, item, options, window, cx)),
                     )
-                    .on_prepaint(move |bounds, _, cx| {
+                    .on_prepaint(move |bounds, window, cx| {
+                        let id = window.window_handle().window_id();
                         view.update(cx, |menu, cx| {
                             let width_changed = menu.bounds.size.width != bounds.size.width;
+                            // `showing`: a frame that knows where it is, after
+                            // its first, a move (a submenu opened again on the
+                            // other side) or a frame without it (its host
+                            // drawing it again), Codex's reviews.
+                            let missing = !menu.focus_handle.contains(&menu.presence, window);
+                            if menu.drawn_in.replace(id).is_none() || menu.bounds != bounds || missing {
+                                window.request_animation_frame();
+                            }
                             menu.bounds = bounds;
                             if width_changed {
                                 if let Some(parent) = menu

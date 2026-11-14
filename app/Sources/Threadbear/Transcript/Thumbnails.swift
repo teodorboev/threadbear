@@ -141,14 +141,10 @@ final class ImageGridView: NSView {
     private var frames: [NSRect] = []
     private var tiles: [CALayer] = []
     /// Set for another runner's thread ("bruce"): the pictures are files on
-    /// that Mac, fetched through it and then shown from this Mac's copy.
-    /// Each tile says so quietly while it comes, or if it couldn't.
+    /// that Mac, which this one can't get through Convex, so each tile says
+    /// so quietly, with why on hover.
     var remote: RemoteImages?
     private var labels: [CATextLayer] = []
-    /// Fetches this view has asked for and not heard back about.
-    private var fetching: Set<String> = []
-    /// Remote pictures that couldn't be fetched, with why.
-    private var failures: [String: String] = [:]
     private var shownTip = ""
 
     override var isFlipped: Bool { true }
@@ -160,18 +156,14 @@ final class ImageGridView: NSView {
 
     required init?(coder: NSCoder) { fatalError() }
 
-    /// The file a tile draws and opens: the picture itself, or this Mac's
-    /// copy of one on another runner's Mac. Nil while there's no copy, or
-    /// when its runner sent only the start of it (too big to draw).
+    /// The file a tile draws and opens: the picture itself. Nil for one on
+    /// another runner's Mac, which isn't here.
     func localPath(_ index: Int) -> String? {
-        guard paths.indices.contains(index) else { return nil }
-        guard let remote else { return paths[index] }
-        guard let copy = remote.ready(paths[index]), !copy.truncated else { return nil }
-        return copy.path
+        guard paths.indices.contains(index), remote == nil else { return nil }
+        return paths[index]
     }
 
     func show(paths: [String], frames: [NSRect]) {
-        if paths != self.paths { failures = [:] }
         self.paths = paths
         self.frames = frames
         while tiles.count < frames.count {
@@ -199,12 +191,11 @@ final class ImageGridView: NSView {
             // behind the image once it's there.
             let placeholder = Theme.codeBackground.resolvedCGColor(for: self)
             guard let path = localPath(index) else {
-                // Another runner's picture with no copy here yet.
+                // Another runner's picture: not on this Mac.
                 tile.contents = nil
                 tile.backgroundColor = placeholder
                 tile.name = nil
                 label(remoteWords(index), for: index, in: tile)
-                fetchIfNeeded(index)
                 continue
             }
             label(nil, for: index, in: tile)
@@ -225,9 +216,9 @@ final class ImageGridView: NSView {
             tile.name = path
         }
         CATransaction.commit()
-        // Why one couldn't be fetched, on hover; the tile itself just says
-        // so. Set only on a change, so grids that never fail get no tip view.
-        let tip = failures.isEmpty ? "" : Set(failures.values).sorted().joined(separator: "\n")
+        // Why another Mac's pictures don't show, on hover; the tile itself
+        // just says so. Set only on a change, so this Mac's grids get no tip view.
+        let tip = remote.map { paths.isEmpty ? "" : $0.why } ?? ""
         if tip != shownTip {
             setTip(tip)
             shownTip = tip
@@ -235,28 +226,10 @@ final class ImageGridView: NSView {
         window?.invalidateCursorRects(for: self)
     }
 
-    /// What a remote tile with no picture says: that it's on its way, that
-    /// it couldn't be got, or (too big to send whole) just where it is.
+    /// What a remote tile says in place of its picture.
     private func remoteWords(_ index: Int) -> String? {
         guard let remote, paths.indices.contains(index) else { return nil }
-        let path = paths[index]
-        if failures[path] != nil { return "Couldn't get it from \(remote.name)" }
-        if remote.ready(path)?.truncated == true { return "On \(remote.name)" }
-        return "Loading…"
-    }
-
-    private func fetchIfNeeded(_ index: Int) {
-        guard let remote, paths.indices.contains(index) else { return }
-        let path = paths[index]
-        guard remote.ready(path) == nil, failures[path] == nil, fetching.insert(path).inserted else { return }
-        remote.fetch(path) { [weak self] result in
-            guard let self else { return }
-            self.fetching.remove(path)
-            // A cell the table has since given another row ignores it.
-            guard self.paths.contains(path) else { return }
-            if case .failure(let error) = result { self.failures[path] = AppModel.remoteFileReason(error) }
-            self.show(paths: self.paths, frames: self.frames)
-        }
+        return "Couldn't get it from \(remote.name)"
     }
 
     /// Words in the middle of a tile with no picture; hidden otherwise.
@@ -311,11 +284,7 @@ final class ImageGridView: NSView {
         let point = convert(event.locationInWindow, from: nil)
         guard let index = frames.firstIndex(where: { $0.contains(point) }) else { return super.mouseDown(with: event) }
         guard let path = localPath(index) else {
-            // Nothing here yet to look at or drag. A click on one that
-            // couldn't be got tries again.
-            if remote != nil, paths.indices.contains(index), failures.removeValue(forKey: paths[index]) != nil {
-                show(paths: paths, frames: frames)
-            }
+            // Nothing here to look at or drag.
             return super.mouseDown(with: event)
         }
         // Dragged, the picture goes out as the file itself (FileDrag).
@@ -339,19 +308,15 @@ final class ImageGridView: NSView {
     @discardableResult
     func open(_ index: Int) -> Bool {
         guard let path = localPath(index), QuickLookCoordinator.isPicture(path) else { return false }
-        // Quick Look steps through the pictures there are copies of.
+        // Quick Look steps through the grid's pictures.
         let shown = paths.indices.compactMap { localPath($0) }.filter(QuickLookCoordinator.isPicture)
         QuickLookCoordinator.shared.show(paths: shown, index: shown.firstIndex(of: path) ?? 0, from: self)
         return true
     }
 
     override func resetCursorRects() {
-        for (index, frame) in frames.enumerated() where localPath(index) != nil || failures[paths[safe: index] ?? ""] != nil {
+        for (index, frame) in frames.enumerated() where localPath(index) != nil {
             addCursorRect(frame, cursor: .pointingHand)
         }
     }
-}
-
-private extension Array {
-    subscript(safe index: Int) -> Element? { indices.contains(index) ? self[index] : nil }
 }

@@ -15,6 +15,9 @@ import path from 'node:path';
 import { GpuiDriver } from '../support/gpui.ts';
 import { sleep } from '../support/driver.ts';
 import { swiftTool, windowAt, windowFrame, work } from './real-screen.ts';
+import { ensurePerfLock } from './perf-lock.ts';
+
+await ensurePerfLock();
 
 const [outArg, look = 'dark', ...wanted] = process.argv.slice(2);
 if (!outArg) throw new Error('usage: menus-shot.ts <out folder> [light|dark] [menu ...]');

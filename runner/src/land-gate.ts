@@ -19,7 +19,7 @@
 // paths). Its own runs are asked of GitHub with gh. When gh isn't there, or
 // can't say, the landing goes ahead, saying so: being offline shouldn't stop
 // work. `tb land --despite-red` lands anyway, for the landing that's the fix.
-import { execFile } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -204,13 +204,69 @@ export async function lastVerdict(root: string, file: string, run: Gh = gh): Pro
 
 const firstLine = (s: string): string => s.trim().split('\n')[0] ?? '';
 
+// Every landing asks GitHub before its check and again before main moves,
+// and a dozen threads landing at once (each with gh run watch of its own)
+// ran the shared API allowance out on 13 Nov: gh answered 403, and a gate
+// that can't ask lets the landing through. So the answer is kept in the
+// repo's git folder, shared by every worktree: one from the last minute is
+// used as it is, and when GitHub won't answer, one from the last half hour
+// still holds a landing on red.
+export type GateCache = { dir: string; now?: () => number };
+export const FRESH_MS = 60_000;
+export const STALE_MS = 30 * 60_000;
+
+type Kept = { at: number; verdict: Verdict };
+
+// The repo's shared git folder, for `root` (a worktree or the main checkout).
+export function gateCacheDir(root: string): string | undefined {
+  try {
+    const out = execFileSync('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+    return out ? path.join(out, 'threadbear-land-gate') : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+// lastVerdict through the kept answer, and a line to say when it's an old one.
+export async function keptVerdict(root: string, file: string, run: Gh, cache: GateCache | undefined): Promise<{ verdict: Verdict; note?: string }> {
+  if (!cache) return { verdict: await lastVerdict(root, file, run) };
+  const now = (cache.now ?? Date.now)();
+  const at = path.join(cache.dir, `${file}.json`);
+  let kept: Kept | undefined;
+  try {
+    kept = JSON.parse(fs.readFileSync(at, 'utf8')) as Kept;
+  } catch {
+    // none yet, or unreadable: ask
+  }
+  const age = kept ? now - kept.at : Infinity;
+  if (kept && age >= 0 && age < FRESH_MS) return { verdict: kept.verdict };
+  const verdict = await lastVerdict(root, file, run);
+  if (verdict.state !== 'unknown') {
+    try {
+      fs.mkdirSync(cache.dir, { recursive: true });
+      fs.writeFileSync(`${at}.tmp`, JSON.stringify({ at: now, verdict }));
+      fs.renameSync(`${at}.tmp`, at);
+    } catch {
+      // Only the sharing goes.
+    }
+    return { verdict };
+  }
+  if (kept && age >= 0 && age < STALE_MS) {
+    const mins = Math.max(1, Math.round(age / 60_000));
+    return { verdict: kept.verdict, note: `GitHub didn't answer (${verdict.why}), so this goes by what it said ${mins} min ago.` };
+  }
+  return { verdict };
+}
+
 // Why `files` can't land on main now, or undefined when they can. `note`
 // gets a line for a workflow GitHub couldn't be asked about.
-export async function landHold(root: string, files: string[], note: (line: string) => void, run: Gh = gh): Promise<string | undefined> {
+export async function landHold(root: string, files: string[], note: (line: string) => void, run: Gh = gh, cache?: GateCache): Promise<string | undefined> {
   for (const w of holdingWorkflows(root)) {
     const hits = filesThatRunIt(w.paths, files);
     if (!hits.length) continue;
-    const v = await lastVerdict(root, w.file, run);
+    const kept = await keptVerdict(root, w.file, run, cache);
+    const v = kept.verdict;
+    if (kept.note) note(kept.note);
     if (v.state === 'unknown') {
       note(`Couldn't ask GitHub whether ${w.name} (${w.file}) is green on main (${v.why}), so this lands without that check.`);
       continue;

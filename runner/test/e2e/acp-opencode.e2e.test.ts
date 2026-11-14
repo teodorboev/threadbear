@@ -51,7 +51,6 @@ function rig(mode: PermissionMode, deny: boolean, tools: { name: string; descrip
   const adapter = new AcpAdapter({
     agent: ACP_AGENTS.opencode,
     binary: () => bin,
-    on: () => true,
     registry: new ProcessRegistry(path.join(root, 'run'), nullLogger),
     log: nullLogger,
     env: { PATH: process.env.PATH, HOME: root, ...xdg },

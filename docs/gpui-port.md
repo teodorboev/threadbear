@@ -192,6 +192,13 @@ Screenshots use `render_to_image` on Mac and Linux, and a window grab on
 Windows. On the Mac the window stays tucked behind Mike's work. On Linux it's
 Xvfb with software Vulkan, as `desktop/scripts/shot.sh` already does.
 
+The scripted screenshot command reads a fresh frame on the app's thread,
+then encodes and saves on a worker. PNGs use a fixed Sub filter to avoid
+trying every filter in debug builds at background priority. Encoding finishes
+before the destination is opened. Normal file writes keep its permissions
+and write through links; new files follow the process umask. The reply waits
+for the write, and errors stay errors even if an older screenshot exists.
+
 ### First-run tour
 
 The dimmed window, the lit-up part and the card. A dark overlay with a hole
@@ -219,17 +226,23 @@ Rust. So the tricky rules (folding, inbox order, link parsing) get shared
 fixture files: event streams with expected output that every side's tests
 read, the way `desktop/test/auth-vector-*.txt` already works for sign-in.
 
-gpui-kit stock, pinned to exact versions, no fork. Ghostex forked both gpui and
-its component library and has had to re-merge them many times since. We take a
-fork only when a shim can't do the job, and write down why.
+GPUI and gpui-kit are pinned to exact versions. We vendor a dependency only
+when a shim can't reach the code that needs to change, and record why.
 
-The one so far (12 Nov): `desktop/vendor/gpui-component`, the components crate
+`desktop/vendor/gpui-component` is the components crate
 at the pinned version with its popup menus drawn as macOS draws its own. The
 kit draws every menu's rows itself (their height, padding and gaps, the tick
 in the icon's place) and nothing outside the crate reaches them, and every
 dropdown, context menu and the sidebar's menus go through it. Its first commit
 is the crate as published, so `git log -p desktop/vendor` is the whole fork;
 a gpui-kit bump copies the new version in and puts that back.
+
+`desktop/vendor/gpui-base` keeps the input, text and test-support fixes listed
+in `desktop/Cargo.toml`. `desktop/vendor/gpui-pre` is GPUI 0.3.11 with file
+drops leaving keyboard mode before hover hit tests, so dropping after typing
+still works. GPUI exposes no input-mode setter for an app shim. The published
+crates are separate commits from our changes; retain those patches on an
+update, or remove a patch once upstream includes it.
 
 ### Borrowed from Ghostex (MIT, notice kept)
 
@@ -446,11 +459,50 @@ would use native Wayland otherwise.
 A variant of A is to use the system web view for simple previews and CEF only
 for real browsing. I'd skip it: two engines means two sandboxes to prove.
 
+### Keeping Chromium current
+
+Checked on 13 Nov 2026 against [Spotify's CEF index](https://cef-builds.spotifycdn.com/index.json),
+[cef-rs releases](https://crates.io/crates/cef) and
+[Chrome's security releases](https://chromereleases.googleblog.com/search/label/Stable%20updates):
+the former CEF 156.0.15 used Chromium 156.0.8078.80 (31 Oct).
+CEF stable is 156.0.28, Chromium 156.0.8078.88 (11 Nov).
+The newest published Rust bindings are cef/cef-dll-sys 156.4.0+156.0.26,
+so Threadbear uses that exact CEF build (7 Nov), with the same Chromium
+156.0.8078.88. Compatibility with CEF 156.0.28 has not been proved.
+Chrome desktop is already 157.0.8103.78/.79 (11 Nov), with further security
+fixes. Updating CEF to the newest supported build doesn't close that upstream
+gap; no published cef-rs bindings for Chrome 157 were available at this check.
+
+The installed Mac runner checks the CDN index once a day while a web runtime
+is installed, starting a minute after launch. CEF-only patches count too;
+they can fix the embedding even when the Chromium version is unchanged.
+It warns in Updates (including its icon's tooltip) and `tb status` after a newer stable CEF has been available for 14 days, or after
+three days of failed checks. Beta builds don't count. A later patch doesn't
+reset the age of a pin that's already behind. Its small cache survives a
+restart and network failures. The warning describes this runner release's
+pin, so an older app can still need its pending app update. Dev runners and
+tests don't poll. This check only reports; installation still uses the
+pinned download with its size and both hashes checked.
+
+To bump it, choose a stable CEF build supported by `cef` and `cef-dll-sys`,
+move both exact requirements in `desktop/web/Cargo.toml` and update
+`desktop/Cargo.lock` on a check host. Download each Mac minimal archive from
+the index there, verify its published size and SHA-1, calculate its SHA-256,
+and update `CEF_VERSION` and `ARCHIVES` in `desktop/core/src/web_runtime.rs`.
+Move `PIN` in `runner/src/updates/web-runtime.ts` too (a test checks they
+agree). Regenerate `desktop/web/src/mac/loader.rs` with
+`node desktop/web/scripts/gen-loader.mjs <new-sys-crate>/src/bindings/aarch64_apple_darwin.rs`.
+On Tinker Desk run the core tests and build the automation app, then run
+`features/web-panels.feature` and the sealed-page and Mermaid specs with
+`TB_WEB_RUNTIME_ARCHIVE` naming that archive. Use
+`desktop/scripts/remote.sh tinker-desk --desk -- <command>` for the windowed
+specs; Rust builds stay on check hosts. Update this checked-date note.
+
 ### How A is built (11 Nov)
 
 - **Where it comes from.** Threadbear has no place of its own to publish the
   runtime yet, so the app downloads CEF's official minimal build from
-  Spotify's CDN (cef-builds.spotifycdn.com), pinned to 156.0.15, the build
+  Spotify's CDN (cef-builds.spotifycdn.com), pinned to 156.0.26, the build
   the `cef` crate's bindings were made from. It's held to the size and the
   SHA-1 Spotify publishes for it and a SHA-256 worked out from that same
   file, all before anything is unpacked (`desktop/core/src/web_runtime.rs`).
@@ -463,13 +515,18 @@ for real browsing. I'd skip it: two engines means two sandboxes to prove.
   itself, from the bindings' own declarations, with a check the compiler
   makes that each one matches (`desktop/web/scripts/gen-loader.mjs`). The
   app builds as before, with no extra tools.
-- **Chromium's sandbox is off for now.** On a Mac it lets a helper read only
-  inside the bundle macOS started the app from, and the runtime lives in the
-  data folder, so sandboxed helpers were refused the framework. The sealed
-  pages keep their own rules (no scripts in an agent's page, no network, no
-  navigation), and the panels show sites a patch or Convex names. Turning
-  the sandbox on means the framework inside the app bundle, which is
-  option B. **Mike's call.**
+- **Chromium's sandbox stays off, Mike's decision (13 Nov).** Downloading
+  CEF on first use keeps the app small. On a Mac the sandbox lets a helper
+  read only inside the bundle macOS started the app from; helpers couldn't
+  read the framework in the data folder. Enabling it would require the
+  framework inside the app bundle, option B. Ghostex also sets `no_sandbox:
+  1` on every platform (`apps/desktop/src/cef/shell/lifecycle.rs` in
+  [Ghostex](https://github.com/maddada/Ghostex)); its Linux build deliberately
+  omits chrome-sandbox. A page that exploits a Chromium bug can run code as
+  the user, so keeping the runtime current matters. Sealed pages still
+  forbid agent scripts, network and navigation, and panels start from the
+  sites a trusted patch or Convex names. These rules don't contain a
+  Chromium exploit.
 - **Pages beside a thread.** A web panel's page is a native view over its
   panel's layout slot (`desktop/gpui/src/web_panels.rs`). The side pane is
   a cached view, redrawn only when it changes, so a page panel is drawn by

@@ -22,9 +22,25 @@ Feature: The Librarian
     And the page's tiles include "14 Looks today, 3 Skipped today, 52k Tokens today, 3 Waiting"
 
   @librarian.log
+  Scenario: A project in the recent log opens its page
+    When I click "Librarian" in the activity bar
+    And I follow a project in the librarian log
+    Then the librarian's project page is open
+
+  @librarian.log
   Scenario: Pause shows at once, and Resume carries on
     When I click "Librarian" in the activity bar
     And I press the row button "Stop looking at threads"
     Then the librarian says "Paused"
     When I press the row button "Let it look at threads again"
+    Then the librarian says "Looking at “Rebuild the three landing pages”"
+
+  # Swift's scripted form switch waits for an actual mouse-up.
+  @librarian.page @swift-pending
+  Scenario: The page switch pauses and resumes the librarian
+    When I click "Librarian" in the activity bar
+    And I scroll to the Librarian settings
+    And I press the row button "Turn it off to pause; what's queued waits"
+    Then the librarian says "Paused"
+    When I press the row button "Paused: what's queued waits. Turn it on to carry on"
     Then the librarian says "Looking at “Rebuild the three landing pages”"

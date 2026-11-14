@@ -344,6 +344,8 @@ pub enum PeekPicture {
     Image,
     /// Its first lines: text, code, Markdown and pages.
     Lines,
+    /// A bounded first-page or first-frame raster, when the platform can make one.
+    Thumbnail,
     /// Its kind's symbol.
     Symbol,
 }
@@ -351,6 +353,7 @@ pub enum PeekPicture {
 /// The pictures and text the pane previews get a look at their contents;
 /// anything else (a folder, a PDF, a project) its symbol.
 pub fn peek_picture(path: &str) -> PeekPicture {
+    if matches!(crate::open_policy::media_kind(path), Some(crate::open_policy::Media::Pdf | crate::open_policy::Media::Video)) { return PeekPicture::Thumbnail; }
     let lower = path.to_lowercase();
     if highlights::looks_like_picture(path) || lower.ends_with(".svg") {
         return PeekPicture::Image;
@@ -492,7 +495,9 @@ mod tests {
         assert_eq!(peek_picture("/a/plan.md"), PeekPicture::Lines);
         assert_eq!(peek_picture("/a/main.rs"), PeekPicture::Lines);
         assert_eq!(peek_picture("/a/page.html"), PeekPicture::Lines);
-        assert_eq!(peek_picture("/a/report.pdf"), PeekPicture::Symbol);
+        assert_eq!(peek_picture("/a/report.pdf"), PeekPicture::Thumbnail);
+        assert_eq!(peek_picture("/a/clip.MP4"), PeekPicture::Thumbnail);
+        assert_eq!(peek_picture("/a/clip.mov"), PeekPicture::Thumbnail);
         assert_eq!(peek_picture("/a/project.tandem"), PeekPicture::Symbol);
         assert_eq!(first_lines(b"one\n\ttwo\nthree\nfour", 3, 80).unwrap(), ["one", "    two", "three"]);
         assert_eq!(first_lines("caf\u{e9}".as_bytes().split_last().unwrap().1, 2, 80).unwrap(), ["caf"], "a character cut off at the end");

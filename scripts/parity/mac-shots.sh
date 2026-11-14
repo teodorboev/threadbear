@@ -42,7 +42,7 @@ fi
 export CARGO_TARGET_DIR="$base/target-parity" CARGO_HTTP_MULTIPLEXING=false CARGO_NET_RETRY=10
 # In use for the whole run, so the trim another run starts leaves it alone.
 ( while kill -0 $$ 2>/dev/null; do touch "$CARGO_TARGET_DIR/.in-use" 2>/dev/null || true; sleep 60; done ) >/dev/null 2>&1 </dev/null &
-(cd "$ROOT/desktop" && cargo build -p threadbear-gpui --features automation) > "$work/build.log" 2>&1 \
+(cd "$ROOT/desktop" && /usr/sbin/taskpolicy -b cargo build -p threadbear-gpui --features automation) > "$work/build.log" 2>&1 \
   || { echo "the GPUI app didn't build:" >&2; tail -30 "$work/build.log" >&2; exit 1; }
 cp "$CARGO_TARGET_DIR/debug/threadbear-gpui" "$work/threadbear-gpui"
 

@@ -4,16 +4,24 @@
 // Node built-ins only, like setup (and secure-url.ts, which has none).
 import { isLoopbackHost } from '../runner/src/secure-url.ts';
 //
-// Two ways to reach it:
+// Three ways to reach it:
 //   tailnet  `tailscale serve` puts it on this Mac's tailnet name, for the
 //            phone and other Macs (setup --self-hosted)
 //   local    loopback only, no Tailscale: this Mac alone, no phone
 //            (setup --self-hosted --local). For someone whose work keeps
 //            them on its own tailnet, as Tailscale has one on at a time.
+//   url      your own address (setup --self-hosted --url … --site-url …):
+//            the backend stays on loopback, and whatever you already reach
+//            your Mac with (Caddy, nginx, cloudflared, your own Tailscale or
+//            VPN) points at it. Threadbear doesn't need to know how the
+//            phone gets there. Asked for by a viewer on the launch video
+//            (11 Nov 2026; built 14 Nov) whose phone already reaches their
+//            homelab their own way.
 
 // Tailnet port, then this Mac's loopback port. Not 3210 on loopback: that's
 // where `npx convex dev` runs a local deployment.
 export const PORTS = { api: [3210, 13210], site: [3211, 13211], dashboard: [6791, 16791] };
+const TAILNET_PORTS = Object.values(PORTS).map(([tailnet]) => tailnet);
 export const ADMIN_URL = `http://127.0.0.1:${PORTS.api[1]}`;
 export const DATA_VOLUME = 'threadbear-convex-data';
 
@@ -28,6 +36,49 @@ export function isLoopbackUrl(raw) {
   return isLoopbackHost(u.hostname);
 }
 
+// The tailnet way's address: this Mac's MagicDNS name on port 3210. Told
+// apart from an address of your own by that, so the way it was set up
+// needs nothing saved beyond runner.json's sync.url (and --url refuses one
+// that looks like it, below).
+function isTailnetUrl(raw) {
+  let u;
+  try {
+    u = new URL(raw);
+  } catch {
+    return false;
+  }
+  return u.protocol === 'https:' && u.hostname.endsWith('.ts.net') && u.port === String(PORTS.api[0]);
+}
+
+// The way an earlier self-hosted setup went, from the sync.url it saved.
+export function reachOf(syncUrl) {
+  if (isLoopbackUrl(syncUrl)) return 'local';
+  return isTailnetUrl(syncUrl) ? 'tailnet' : 'url';
+}
+
+// An address of your own for --url or --site-url, as an origin, or { fail }.
+// https only: the phone's token and your threads go to it, and iOS refuses
+// plain http anyway. Nothing on this Mac's loopback (inside the container
+// that's the container itself, and a phone would talk to itself), no login,
+// path, query or fragment, and not a Convex cloud host.
+export function ownAddress(raw, flag) {
+  let u;
+  try {
+    u = new URL(String(raw ?? '').trim());
+  } catch {
+    return { fail: `${flag} isn't a URL. Give the https address your phone reaches this Mac's backend at, like ${flag} https://threadbear.example.com` };
+  }
+  if (u.protocol !== 'https:') return { fail: `${flag} has to be https (${u.protocol}//${u.host}): your phone's token and your threads go to it, and the iPhone app only talks https. Put a proxy with a certificate in front (Caddy makes one for you).` };
+  if (u.username || u.password) return { fail: `${flag} has a name or password in it; take them out.` };
+  // A trailing dot is the same name to DNS but not to the checks below
+  // (mac.tail1.ts.net. got past the tailnet-port check, cross-lab review).
+  if (u.hostname.endsWith('.')) return { fail: `${flag} ends its name with a dot (${u.host}); leave the dot off.` };
+  if ((u.pathname !== '/' && u.pathname !== '') || u.search || u.hash) return { fail: `${flag} has to be just an address (https://host or https://host:port), with no path: Convex's backend expects to be at the root.` };
+  if (isLoopbackHost(u.hostname)) return { fail: `${flag} is on this Mac's loopback (${u.host}), which a phone can't reach. For this Mac alone, use --local instead.` };
+  if (u.hostname.endsWith('.convex.cloud') || u.hostname.endsWith('.convex.site')) return { fail: `${flag} is a Convex cloud address. For Convex cloud, leave out --self-hosted and --url.` };
+  return { origin: u.origin };
+}
+
 // Whether setup self-hosts, and which way. The flags win; with none, an
 // earlier self-hosted setup carries on as it was (its admin key file says
 // self-hosted, runner.json's loopback sync.url says local).
@@ -37,35 +88,69 @@ export function isLoopbackUrl(raw) {
 // docs never puts the backend on a tailnet it wasn't meant for (the one
 // this is for is a work tailnet).
 //
-//   flags    { selfHosted, local, tailnet } from the command line
+// An address of your own (--url) stays one too: plain --self-hosted on such
+// a Mac keeps it, with the addresses runner.json has.
+//
+//   flags    { selfHosted, local, tailnet, url, siteUrl } from the command line
 //   joining  this Mac joins another's Threadbear (--existing, or a runner key)
 //   adminKeyFile  secrets/convex-self-hosted.env is here
-//   syncUrl  runner.json's sync.url, if any
+//   syncUrl, syncSite  runner.json's sync.url and sync.site, if any
 //
-// Returns { selfHosted: false } or { selfHosted: true, mode, from? } (from:
-// the mode it had, when this moves it), or { fail } with why.
-export function selfHostedPlan({ flags = {}, joining = false, adminKeyFile = false, syncUrl }) {
+// Returns { selfHosted: false } or { selfHosted: true, mode, from?, url?,
+// site?, readdressed? } (from: the mode it had, when this moves it; url and
+// site: the addresses, for mode "url"; readdressed: still "url", at new
+// addresses), or { fail } with why.
+export function selfHostedPlan({ flags = {}, joining = false, adminKeyFile = false, syncUrl, syncSite }) {
   const { local = false, tailnet = false } = flags;
-  if (local && tailnet) return { fail: '--local and --tailnet pick opposite ways to reach the backend; use one.' };
-  const asked = Boolean(flags.selfHosted || local || tailnet);
+  const own = flags.url !== undefined || flags.siteUrl !== undefined;
+  if ([local, tailnet, own].filter(Boolean).length > 1) return { fail: '--local, --tailnet and --url each pick a different way to reach the backend; use one.' };
+  const asked = Boolean(flags.selfHosted || local || tailnet || own);
   if (joining) {
-    if (asked) return { fail: 'A Mac joining another Mac\'s Threadbear (--existing) has no backend of its own, so --self-hosted, --local and --tailnet don\'t apply here.' };
+    if (asked) return { fail: 'A Mac joining another Mac\'s Threadbear (--existing) has no backend of its own, so --self-hosted, --local, --tailnet and --url don\'t apply here.' };
     return { selfHosted: false };
   }
   if (!asked && !adminKeyFile) return { selfHosted: false };
+  let addr;
+  if (own) {
+    // Two addresses, as the backend serves its API and its website (and
+    // share links) on two ports, so a proxy needs two names or two ports.
+    if (flags.url === undefined || flags.siteUrl === undefined) return { fail: '--url and --site-url go together: the backend serves its API and your website on two ports (127.0.0.1:13210 and 127.0.0.1:13211), so your proxy needs an address for each, like --url https://threadbear.example.com --site-url https://threadbear-site.example.com.' };
+    const url = ownAddress(flags.url, '--url');
+    if (url.fail) return { fail: url.fail };
+    const site = ownAddress(flags.siteUrl, '--site-url');
+    if (site.fail) return { fail: site.fail };
+    if (url.origin === site.origin) return { fail: '--url and --site-url are the same address, but they need to reach two different ports (127.0.0.1:13210 for --url, 127.0.0.1:13211 for --site-url).' };
+    // The tailnet way's ports on a tailnet name: --url's would be read back
+    // as the tailnet way next time, and setup takes this backend's own
+    // `tailscale serve` off all three on every run that isn't the tailnet
+    // way, which would take your proxy with it.
+    for (const [flag, origin] of [['--url', url.origin], ['--site-url', site.origin]]) {
+      const u = new URL(origin);
+      if (u.hostname.endsWith('.ts.net') && TAILNET_PORTS.includes(Number(u.port))) return { fail: `${flag} ${origin} is on a port --tailnet uses (${TAILNET_PORTS.join(', ')}). Use --tailnet for that, or other ports for your own.` };
+    }
+    addr = { url: url.origin, site: site.origin };
+  }
   // Only a Mac that's self-hosted already has a way it was reached.
-  const had = adminKeyFile && syncUrl ? (isLoopbackUrl(syncUrl) ? 'local' : 'tailnet') : undefined;
+  const had = adminKeyFile && syncUrl ? reachOf(syncUrl) : undefined;
   // An admin key but no sync.url: a first setup stopped partway, and which
   // way it was going isn't written anywhere. Guessing the tailnet could put
   // it on a work one, so it asks (cross-lab review, 10 Nov).
-  if (adminKeyFile && !syncUrl && !local && !tailnet) return { fail: 'An earlier self-hosted setup stopped before it finished, so setup can\'t tell which way it was going. Run it again with --self-hosted --local (this Mac only) or --self-hosted --tailnet.' };
-  const mode = local ? 'local' : tailnet ? 'tailnet' : (had ?? 'tailnet');
-  return { selfHosted: true, mode, ...(had && had !== mode ? { from: had } : {}) };
+  if (adminKeyFile && !syncUrl && !local && !tailnet && !own) return { fail: 'An earlier self-hosted setup stopped before it finished, so setup can\'t tell which way it was going. Run it again with --self-hosted --local (this Mac only), --self-hosted --tailnet, or --self-hosted --url <address> --site-url <address>.' };
+  const mode = local ? 'local' : tailnet ? 'tailnet' : own ? 'url' : (had ?? 'tailnet');
+  if (mode === 'url' && !addr) {
+    // Kept from before: the addresses are the ones it saved.
+    if (!syncSite) return { fail: 'This Mac\'s backend is at an address of your own, but runner.json has no sync.site saying where its website is. Run setup again with --url and --site-url.' };
+    addr = { url: syncUrl, site: syncSite };
+  }
+  const moved = had && had !== mode ? { from: had } : {};
+  const readdressed = had === 'url' && mode === 'url' && (addr.url !== syncUrl || addr.site !== syncSite) ? { readdressed: true } : {};
+  return { selfHosted: true, mode, ...moved, ...(addr ? addr : {}), ...readdressed };
 }
 
 // The backend container's settings for each way. Every port is published on
 // 127.0.0.1 only, never the LAN: the tailnet way puts them on the tailnet
-// with `tailscale serve`, and the local way leaves them on this Mac.
+// with `tailscale serve`, the local way leaves them on this Mac, and the url
+// way leaves them for your own proxy to reach.
 //
 // The backend fetches its own stored files (the website, from the
 // static-hosting component) through CONVEX_CLOUD_ORIGIN, from inside the
@@ -81,8 +166,21 @@ export function selfHostedPlan({ flags = {}, joining = false, adminKeyFile = fal
 //            new image's script no longer has the lines it changes.
 //            Pointing it at host.docker.internal instead was no good: file
 //            URLs would name a host this Mac's browser can't find.
-export function backendContainer(mode, tailnet = {}) {
+//   url      your addresses, reached from inside the container the way
+//            anything on this Mac reaches them (Docker Desktop sends the
+//            container's traffic out through the Mac). Setup checks that
+//            works before it carries on (checkOwnAddress in setup.mjs).
+//
+// `at` is { name, ip } for the tailnet, { url, site } for the url way.
+export function backendContainer(mode, at = {}) {
   const volume = ['-v', `${DATA_VOLUME}:/convex/data`];
+  if (mode === 'url') {
+    return {
+      env: { CONVEX_CLOUD_ORIGIN: at.url, CONVEX_SITE_ORIGIN: at.site, DISABLE_BEACON: 'true' },
+      runArgs: ['-p', `127.0.0.1:${PORTS.api[1]}:3210`, '-p', `127.0.0.1:${PORTS.site[1]}:3211`, ...volume],
+      cmd: [],
+    };
+  }
   if (mode === 'local') {
     const [, api] = PORTS.api;
     const [, site] = PORTS.site;
@@ -98,7 +196,7 @@ export function backendContainer(mode, tailnet = {}) {
       cmd: ['-c', script],
     };
   }
-  const { name, ip } = tailnet;
+  const { name, ip } = at;
   return {
     env: { CONVEX_CLOUD_ORIGIN: `https://${name}:${PORTS.api[0]}`, CONVEX_SITE_ORIGIN: `https://${name}:${PORTS.site[0]}`, DISABLE_BEACON: 'true' },
     runArgs: ['-p', `127.0.0.1:${PORTS.api[1]}:3210`, '-p', `127.0.0.1:${PORTS.site[1]}:3211`, ...volume, '--add-host', `${name}:${ip}`],
@@ -106,14 +204,21 @@ export function backendContainer(mode, tailnet = {}) {
   };
 }
 
-// Where the runner, the website and the dashboard reach it.
-export function origins(mode, name) {
+// Where the runner, the website and the dashboard reach it, and the backend
+// address the dashboard's page talks to (dashboardBackend). `at` is the
+// tailnet name for the tailnet, { url, site } for the url way.
+//
+// The url way's dashboard stays on this Mac (it's only for you, and your
+// proxy has no address for it), talking to the backend on loopback, so it
+// works even when your proxy doesn't.
+export function origins(mode, at) {
   if (mode === 'local') {
-    const at = (port) => `http://127.0.0.1:${port}`;
-    return { url: at(PORTS.api[1]), site: at(PORTS.site[1]), dashboard: at(PORTS.dashboard[1]) };
+    const on = (port) => `http://127.0.0.1:${port}`;
+    return { url: on(PORTS.api[1]), site: on(PORTS.site[1]), dashboard: on(PORTS.dashboard[1]), dashboardBackend: on(PORTS.api[1]) };
   }
-  const at = (port) => `https://${name}:${port}`;
-  return { url: at(PORTS.api[0]), site: at(PORTS.site[0]), dashboard: at(PORTS.dashboard[0]) };
+  if (mode === 'url') return { url: at.url, site: at.site, dashboard: `http://127.0.0.1:${PORTS.dashboard[1]}`, dashboardBackend: ADMIN_URL };
+  const on = (port) => `https://${at}:${port}`;
+  return { url: on(PORTS.api[0]), site: on(PORTS.site[0]), dashboard: on(PORTS.dashboard[0]), dashboardBackend: on(PORTS.api[0]) };
 }
 
 // What `tailscale serve status --json` (its spawnSync result) says is served
@@ -182,4 +287,15 @@ export function offTailnetStep({ cli, handlers, tailnetPort, localPort, moving }
 export const TAILNET_PENDING_FILE = 'self-hosted-on-tailnet';
 export function mustSeeTailnetOff({ from, pending }) {
   return from === 'tailnet' || Boolean(pending);
+}
+
+// Where to look for that note. Setup before 11 Nov (4d8cdb23) left it in the
+// --home data folder, so a run on that same folder still finds a note an
+// interrupted --tailnet run left there, rather than reading no note as never
+// served (Daybreak, 12 Nov 2026). Both are cleared once every port is off.
+export function tailnetPendingFiles(defaultHome, home, path) {
+  const files = [path.join(defaultHome, TAILNET_PENDING_FILE)];
+  const legacy = path.join(home, TAILNET_PENDING_FILE);
+  if (path.resolve(legacy) !== path.resolve(files[0])) files.push(legacy);
+  return files;
 }

@@ -86,13 +86,27 @@ enum ChromeProfiles {
             OpenGate.openWeb(url)
             return
         }
-        guard let app = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleId) else {
+        // The Chrome that's running (profiles are offered only while it
+        // is), never whichever bundle Launch Services has for Chrome's id,
+        // and only once its signature says it's Google's (Daybreak 112).
+        // Chrome kept anywhere but the Mac's app folders (~/Applications)
+        // gets the page in the default browser, as the GPUI app does.
+        guard let app = NSRunningApplication.runningApplications(withBundleIdentifier: bundleId).lazy.compactMap(\.bundleURL).first,
+              SignedApp.installedApps.contains(where: { app.resolvingSymlinksInPath().path.hasPrefix($0) })
+        else {
             OpenGate.openWeb(web)
             return
         }
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/open")
-        process.arguments = ["-na", app.path, "--args", "--profile-directory=\(profile.directory)", web.absoluteString]
-        do { try process.run() } catch { OpenGate.openWeb(web) }
+        let directory = profile.directory
+        Task.detached(priority: .userInitiated) {
+            guard let chrome = SignedApp.checked(app, SignedApp.googleChrome) else {
+                await MainActor.run { OpenGate.refuse("The Chrome that's running isn't Google's Chrome, so Threadbear didn't open the page in it.") }
+                return
+            }
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/open")
+            process.arguments = ["-na", chrome.path, "--args", "--profile-directory=\(directory)", web.absoluteString]
+            do { try process.run() } catch { await MainActor.run { _ = OpenGate.openWeb(web) } }
+        }
     }
 }

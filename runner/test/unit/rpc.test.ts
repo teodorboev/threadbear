@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { makeHarness } from '../helpers/fakes.ts';
+import { makeHarness, tick } from '../helpers/fakes.ts';
 import { RpcServer } from '../../src/rpc.ts';
 import { RunnerClient } from '../../src/client.ts';
 import { RpcError } from '../../src/protocol.ts';
@@ -12,8 +12,57 @@ import crypto from 'node:crypto';
 import net from 'node:net';
 import fs from 'node:fs';
 import { authProof, isNonce, newNonce } from '../../src/rpc-auth.ts';
+import { scheduledSendMethods } from '../../src/handover.ts';
+
+test('the draining server queues scheduled messages with their origin and rejects a moved thread', async () => {
+  const h = makeHarness();
+  const server = new RpcServer({ host: '127.0.0.1', port: 0, token: TOKEN, runner: h.runner, log: nullLogger, onlyOwn: true, methods: scheduledSendMethods(h.runner) });
+  const { port } = await server.listen();
+  const client = await RunnerClient.connect(`ws://127.0.0.1:${port}/rpc`, TOKEN, { server: 'drain' });
+  try {
+    const { thread } = h.runner.create({ text: 'Measure', accountId: 'claude-3' });
+    const session = h.adapter.last;
+    session.init();
+    session.out({ kind: 'tasks', tasks: [{ id: 'shell', type: 'local_bash', kind: 'shell', description: 'blocked command' }] });
+    await h.runner.beginDrain([thread.id], { onHandedOver: () => assert.fail('shell still holds the thread') });
+    await assert.rejects(client.call('drain.sendScheduled', { threadId: thread.id, text: 'Inspect', scheduleId: 's1' }), (e: { code: number }) => e.code === -32020);
+    assert.equal(session.sent.length, 1);
+    session.result('completed');
+    await tick();
+    await client.call('drain.sendScheduled', { threadId: thread.id, text: 'Inspect', scheduleId: 's1' });
+    await patiently(() => session.sent.length === 2);
+    const msg = h.events(thread.id).filter((e) => e.type === 'user.message').at(-1)!;
+    assert.equal(msg.origin, 'schedule');
+    assert.equal(msg.scheduleId, 's1');
+    await assert.rejects(client.call('drain.sendScheduled', { threadId: 'gone', text: 'Inspect', scheduleId: 's1' }), (e: { code: number }) => e.code === -32030);
+    await assert.rejects(client.call('drain.sendScheduled', { threadId: thread.id, text: 'Inspect' }), (e: { code: number }) => e.code === -32602);
+  } finally { client.close(); await server.close(); }
+});
 
 const TOKEN = 'test-token-0123456789';
+
+test('a keyed draining send acknowledges an existing delivery while its turn is still running', async () => {
+  const h = makeHarness();
+  const server = new RpcServer({ host: '127.0.0.1', port: 0, token: TOKEN, runner: h.runner, log: nullLogger, onlyOwn: true, methods: scheduledSendMethods(h.runner) });
+  const { port } = await server.listen();
+  const client = await RunnerClient.connect(`ws://127.0.0.1:${port}/rpc`, TOKEN, { server: 'drain' });
+  try {
+    const { thread } = h.runner.create({ text: 'Measure', accountId: 'claude-3' });
+    const s = h.adapter.last;
+    s.init();
+    s.out({ kind: 'tasks', tasks: [{ id: 'shell', type: 'local_bash', kind: 'shell', description: 'blocked shell' }] });
+    s.result('completed');
+    await tick();
+    await h.runner.beginDrain([thread.id], { onHandedOver: () => assert.fail('the shell keeps it here') });
+    const request = { threadId: thread.id, text: 'Inspect', scheduleId: 's1', run: 'due:slot-1' };
+    const first = await client.call('drain.sendScheduledOnce', request);
+    const retry = await client.call('drain.sendScheduledOnce', request);
+    assert.deepEqual(retry, first);
+    assert.equal(s.sent.length, 2);
+    await assert.rejects(client.call('drain.sendScheduledOnce', { ...request, run: '' }), (e: { code: number }) => e.code === -32602);
+    await assert.rejects(client.call('drain.sendScheduledOnce', { ...request, run: 'x'.repeat(201) }), (e: { code: number }) => e.code === -32602);
+  } finally { client.close(); await server.close(); }
+});
 // What the runner's main server binds its proofs to.
 const main = (port: number) => ({ server: 'primary' as const, port });
 
@@ -808,4 +857,60 @@ test("the agent tools resolve a whole thread id without listing every thread", a
   assert.equal(lists, 1);
   const missing = await read.handler({ threadId: '00000000-0000-0000-0000-000000000000' } as never, {} as never);
   assert.equal(missing.isError, true);
+});
+
+// Daybreak 113: the app showed a thread moving here as this Mac's while its
+// old runner (a secondary) still owned it, and the message went there
+// through the relay. With the runner it shows the thread on, a send or an
+// edit that would reach any other is refused and goes nowhere.
+test('a send naming the runner it is shown on never reaches another', async () => {
+  const relayed: { id: string; method: string; text?: unknown }[] = [];
+  let owner = 'runner_secondary';
+  const relay = {
+    owns: (id: string) => id === 'moving',
+    ownerOf: (id: string) => (id === 'moving' ? owner : undefined),
+    call: async (id: string, method: string, p: Record<string, unknown>) => { relayed.push({ id, method, text: p.text }); return { turnId: '', queued: true }; },
+    create: async () => ({}),
+    listFolder: async () => ({}),
+    logins: async () => ({}),
+  };
+  let moving = false;
+  const { h, server, url } = await serve({ relay, relayMoving: (id) => moving && id === 'moving' });
+  const c = await RunnerClient.connect(url, TOKEN);
+  try {
+    const refused = async (params: Record<string, unknown>, method = 'threads.send') => {
+      const e = await c.call(method, params).then(() => undefined, (err: { code?: number }) => err);
+      assert.ok(e, `${method} ${JSON.stringify(params)} went through`);
+      return e.code;
+    };
+    // Shown as this Mac's, still the secondary's: refused, nothing relayed.
+    assert.equal(await refused({ threadId: 'moving', text: 'SENSITIVE', runnerId: null, images: [{ path: '/tmp/x.png' }] }), -32031);
+    assert.equal(await refused({ threadId: 'moving', seq: 3, text: 'SENSITIVE', runnerId: null }, 'threads.edit'), -32031);
+    // Shown on a third runner (a destination that never listed it): refused too.
+    assert.equal(await refused({ threadId: 'moving', text: 'SENSITIVE', runnerId: 'runner_cloud' }), -32031);
+    assert.equal(await refused({ threadId: 'moving', text: 'x', runnerId: '' }), -32602);
+    assert.equal(await refused({ threadId: 'moving', text: 'x', runnerId: 7 }), -32602);
+    assert.equal(relayed.length, 0, "nothing relayed");
+    // Shown where it is: goes, as before.
+    await c.call('threads.send', { threadId: 'moving', text: 'hello', runnerId: 'runner_secondary' });
+    assert.deepEqual(relayed.map((r) => r.text), ['hello']);
+    // Once it's moved on, the old name is refused.
+    owner = 'runner_cloud';
+    assert.equal(await refused({ threadId: 'moving', text: 'late', runnerId: 'runner_secondary' }), -32031);
+    // This Mac's own thread: shown as another runner's, refused; as this Mac's, sent.
+    const { thread } = h.runner.create({ text: 'Local', accountId: 'claude-3' });
+    assert.equal(await refused({ threadId: thread.id, text: 'x', runnerId: 'runner_secondary' }), -32031);
+    await c.call('threads.send', { threadId: thread.id, text: 'mine', runnerId: null });
+    // An older app says nothing, and its send is routed as before...
+    await c.call('threads.send', { threadId: 'moving', text: 'old app' });
+    assert.deepEqual(relayed.map((r) => r.text), ['hello', 'old app']);
+    // ...except while a move is under way, when it may have shown the
+    // thread as already here (Codex's review): refused, nothing relayed.
+    moving = true;
+    assert.equal(await refused({ threadId: 'moving', text: 'SENSITIVE from an old app' }), -32031);
+    assert.equal(await refused({ threadId: 'moving', seq: 3, text: 'SENSITIVE' }, 'threads.edit'), -32031);
+    assert.deepEqual(relayed.map((r) => r.text), ['hello', 'old app']);
+    // This Mac's own threads are never held up by it.
+    await c.call('threads.send', { threadId: thread.id, text: 'still mine' });
+  } finally { c.close(); await server.close(); }
 });

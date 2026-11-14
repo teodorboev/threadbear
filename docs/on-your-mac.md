@@ -43,23 +43,37 @@ File references are where to look.
   taken off again; it deletes the note then.
 - **Apps:** `~/Applications/Threadbear.app` and
   `~/Applications/Threadbear Runner.app`, both built and signed on your Mac.
-  If you turn on the `gpuiApp` experiment and run
-  `desktop/scripts/install-app.sh`, also `~/Applications/Threadbear GPUI.app`,
+  If you press Start using the new app in the Swift app (or run
+  `desktop/scripts/install-app.sh`), also `~/Applications/Threadbear GPUI.app`,
   which keeps its window and panel layout in `desktop-settings.json` and
-  `gpui-prefs.json` in the data folder, what a click on a link in a reply
+  `gpui-prefs.json` in the data folder (with the local pages you chose
+  Run them for, a digest of each), what a click on a link in a reply
   does (its menu's Default) in `desktop-links.json` there, the side pane's
   folded headings in `desktop-highlights.json`, and how it shows files and
   folders (Preview or Markdown, list or icons, the sort, hidden files) in
-  `desktop-files.json`, and the deployment each Convex panel shows in
+  `desktop-files.json`, the section and file or folder each thread's pane
+  was left on (its last 300 threads) in `desktop-pane.json`, and the deployment each Convex panel shows in
   `desktop-web-panels.json`. Every file it writes there (those, and its
   drafts, review drafts, crash and hang records) is readable by your account
   only from the moment it's made (`desktop/core/src/private_file.rs`). Both apps claim `threadbear://` links (BrowserBear's
   Open thread pill), so install-app.sh makes the GPUI app the one macOS opens
   them with (`--keep-links` leaves them where they are), and
   `desktop/scripts/thread-links.sh swift` gives them back to the Swift app.
+- **Rust, only if you start using the new app** (the Swift app's Start
+  using the new app, which starts a thread that runs
+  `desktop/scripts/switch-from-swift.sh`; that thread is an agent on your
+  own login, so it uses your Claude or Codex tokens like any other thread):
+  the new app is built on your Mac from your checkout's `main`, so if there's no `cargo`
+  it installs Rust first, with rustup's own installer from
+  `https://sh.rustup.rs` (the minimal profile, about 850 MB with the crates
+  the build fetches, in `~/.rustup` and `~/.cargo`; it doesn't touch your
+  shell's startup files). The build runs at background priority, takes
+  about 10 minutes the first time, and keeps about 1.6 GB in
+  `~/Library/Caches/Threadbear/update-desktop`, which its updates reuse. Its
+  output is in that thread. `rustup self uninstall` takes Rust off again.
 - **The GPUI app's web runtime, only if you install it** (its Install web
   runtime button, or Settings > General > Web runtime; nothing is fetched
-  until you press one): Chromium, as CEF's official minimal build 156.0.15,
+  until you press one): Chromium, as CEF's official minimal build 156.0.26,
   downloaded once from Spotify's CEF builds (135 MB, checked against the
   size and hashes pinned in `desktop/core/src/web_runtime.rs` before
   anything is unpacked), into
@@ -89,6 +103,15 @@ File references are where to look.
   `~/.config/systemd/user/com.mikerosoft.threadbear.runner.service`, and no
   apps; it converts pictures with ImageMagick and rsvg-convert, and reads
   the account's full name from `getent passwd` rather than `id -F`.
+- **A one-shot reinstall job:** when the runner's LaunchAgent or
+  Threadbear Runner.app is behind main and you press Reinstall now in the
+  Updates panel (or the `selfReinstall` experiment is on), the runner
+  writes `<data folder>/runner/reinstall/<label>.reinstall.plist` and
+  loads it with `launchctl bootstrap` (it isn't in `~/Library/LaunchAgents`,
+  so it never starts at login). It runs `runner/scripts/install-runner.sh`
+  from your clone once, logging to `<data folder>/runner/reinstall.log`,
+  and is left loaded but stopped until the next one replaces it. On Linux
+  it's a transient `systemd-run --user` unit instead (`runner/src/reinstall.ts`).
 - **Commands:** `~/.local/bin/threadbear`, a link into your clone, and
   `~/.local/bin/tb`, a three-line script that runs the `tb` of the runner
   release this Mac runs (`runner/scripts/link-tb.sh`; it leaves a `tb` that
@@ -101,7 +124,18 @@ File references are where to look.
   The GPUI app does the same (`desktop/gpui/src/terminal.rs`), starting it
   as `/usr/bin/env -u THREADBEAR_THREAD_ID ... $SHELL -l` so it never
   inherits a thread's id, with a reader thread per shell; a program in it
-  can put text on the clipboard (OSC 52) but not read it.
+  can put text on the clipboard (OSC 52) but not read it. Clicking a Terminal
+  file link reads the OS hostname to recognize a link to this same machine;
+  it does not look it up on the network. Links go through the usual open gate.
+- **The Mac’s text services:** the GPUI app keeps the current selected plain
+  words in memory for AppKit’s Services menu and discards that snapshot when
+  the window closes. Choosing Look Up, Translate, Writing Tools, Share or a
+  Service hands those words to that system feature or the service you picked.
+  Passwords, revealed secret fields and one-time-code fields are excluded. A
+  returned edit is checked against the same field, selection and original words.
+- **Display preferences:** the GPUI Mac app reads the system appearance,
+  accent colour, Reduce Motion, Increase Contrast and 12/24-hour clock
+  preference to draw its interface. These readings stay on this Mac.
 - **Files:** the data folder `~/Library/Application Support/Threadbear`
   (threads, settings, `secrets/`, runner releases, the pinned release key
   `upstream-signers`, the Mac app's `app-drafts.json` and the GPUI app's
@@ -130,21 +164,26 @@ File references are where to look.
   others;
   `convex-key` is this Mac's key for your Convex backend (the deployment's
   `RUNNER_KEY` on your first Mac, a runner key of its own on any other);
-  `runners/<id>.token` is another Mac's runner token, if you copied one
-  in (only for Settings > Runners > Connect to other machines directly;
-  by default another Mac's threads come through your Convex backend, read
-  by your first Mac's runner while one is open, and nothing connects to
-  that Mac), and `runners/<id>.host` beside it, which you copy in too (`tb pair`
-  on that Mac prints both): the only host the app sends that token to.
-  The app only reads these, and proves it has the token rather than
-  sending it (docs/protocol.md, "Auth"); with no `.host` it dials nowhere;
   `~/Library/Caches/Threadbear/update`;
-  `~/Library/Caches/Threadbear/remote` (copies of pictures and files from
-  threads on your other Macs, at most 512 MB, unused ones go after 30 days);
+  the GPUI app's `threadbear-paste-*` folders under the user's temporary
+  folder (0700, with picture files owner-only), holding copies of dropped or pasted
+  pictures until the runner imports them, then removed. A promise's partial
+  copies and source folder are removed if receipt is cancelled or times out,
+  even if the source app never replies. On macOS the app
+  reads Photos' clipboard image data and promised files itself, while it has
+  access, rather than asking the runner to open a Photos library path;
+  if the app quits while a picture is loading, or crashes or is forced to quit,
+  private temporary copies can remain.
+  Another live app instance can own folders with the same prefix, so launching
+  the app does not remove folders by name;
   `~/Library/Caches/Threadbear/drags` (a copy of a video you drag out of the
   side pane, so what you drop it on gets the file you were watching; a
   clone that takes no space where the disk can make one, cleared after a
   day);
+  `~/Library/Caches/Threadbear/previews` (private, read-only snapshots of
+  Office and iWork documents and PDF link hovers, so Quick Look reads the file the open gate
+  checked; removed after the thumbnail is made, with interrupted copies
+  cleared after a day when another preview is made);
   `~/Library/Caches/Threadbear/rich` (pictures of the ```` ```mermaid ```` and
   ```` ```html ```` blocks in replies, and each one's page for the side pane,
   newest 900 files kept). They're drawn on this Mac in web views that load
@@ -201,8 +240,10 @@ File references are where to look.
   A landing waiting for the lock leaves a small JSON file in
   `threadbear-land-queue/` there (branch, worktree, commits, process id),
   removed when it's done, and the lock's holder keeps
-  `threadbear-land-running.json` (what it's checking, since when) while
-  its check runs. `threadbear-land-done/` there keeps, for a week, what
+  `threadbear-land-running.json` (what it's checking, since when, its
+  process id and the queue entry ids) while its check runs. The waiting
+  status checks whether that process is still alive.
+  `threadbear-land-done/` there keeps, for a week, what
   landed for a landing whose `tb` was stopped before it heard.
 - **The runner** listens on `127.0.0.1:8797` only, and needs a token
   (`runner/src/config.ts`). It starts the official `claude` and `codex`
@@ -211,7 +252,11 @@ File references are where to look.
   connects, the runner runs `lsof` and `ps` on that one connection to see
   which process it is and whether it's under a thread's CLI
   (`runner/src/peer.ts`, docs/protocol.md "Who's really calling").
-- **With the `acpAgents` experiment on** (off by default) it also starts the
+- **A pinned file being shown** (`desktop/gpui/src/highlights.rs`): if its
+  Highlights request fails, the app retries after 1 second, then 2, then 4,
+  up to 5 seconds between tries while you're looking at that thread. It
+  stops retrying when you leave or the request goes away.
+- **When OpenCode or Cursor's CLI is installed and logged in** it also starts the
   `opencode acp` and Cursor's `agent acp` CLIs for threads on them, runs each
   with `--version` when the runner starts, and runs its own updater
   (`opencode upgrade`, `agent update`) only when you press Update in the app, and each
@@ -224,8 +269,8 @@ File references are where to look.
   `danger-full-access`). `"defaults": { "permissionMode": ... }` in
   `runner.json` (`"full"`, `"auto"` or `"ask"`) sets it, and each thread
   can pick its own. The threads the runner starts by itself (bringing in
-  Mike's releases and fixing a failed update to main, both below, and a
-  note about this Mac) start on that default too
+  Mike's releases, fixing a failed update to main and rebuilding your
+  changes to the old Mac app, all below, and a note about this Mac) start on that default too
   (`runner/src/own-threads.ts`); on Ask, or Codex's Auto, what they can't
   do without a yes waits on a card for you.
 - **Your phone and browser can drive the Mac.** A paired iPhone or a
@@ -259,15 +304,70 @@ File references are where to look.
   follows the `main` of the checkout it was installed from in the same way
   (`desktop/gpui/src/app_update.rs`): it reads main's `desktop/` tree with
   `git rev-parse` 20 seconds after it opens, every 5 minutes and within
-  seconds of main changing, and when that differs from what it runs, it runs
+  seconds of main changing. When that differs from what it runs, it waits
+  until that tree has stayed the same for ten minutes, then runs
   `stage-update.sh` from its own bundle at background priority
   (`desktop/scripts/stage-update.sh`). That clones the checkout into
-  `~/Library/Caches/Threadbear/update-desktop`, and with `checkHosts` in
-  `runner.json`, copies the clone's files (not its history) with rsync over
-  ssh to the first of them that's a Mac and answers, builds there under
+  `~/Library/Caches/Threadbear/update-desktop`, and with `updateBuildHosts` in
+  `runner.json` (never `checkHosts`), copies the clone's files (not its history) with rsync over
+  ssh to the first of them that's a Mac, answers and is free, builds there under
   `~/.cache/threadbear-check/gpui` and copies the two binaries back with scp
-  (`desktop/scripts/remote.sh`); with check hosts set but none answering it
-  waits and tries again later, and with none set it builds in that cache
+  (`desktop/scripts/remote.sh`). Remote commands and performance tools keep
+  `~/.cache/threadbear-perf.lock` and `~/.cache/threadbear-check/lock` on the
+  host while they run, waiting for other builds, checks and measurements.
+  Real-input test tools read process names with `ps` and, on macOS,
+  executable paths through system Python's `ctypes` and `libproc`. They use
+  those names to refuse input while an ffmpeg encoder is running.
+  Automatic update builds try both locks without waiting, and leave a host
+  with live measurement waiters alone. A busy host makes the app try again
+  at a later look, reading the latest main then; a build already running
+  finishes with both locks held. The first has a note beside it
+  (`threadbear-perf.lock.holder`: its pid, when
+  it took the lock and what it's running) so a waiting run can say who it's
+  waiting for. The holder deletes it when it finishes. Each waiting run keeps
+  a file in `threadbear-perf.lock.waiting` until it gets the lock, so the
+  others can say how many are queued ahead. An updater also checks the
+  process start time, so a dead waiter's note whose pid has been reused
+  cannot keep deferring updates. A deferred attempt removes its own helper
+  folder on the host.
+  Temporary wrappers under the run's temp folder background Cargo and Swift
+  builds and are removed when the run ends. Performance runs register their
+  process groups and start times in `~/.cache/threadbear-check/perf-children-*`
+  until cleanup has stopped them. Registered processes also inherit an unlocked
+  descriptor (197) for the registry's state file. Cleanup matches its device
+  and inode through `lsof` on macOS or `/proc` on Linux to find terminal shells
+  that outlived their app. It reads descriptor metadata, not process environments;
+  command-line text does not count as ownership. Cleanup checks
+  start times before signalling those processes and follows live ancestry for
+  children that closed the descriptor. It repeats discovery until the lease's work
+  stops, retaining both locks. A small sleeping process stays in each active
+  group, keeping that group ID reserved even after its original
+  process dies. Its PID and start time are recorded in `anchor-*` files in the
+  same registry. It double-forks outside the worker's tree, holds no host lock
+  or output pipe, and exits once its leader is gone and two snapshots find it
+  alone. Before exiting it renames its record to `retired-*` under the
+  registration gate, so reuse of that group number cannot block cleanup.
+  Retirement records include the original leader start time; a new registration
+  clears stale retirement and reuses an existing live holder when possible.
+  It checks once a second, checking group membership every two seconds after the leader goes. It also exits if the reaper dies, with
+  a start-time check every 30 seconds.
+  Only a live matching anchor permits the final group kill; separate sessions
+  need their descriptor or captured ancestry. The macOS descriptor probe avoids
+  filesystem stats and has a two-second timeout. A failed probe still allows
+  registered work to stop but prevents unlocking. Same-user processes that
+  hide their descriptors cannot be attributed after losing their ancestry.
+  Every descriptor scan must also find the reaper's own close-on-exec control
+  descriptor before it can declare cleanup complete. If an anchor disappears
+  while its group is still active, cleanup keeps the locks rather than guess
+  who owns that group.
+  A cleanup still blocked after 30 seconds
+  records its process IDs in `~/.cache/threadbear-check/perf-cleanup.log`
+  and keeps the locks until the work stops. With `remote.sh --perf`, the shared warm
+  target is `~/.cache/threadbear-check/gpui/perf-target`, kept out of ordinary
+  cache eviction; other builds keep their own target. Source/target `.in-use`
+  markers are renewed while a remote run waits and works. With update build hosts set but none
+  answering it waits and tries again later, with only check hosts set it
+  builds nothing and says so, and with neither it builds in that cache
   folder here. The new app is put together and signed here as
   `~/Applications/.Threadbear GPUI.app.next` and goes in when the app quits
   or restarts, the old one kept as `.Threadbear GPUI.app.old` until the next
@@ -276,9 +376,23 @@ File references are where to look.
   Terminal shell running something, a web panel used in the last minute):
   straight away while you're in another app, and with the app in front
   once you haven't touched the Mac for five seconds (it asks macOS how
-  long since the last key, click or pointer move, nothing more). It writes what it did and the build's output to
+  long since the last key, click or pointer move, nothing more). With its
+  window on screen the restart is a handover: the new app is opened beside
+  the old one (`open -n`), and the two pass three small files (ready, go,
+  done) through a folder named for the old app's process,
+  `$TMPDIR/threadbear-handover-<pid>`, deleted once it's over. It writes what it did and the build's output to
   `~/Library/Logs/threadbear-desktop-update.log` (the one before it in
   `.log.1` once that passes 2 MB). `followMain: false` stops it too.
+- **Idle benchmarks** (`features/tools/idle-perf.ts`), only when run explicitly:
+  compile CPU counters, a window watcher and (for Swift references) an
+  owned-PID activation helper into a temporary folder, removed at the end.
+  A Swift reference checks its private executable path and build UUID before
+  measurement and can activate that existing private app; it never launches
+  the installed app. Every 250 ms during a sample, the watcher reads the foreground
+  process, window bounds and stacking order, display sleep and console-session
+  state. It rejects covered or inactive samples without sending Accessibility
+  or automation requests to the app. Closing the benchmark's owner pipe stops
+  the watcher. These helpers never run as part of the installed app.
 - **Following GitHub on a second machine** (`runner/src/follow-origin.ts`):
   only with `followOrigin: true` in that machine's `runner.json`, which
   nothing sets for you. Every 5 minutes the runner runs `git fetch origin
@@ -288,6 +402,10 @@ File references are where to look.
   rewrites anything: a commit made only there stays, and `tb status` says so.
   `tb land` refuses in that repo. If `origin` is Mike's repo rather than
   your own, leave this off.
+- **Convex heartbeat** (`runner/src/sync.ts`): with sync on, the runner
+  tells your deployment it is online once a minute. Before the first
+  successful heartbeat, a failed request is retried after 1 second,
+  doubling up to a minute. Key refusals and rate limits wait a minute.
 - **Schedule checks** (`runner/src/schedule-check.ts`): a schedule's
   check command, if it has one, runs in
   `/bin/sh` before each run, as you, for at most a minute (or up to five,
@@ -327,8 +445,21 @@ File references are where to look.
   `"releases": { "bringIn": 14 }` (or `"important"`, or `"off"`) in
   `runner.json`, changes it. It keeps what it last did in
   `runner/bring-in.json` in the data folder.
+- **Your changes to the old Mac app** (`runner/src/swift-changes.ts`): a
+  couple of minutes after the runner starts, then hourly, after each
+  release check and when the new desktop app connects, it reads your
+  checkout's git history (`git log`, nothing fetched or changed) for your
+  own commits to `app/` and `dock/` that Mike's releases don't have, for
+  the Updates panel's Not in the new app yet. The first time the new
+  desktop app connects and there are some, it starts one thread (on your
+  default mode) that asks before rebuilding them; never again after that.
+  What it did and what you dismissed are in `runner/swift-changes.json` in
+  the data folder. In Mike's own copy it finds nothing.
 - **CLI updates** (`runner/src/updates/`): every hour it checks for new
-  Claude Code and Codex versions and installs them. If you don't point it
+  Claude Code and Codex versions and installs them. Claude Code is the one
+  at `~/.local/bin/claude`, else the first `claude` on the runner's PATH
+  (an npm or Homebrew install), unless `claudePath` in `runner.json` names
+  another; its own `claude update` updates it. If you don't point it
   at your own Codex, it installs one into the data folder. It also runs
   any update commands you list under `cliUpdates.extra` in `runner.json`
   (none unless you add them), once a day each, and keeps when each last
@@ -390,13 +521,17 @@ File references are where to look.
 
 ## What it reads
 
+- When you click a picture panel to open Simulator, the GPUI app looks up
+  Apple's Simulator and runs `/usr/bin/codesign --verify --strict` with its
+  Apple signature and bundle-id requirement before opening it. This runs
+  off the main thread and does not launch an app with a copied bundle id.
 - From your Claude and Codex logins: which account each is (the email in
   `~/.claude.json`), a few settings, and the token counts in your session
   transcripts, so it can show how much room each login has
   (`runner/src/accounts.ts`, `runner/src/token-tally.ts`;
   `THREADBEAR_TOKEN_TALLY=off` stops the counting). It never reads or
   copies login tokens or the Keychain.
-- With the `acpAgents` experiment on: whether `~/.opencode/bin/opencode`, an
+- Whether `~/.opencode/bin/opencode`, an
   `opencode` or `cursor-agent` on your PATH, `~/.local/bin/cursor-agent` and
   `~/.local/bin/agent` exist and where they really lead, and whether
   `~/.cursor/cli-config.json` exists (never opened). OpenCode itself reads
@@ -430,16 +565,17 @@ File references are where to look.
 
 | Service | Whose | What goes there |
 |---|---|---|
-| Your Convex deployment | yours | Thread titles and status, all message text (each message cut at 8,000 characters), one line per tool call, projects, schedules, your logins' emails and usage, whether you're at the Mac, whether this machine is low on memory or disk, and the pictures you paste into a message, up to 10 MB each, so your own website can show them. Those go up as they are, in your deployment's file storage: unlike text, nothing can scrub a secret out of a picture, so a screenshot of something sensitive goes too. `"sync": { "pastedPictures": false }` in `runner.json` keeps them on this Mac. While someone has the website's Runners view open, this machine's CPU, memory and disk use, its processor model, operating system and time since it started, every 10 seconds; with nobody looking, none of that is sent. Photos you send from the phone, and pictures you send from the Mac app to a thread on another of your Macs, deleted once that Mac has fetched them. Pictures and videos agents put in their replies or pin, at most 10 MB each, for the phone to show. Other images only for threads you share by link. Other tool output and files stay on the Mac, unless you move a thread to another of your machines: then the whole thread, sealed so only that machine can open it, goes through for as long as the move takes. Text has known secrets taken out first: see below. |
+| A browser picture's URL | the site you drag from | When a picture dropped on the GPUI composer offers only an HTTP or HTTPS URL, the app downloads it directly without browser cookies, credentials or a proxy (30-second timeout, at most 25 MB). Only public internet addresses outside this Mac and its directly connected networks are used, including after DNS lookups and redirects. It is staged privately until the runner imports it. |
+| Your Convex deployment | yours | Thread titles and status, all message text (each message cut at 8,000 characters), one line per tool call, the line a thread writes when its login runs out and it moves to another or waits (your other machines, your phone and your signed-in website are given those, never a shared page), projects, schedules, your logins' emails and usage, whether you're at the Mac, whether this machine is low on memory or disk, and the pictures you paste into a message, up to 10 MB each, so your own website can show them. Those go up as they are, in your deployment's file storage: unlike text, nothing can scrub a secret out of a picture, so a screenshot of something sensitive goes too. `"sync": { "pastedPictures": false }` in `runner.json` keeps them on this Mac. While someone has the website's Runners view open, this machine's CPU, memory and disk use, its processor model, operating system and time since it started, every 10 seconds; with nobody looking, none of that is sent. Photos you send from the phone, and pictures you send from the Mac app to a thread on another of your Macs, deleted once that Mac has fetched them. Pictures and videos agents put in their replies or pin, at most 10 MB each, for the phone to show. Other images only for threads you share by link. Other tool output and files stay on the Mac, unless you move a thread to another of your machines: then the whole thread, sealed so only that machine can open it, goes through for as long as the move takes. Text has known secrets taken out first: see below. |
 | Convex (the Convex panel) | yours | Only for a thread in a Convex project, when its Convex panel opens: the runner's Convex CLI asks api.convex.dev for the project's deployments and a deploy key, the runner asks the deployment whether a kept key still works (`/api/check_admin_key`), and the panel loads Convex's embedded dashboard (dashboard-embedded.convex.dev) with that key. Sign in to Convex goes to auth.convex.dev. (`runner/src/convex-keys.ts`) |
 | Your other Macs, over ssh | yours | Only when you run `tb runner add <name> --ssh <host>` or `tb runner check --ssh <host>` on your first Mac: it reads that Mac's Threadbear `runner.json`, writes its id and the deployment's address there if it hasn't them, writes its new key into that Mac's `secrets/convex-key`, and looks whether that Mac has a deploy key, Convex panel keys or a Convex login (names only, never a key), through your own ssh setup with agent and port forwarding off (`runner/src/runner-keys.ts`). `tb runner audit` asks this Mac's runner for its threads' last seqs and your deployment for what the main key made. `tb runner rotate-owner` sets env vars on your deployment with your deploy key, and, if you give it a Convex team access token for that run (`CONVEX_TEAM_TOKEN`, never kept), asks api.convex.dev for the deployment's deploy keys (their names and dates) before it rotates. |
-| Your check hosts, over ssh | yours | Only from the installed GPUI app, when `runner.json` has `checkHosts` and main's `desktop/` has changed: a copy of your main's files to build it from, rsynced to `~/.cache/threadbear-check/gpui` on the first one that's a Mac and answers, and the two built binaries copied back (`desktop/scripts/stage-update.sh`) |
+| Your update build hosts, over ssh | yours | Only from the installed GPUI app, when `runner.json` has `updateBuildHosts` and main's `desktop/` has changed: a copy of your main's files to build it from, rsynced to `~/.cache/threadbear-check/gpui` on the first one that's a Mac and answers, and the two built binaries copied back (`desktop/scripts/stage-update.sh`) |
 | GitHub | Mike's repo | Release tags fetched every 6 hours; the fork at setup; from `tb land`, through your `gh`, a marked workflow's recent runs on main |
-| cef-builds.spotifycdn.com | Spotify (CEF's official builds) | Only from the GPUI app, and only when you press Install web runtime: one download of the pinned build (135 MB), which nothing is sent with. Threadbear will publish its own signed copy later. Chromium itself then goes online only for the pages the GPUI app's web panels show; its own background requests are off (`--disable-background-networking`), and an agent's html and diagrams reach nothing (`desktop/web/src/mac/sealed.rs`). |
+| cef-builds.spotifycdn.com | Spotify (CEF's official builds) | The installed Mac runner, only while a web runtime is installed, reads `/index.json` once a day, a minute after starting if due, to warn when this release's CEF pin is over 14 days behind stable (or checks fail for 3 days). Dev runners/tests do not poll; `THREADBEAR_CLI_UPDATES=off` disables it too. It sends no user content and stores the check in `<home>/runner/web-runtime-check.json`. From the GPUI app, only when you press Install web runtime: one download of the pinned build (135 MB), which nothing is sent with. Threadbear will publish its own signed copy later. Chromium itself then goes online only for the pages the GPUI app's web panels show; its own background requests are off (`--disable-background-networking`), and an agent's html and diagrams reach nothing (`desktop/web/src/mac/sealed.rs`). |
 | downloads.claude.ai, registry.npmjs.org | Anthropic, npm | CLI version checks and installs; `npm ci` |
 | Anthropic, OpenAI | yours | Your threads, through the official CLIs on your own logins. With the `cardReviewer` experiment on (off by default), an approval card in a thread on Auto, with the thread's first and latest messages, goes to Opus through the same CLI so it can decide in your place. Unless you turn off Settings > General > Code review (`"labReview": false`), a thread's code change, with your message and the agent's reply, goes to your other provider's CLI as a review thread, as if you'd started one (or a fresh session of the same provider, with no other login). After a turn fails because the API couldn't be reached, the runner itself opens (and straight away closes) a connection to api.anthropic.com or chatgpt.com on port 443, at most once a minute, until one opens and the thread carries on. Nothing is sent over it (`runner/src/net-probe.ts`). |
-| OpenCode's Zen (opencode.ai), models.dev, and whichever providers you've logged it into | theirs | Only with the `acpAgents` experiment on and a thread on OpenCode: that thread's prompts and tool output, through the official CLI, and small jobs' text when a pool of only OpenCode logins is picked for them in Settings |
-| Cursor (api2.cursor.sh) | theirs | Only with the `acpAgents` experiment on and a thread on Cursor: the same, on your own login |
+| OpenCode's Zen (opencode.ai), models.dev, and whichever providers you've logged it into | theirs | Only with a thread on OpenCode: that thread's prompts and tool output, through the official CLI, and small jobs' text when a pool of only OpenCode logins is picked for them in Settings |
+| Cursor (api2.cursor.sh) | theirs | Only with a thread on Cursor: the same, on your own login |
 | Mike's push relay | Mike's | Only when a paired iPhone or Android phone gets a notification (an Android phone's goes on to Google's Firebase Cloud Messaging, from the relay). It's sent from your Convex deployment, not the Mac. The text is encrypted for the phone; the relay sees the device token and thread id (`convex/push.ts`, `docs/push-relay.md`). The first time, your deployment registers with it, giving its own address; the relay keeps that address and checks it by posting a one-time code back to your deployment's `/relay/verify` (`convex/http.ts`). |
 | A Connectors gateway | whoever runs it | Only if one is set in `runner.json` or `~/.claude.json`. Its `/health` every few minutes (and once more at the end of a turn where a call to one of its services failed, to see if it needs signing in), and for a project with a Notion page, a Notion read or two every 5 minutes for its task board (`runner/src/notion-tasks.ts`), signed with the header the `headersHelper` command in that `connectors` entry prints, which it runs for each read |
 | Sentry | Mike's | Nothing from your copy. Only a copy whose `origin` is Mike's own repo reports errors or uploads the app's debug symbols (`runner/src/sentry.ts`, `app/Sources/Threadbear/CrashReporting.swift`, `app/build-app.sh`). The installed GPUI app of Mike's repo, on the real data folder, sends its panics, crashes and freezes of 15 seconds or more, each as one POST to Sentry's endpoint with the function names and nothing typed or opened (`desktop/core/src/crash_report.rs`, `desktop/gpui/src/crash_reporting.rs`); it uploads no symbols. The App Store iPhone app sends anonymous crash reports. |
@@ -464,8 +600,9 @@ forms, open windows or download
 On the Mac itself, a web link you click in the app first goes to
 BrowserBear's socket (`~/Library/Application Support/BrowserBear/browserbear.sock`),
 if you have BrowserBear, to ask whether an agent's Chrome tab is already
-on that page (`app/Sources/Threadbear/BrowserBear.swift`). Only the link
-goes there.
+on that page (`app/Sources/Threadbear/BrowserBear.swift`,
+`desktop/gpui/src/agent_browser.rs`). Only the link goes there, and only a
+web address.
 
 When Google Chrome is your default browser and is running, a web link's
 right-click menu reads Chrome's `Local State`
@@ -478,7 +615,12 @@ only ever for a web address (`app/Sources/Threadbear/Transcript/ChromeProfiles.s
 
 The Browser panel also uses that private socket to list the pages agents
 associate with threads, ask for a small still of each and bring a page's real
-window to the front (`app/Sources/Threadbear/Views/AgentBrowserPanel.swift`).
+window to the front (`app/Sources/Threadbear/Views/AgentBrowserPanel.swift`,
+`desktop/gpui/src/agent_browser.rs`), looking at `agent/tabs.json` and the
+socket every 0.75 seconds while the app runs, and asking for a still every 3
+seconds only while the panel is on show. A debug build run by a script never
+reaches it unless `BROWSERBEAR_HOME` points somewhere (the specs use a
+stand-in).
 Threadbear does not read Chrome's cookie database or copy credentials, and
 stills stay on this Mac, in memory, not sent to Convex. BrowserBear stores
 thread/tab/profile associations in `panel-tabs.json` in its own folder (0600).
@@ -506,9 +648,15 @@ picture that goes up (ones agents post or pin, and anything in a thread you
 share) goes as it is. Scrubbing also can't undo a leak. A key that shows up in
 a thread has already been to the AI provider, so rotate it.
 
-**Full sync** is off unless a runner's `runner.json` has `"sync": { "full": true }`.
-With it off, tool output, diffs and tool screenshots stay on that runner, and
-nothing below happens. With it on, from then on (older tools aren't sent), that
+**Full sync** starts off. It lets your phone, the website and your other machines
+show each thread's tool output and diffs, not just its messages, even when the
+machine that ran it is asleep or gone, so it only helps once there's something
+other than this Mac to read them on. The main runner asks once, in a thread of its
+own, when that happens: a phone or the website paired, or another machine added.
+Your pick on its card sets it (the runner does that itself, not the thread's agent),
+and it never asks again (`tb settings full on|off` sets it any time). An install with `sync.full` set either way is never asked or changed; a Linux
+runner has whatever its own `runner.json` says. `"sync": { "full": false }` keeps tool output,
+diffs and tool screenshots on that runner, and then nothing below happens. With it on, from then on (older tools aren't sent), that
 runner also sends each finished tool's output, its full input, its diffs and the
 reasoning before it to your deployment, after the same scrubbing, where they're
 kept 30 days. This lets you read them from any device while the runner's off. It's

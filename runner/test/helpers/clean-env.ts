@@ -1,3 +1,5 @@
+import './private-home.ts';
+
 // Loaded before every unit test file (`--import`, in package.json's test
 // script and deploy-steps.mjs's rerun). Setup and deploys are often started
 // from inside a Claude Code session, whose CLAUDECODE, CLAUDE_* and

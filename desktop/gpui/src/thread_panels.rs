@@ -33,6 +33,8 @@ pub(crate) struct ThreadPanels {
     main_tabs: HashSet<String>,
     /// What the main panel showed when last looked at.
     context: Option<MainContext>,
+    /// Pinned list and picture panels' views, by panel id (pinned_panels.rs).
+    pub(crate) pinned: HashMap<String, Entity<crate::pinned_panels::PinnedPanelView>>,
 }
 
 struct PanelPane {
@@ -221,14 +223,14 @@ impl Threadbear {
 
     /// The panel's bar: the thread's title line (`HeaderTitle`).
     pub(crate) fn thread_panel_header(&mut self, panel: &str, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let thread = self.threads.get(pinned_thread(panel)?).cloned()?;
+        let thread = self.threads.get(pinned_thread(panel)?).map(|t| (**t).clone())?;
         Some(self.render_thread_title(thread, cx))
     }
 
     /// The end of its bar: Share and the ... menu, but no back and forward,
     /// which are the main panel's (`ShareButton(pinned:)`, `ThreadMenuButton(pinned:)`).
     pub(crate) fn thread_panel_buttons(&mut self, panel: &str, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let thread = self.threads.get(pinned_thread(panel)?).cloned()?;
+        let thread = self.threads.get(pinned_thread(panel)?).map(|t| (**t).clone())?;
         let share = self.website_url.is_some().then(|| self.render_share_button(&thread, cx));
         let more = self.render_more_button(&thread, cx);
         Some(h_flex().flex_none().items_center().children(share).child(more).into_any_element())
@@ -250,7 +252,7 @@ impl Threadbear {
                     self.load_remote_logins(runner, cx);
                 }
                 let composer = self.composer_for(&thread.id, window, cx);
-                let (client, summary) = (self.client.clone(), thread.clone());
+                let (client, summary) = (self.client.clone(), (*thread).clone());
                 // One kept loaded since it was last open shows at once.
                 let pane = match self.kept.take(&thread.id, cx) {
                     Some(pane) => {
@@ -272,7 +274,7 @@ impl Threadbear {
         };
         let mut column = v_flex().size_full();
         let (account, remote) = (self.sign_in_account(&thread, cx), self.remote_sign_in_runner(&thread, cx));
-        if account.is_some() || remote.is_some() {
+        if self.sign_in_needed(&thread, cx) {
             column = column.child(self.render_signin_banner(&thread, account, remote, cx));
         }
         if let Some(bar) = self.pending_reviews_bar(&thread, cx) {

@@ -11,6 +11,7 @@ pub mod download;
 #[cfg(target_os = "macos")]
 mod mac;
 pub mod panel_rules;
+pub mod preview_rules;
 
 pub use download::Progress;
 
@@ -31,6 +32,7 @@ pub use mac::host::{keyboard_holder, popup_menu, send_keys, take_keyboard, MenuI
 #[cfg(target_os = "macos")]
 pub use mac::panel::PanelPage;
 pub use panel_rules::{site, Event as PanelEvent, Kind as PanelKind};
+pub use preview_rules::PreviewSite;
 
 /// Who has the keyboard in the window GPUI's view fills (AppKit's first
 /// responder), for the dump and for giving it back (web_panels.rs).

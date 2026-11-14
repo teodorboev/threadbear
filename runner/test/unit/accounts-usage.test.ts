@@ -537,7 +537,7 @@ function discoveryRoot() {
   const accts = path.join(root, 'Accounts');
   const codexMain = path.join(root, 'dot-codex');
   fs.mkdirSync(codexMain);
-  return { root, main, accts, codexMain, cfg: { claudeMainDir: main, claudeMainJson: path.join(root, 'claude.json'), tokenStatsAccountsDir: accts, codexMainDir: codexMain, accountNotes: { 'claude-2': 'Convex work only' } } };
+  return { root, main, accts, codexMain, cfg: { userHome: root, pathEnv: '', claudeMainDir: main, claudeMainJson: path.join(root, 'claude.json'), tokenStatsAccountsDir: accts, codexMainDir: codexMain, accountNotes: { 'claude-2': 'Convex work only' } } };
 }
 
 test('Codex logins: auth.json exists (never opened) or the Keychain store, in ~/.codex and codex-N', () => {

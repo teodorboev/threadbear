@@ -561,7 +561,10 @@ public struct PhoneSchedule: Codable, Sendable, Hashable, Identifiable {
 
 public struct PhoneMessage: Codable, Sendable, Hashable, Identifiable {
     /// `tool` is one line for a tool call (backend API 2, phone:messages).
-    public enum Role: String, Codable, Sendable { case user, assistant, tool }
+    /// `note` is the line a thread writes when its login runs out and it
+    /// moves to another or waits for room (backend API 79, asked for with
+    /// `notes`): a quiet line of its own, never part of a turn's work.
+    public enum Role: String, Codable, Sendable { case user, assistant, tool, note }
 
     public var id: Int { seq }
     public var seq: Int
@@ -785,10 +788,14 @@ public enum ThreadItem: Identifiable, Hashable, Sendable {
     /// "6 min later · Mine the repo finished" before a turn the agent
     /// started by itself (Turns.fold).
     case gap(TurnGap)
+    /// "Moved to mike@example.org: mike@example.net hit its 5-hour limit":
+    /// the runner's line when a thread's login ran out (Turns.fold).
+    case note(PhoneMessage)
 
     public var id: Int {
         switch self {
         case let .message(m): m.seq
+        case let .note(m): m.seq
         case let .tools(items): items.first?.seq ?? 0
         // Negative, so it never meets the seq of the message it folds.
         case let .worked(w): -(w.items.first?.id ?? 0) - 1
@@ -800,7 +807,9 @@ public enum ThreadItem: Identifiable, Hashable, Sendable {
     public static func group(_ messages: [PhoneMessage]) -> [ThreadItem] {
         var out: [ThreadItem] = []
         for m in messages {
-            if m.role == .tool {
+            if m.role == .note {
+                out.append(.note(m))
+            } else if m.role == .tool {
                 if case var .tools(items)? = out.last {
                     items.append(m)
                     out[out.count - 1] = .tools(items)
@@ -928,6 +937,8 @@ public enum BackendCompatibility {
     /// an older backend still gets phone:thread and the runner's paging.
     public static let currentAPIVersion = 35
     public static let messagePagesAPIVersion = 2
+    /// From 79 phone:messages gives a login's notes to an app that asks.
+    public static let loginNotesAPIVersion = 79
     /// From 3 each phone chooses when it's notified (phone:setNotifications).
     public static let notificationSettingAPIVersion = 3
     /// From 4 registerDevice takes the phone's relay key.

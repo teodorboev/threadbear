@@ -46,6 +46,15 @@ pub(crate) struct StageState {
 
     /// The option and shot the row under the stage last scrolled to.
     followed: Option<(usize, usize)>,
+    /// A page shot on show, sealed with its scripts off (`review.media`):
+    /// its file and its view, dropped once another shot shows.
+    pub(crate) page: Option<(String, Rc<threadbear_web::PanelPage>)>,
+    /// Why the page shot on show couldn't show in place, by its file.
+    page_failed: Option<(String, String)>,
+    /// What the page is waiting for (the runtime), for the dump.
+    page_waiting: Option<String>,
+    /// The web runtime watched, so the stage draws again as it starts.
+    runtime_watch: Option<Subscription>,
 }
 
 struct Zoomed {
@@ -55,6 +64,11 @@ struct Zoomed {
 }
 
 impl StageState {
+    /// Why the last page shot couldn't show in place, for the dump.
+    pub(crate) fn page_failed_reason(&self) -> Option<String> {
+        self.page_failed.as_ref().map(|(_, why)| why.clone()).or_else(|| self.page_waiting.clone())
+    }
+
     pub(crate) fn zoom_requested(&mut self, step: ZoomStep) {
         match &mut self.zoom {
             Some(z) => z.zoom.apply(step),
@@ -267,6 +281,13 @@ impl ReviewWindow {
         self.stage.zoom = None;
         self.after_zoom();
         let fit = GalleryLayout::fit(rules::aspect(&shot.image), f64::from(room.size.width), f64::from(room.size.height));
+        // A page in place, sealed as the pane's are: only its own named
+        // assets, no network, its scripts off (the Swift window's too).
+        if let Some(page) = shot.page() {
+            if let Some(view) = self.stage_page(page, window, cx) {
+                return div().id("review-media").absolute().size_full().flex().items_center().justify_center().child(div().flex_none().w(pt(fit.0)).h(pt(fit.1)).child(view)).into_any_element();
+            }
+        }
         if let Some(video) = shot.video().filter(|_| crate::media_view::SHOWN_HERE) {
             let path = video.to_owned();
             // Fitted as its still is, so the controls sit on the film.
@@ -322,6 +343,61 @@ impl ReviewWindow {
                     .child(div().absolute().inset_0().bg(hsla(0., 0., 0., 0.35)).flex().items_center().justify_center().child(button)),
             )
             .into_any_element()
+    }
+
+    /// The page's view, placed where it's drawn each frame, or None while the
+    /// web runtime isn't running here or the gate won't show the file: then
+    /// the still and Open the page, as before.
+    fn stage_page(&mut self, path: &str, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let Some(runtime) = crate::web_runtime::runtime(cx) else {
+            self.stage.page_waiting = Some("no web runtime here".into());
+            return None;
+        };
+        // Drawn again as it starts, so the page comes once it's running.
+        if self.stage.runtime_watch.is_none() {
+            self.stage.runtime_watch = Some(cx.observe(&runtime, |_, _, cx| cx.notify()));
+        }
+        if runtime.read(cx).state != threadbear_core::web_runtime::State::Ready || !runtime.update(cx, |r, cx| r.ensure_engine(cx)) {
+            self.stage.page_waiting = Some(format!("runtime {:?}", runtime.read(cx).state));
+            return None;
+        }
+        self.stage.page_waiting = None;
+        if self.stage.page_failed.as_ref().is_some_and(|(p, _)| p == path) {
+            return None;
+        }
+        if self.stage.page.as_ref().is_none_or(|(p, _)| p != path) {
+            self.stage.page = None;
+            let made = (|| {
+                let real = threadbear_core::local_preview::decide_page(path, Origin::ThisMac)?;
+                let site = threadbear_core::local_preview::Site::new(&real, None).ok_or_else(|| "its folder couldn't be read".to_owned())?;
+                let preview = threadbear_web::PreviewSite::new(std::sync::Arc::new(site), false);
+                let parent = crate::web_panels::native_view(window).ok_or_else(|| "the window has no view".to_owned())?;
+                let (page, _events) = threadbear_web::PanelPage::open(parent, &preview.page_url(), threadbear_web::PanelKind::Preview(preview))?;
+                Ok::<_, String>(page)
+            })();
+            match made {
+                Ok(page) => self.stage.page = Some((path.to_owned(), Rc::new(page))),
+                Err(why) => {
+                    self.stage.page_failed = Some((path.to_owned(), why));
+                    return None;
+                }
+            }
+        }
+        let page = self.stage.page.as_ref()?.1.clone();
+        // The title bar's menu draws under a native view: out of sight while it's up.
+        let covered = self.more_open;
+        Some(
+            canvas(
+                move |bounds, window, _| {
+                    let height = f32::from(window.viewport_size().height);
+                    page.set_bounds(f32::from(bounds.origin.x), f32::from(bounds.origin.y), f32::from(bounds.size.width), f32::from(bounds.size.height), height);
+                    page.set_hidden(covered);
+                },
+                |_, _, _, _| {},
+            )
+            .size_full()
+            .into_any_element(),
+        )
     }
 
     /// The whole image small, top right, with a box for the part on show, while

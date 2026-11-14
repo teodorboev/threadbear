@@ -21,9 +21,26 @@ class PairingTest {
         assertEquals("mac.tail9ef766.ts.net:3210", p.serverName)
         assertEquals(p, Pairing.parse(p.link))
         for (bad in listOf("http://mac.tail9ef766.ts.net:3210", "https://user@mac.tail9ef766.ts.net:3210", "https://mac.tail9ef766.ts.net:3210/api",
-            "https://mac.tail9ef766.ts.net:3210?x=1", "https://ts.net", "https://evil.ts.net.example.com", "https://tail9ef766.ts.net")) {
+            "https://mac.tail9ef766.ts.net:3210?x=1")) {
             assertNull(Pairing.parse("threadbear://pair?url=${java.net.URLEncoder.encode(bad, "UTF-8")}&token=t"), bad)
         }
+    }
+
+    @Test fun pairsWithABackendAtAnyHttpsAddress() {
+        for ((raw, want) in listOf("https://Threadbear.Example.com" to "https://threadbear.example.com", "https://threadbear.example.com/" to "https://threadbear.example.com",
+            "https://192.168.1.20:8443" to "https://192.168.1.20:8443")) {
+            val p = assertNotNull(Pairing.parse("threadbear://pair?url=${java.net.URLEncoder.encode(raw, "UTF-8")}&token=t"), raw)
+            assertEquals(want, p.deploymentUrl)
+            assertEquals(p, Pairing.parse(p.link))
+        }
+        for (bad in listOf("http://threadbear.example.com", "https://user:pw@threadbear.example.com", "https://threadbear.example.com/convex",
+            "https://127.0.0.1:13210", "https://localhost:3210", "https://[::1]:3210")) {
+            assertNull(Pairing.parse("threadbear://pair?url=${java.net.URLEncoder.encode(bad, "UTF-8")}&token=t"), bad)
+        }
+        assertEquals("threadbear.example.com:8443", Pairing.serverName("https://threadbear.example.com:8443"))
+        assertEquals("threadbear.example.com", Pairing.serverName("https://threadbear.example.com"))
+        assertEquals("happy-bear-123.convex.cloud", Pairing.serverName("https://happy-bear-123.convex.cloud:443"))
+        assertEquals("127.0.0.1", Pairing.serverName("http://127.0.0.1:3210"))
     }
 
     @Test fun siteUrlBecomesCloud() {
@@ -39,8 +56,8 @@ class PairingTest {
         assertEquals(mapOf("r1" to key), Pairing.parse("threadbear://pair?url=https://x.convex.cloud&token=t&key=r1:${key.replace('+', ' ')}")?.runnerKeys)
     }
 
-    @Test fun refusesOtherHosts() {
-        assertNull(Pairing.parse("threadbear://pair?url=https://evil.example.com&token=t"))
+    @Test fun refusesPlainHttpAndBadLinks() {
+        assertNull(Pairing.parse("threadbear://pair?url=http://evil.example.com&token=t"))
         assertNull(Pairing.parse("threadbear://pair?url=http://a.convex.cloud&token=t"))
         assertNull(Pairing.parse("threadbear://pair?url=https://a.convex.cloud"))
         assertNull(Pairing.parse("https://pair?url=https://a.convex.cloud&token=t"))

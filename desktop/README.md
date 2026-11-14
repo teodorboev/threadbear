@@ -39,6 +39,10 @@ folder browser.
   their popup menus laid out as macOS's are, in the app's own softer look
   (`src/menu/mac_look.rs`), patched in
   from `Cargo.toml`. Why, and how to bump it: `docs/gpui-port.md`.
+- **`vendor/gpui-base/` and `vendor/gpui-pre/`**, the kit's base and GPUI
+  itself with input, text, test-support and file-drop fixes. The patches in
+  `Cargo.toml` select them; their changes are listed there and in
+  `docs/gpui-port.md`.
 - **`gpui/`, the app.** GPUI has no tokio, so the connection runs on its own
   runtime and its events cross on a channel (`main.rs`). With the `automation`
   feature (never in a release) `automation.rs` takes the same scripted commands
@@ -46,6 +50,11 @@ folder browser.
 - **Which runner.** The one in `THREADBEAR_HOME` (default `~/Library/Application
   Support/Threadbear`, which the runner uses on Linux too), on the port from
   its `runner.json` (default 8797), as `tb` finds it.
+
+The vendored base text style has two opt-in settings for reply Markdown:
+`table_natural_width` caps short tables at their measured content width, and
+`list_item_gap` sets the space between items. The kit defaults stay unchanged;
+`gpui/src/rows/markdown.rs` enables them for Threadbear replies.
 
 ## Run it
 
@@ -70,8 +79,8 @@ the app with `THREADBEAR_HOME=/tmp/tb-mock`.
 
 ## Installing it on a Mac
 
-It's an experiment (`runner/src/experiments/gpuiApp.md`): turn it on in
-`runner.json`, then:
+The Swift app offers it ("Try the new Threadbear app", which runs
+`scripts/switch-from-swift.sh`), or from a terminal:
 
 ```bash
 scripts/install-app.sh                      # builds here, about 10 minutes
@@ -94,6 +103,14 @@ mock runner. Run Rust builds and suites elsewhere (`scripts/remote.sh`):
 scripts/remote.sh cloud -- bash -c 'cd desktop && cargo test -p threadbear-core'
 ```
 
+The file-drop dispatch tests use GPUI's test platform, exposed by `automation`.
+The Desktop workflow runs them explicitly on Linux, Mac and Windows. To run
+them on a check host:
+
+```bash
+scripts/remote.sh cloud -- bash -c 'cd desktop && cargo test -p threadbear-gpui --features automation --test file_drop'
+```
+
 `../check.sh` (and so `tb land`) runs `cargo test -p threadbear-core -p
 threadbear-client` on its check host whenever something under `desktop/`
 changed, and the full check adds `cargo check --workspace --all-targets`.
@@ -110,6 +127,42 @@ they agree again.
 
 `.github/workflows/desktop.yml` runs it all on Linux, Mac and Windows and
 uploads each platform's binary as the run's artifacts.
+
+## Seeing and driving it on a Mac
+
+`scripts/dev-app.sh start --mock` runs the debug build with the scripted
+control (`automation.rs`) behind your windows, against the mock runner or a
+dev runner's `--home`, then `do`, `dump`, `shot`, `rebuild`, `log` and
+`stop` drive it (`--help` says the rest). A scripted app refuses the real
+data folder and its live runner, and copies to a pasteboard of its own
+(`gpui/src/scripted.rs`).
+
+The build runs on an `updateBuildHosts` Mac and comes back here. Its Lucide
+SVGs are embedded in debug builds too (`rust-embed/debug-embed` in
+`gpui/Cargo.toml`), so it needs no files from that Mac's Cargo registry.
+`cargo test -p threadbear-gpui --test assets` checks the whole icon catalog
+comes from embedded bytes, even when the registry is present.
+
+The printed build log receives both output streams as the build runs,
+whether here or on another Mac. Failed builds keep the full log.
+
+`context-menus` lists the popup menus actually drawn in the scripted window,
+with each menu's item titles. It reads the rendered menus rather than
+calling a menu builder, so a test can catch two menus opening for one click.
+
+`peek` with `picture: true` reports the PDF/video hover card’s actual cached
+image dimensions or its loading/failure state. On a Mac,
+`bash desktop/scripts/test-media-hover.sh` checks descriptor ownership, bounds,
+private snapshots and late decoder callbacks with generated media.
+
+The Mac selection bridge is `gpui/src/native_text.rs` and
+`native/text_selection.m`; Translate's public SwiftUI popover is the small
+`native/translation.swift` anchor. A root plugin watches focus/selection
+changes once per window. It passes frozen plain text to AppKit; a return
+rechecks the original field, range, words and editability before an undoable edit.
+`native-text` automation uses real AppKit requestors with unique pasteboards;
+its test-only entrypoints are absent from release builds. Native focus specs
+carry `@real-screen` and run on Tinker Desk under the host lease.
 
 ## Seeing it on a server
 

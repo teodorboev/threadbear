@@ -1366,7 +1366,7 @@ impl TranscriptModel {
     pub(crate) fn is_work_row(row: &Row) -> bool {
         match &row.content {
             RowContent::Tool(tool) => !Self::is_taken_end_turn(tool),
-            RowContent::Note(_) if row.content.is_wake_note() => false,
+            RowContent::Note(_) if row.content.is_wake_note() || row.content.is_login_note() => false,
             RowContent::Reasoning(_) | RowContent::Note(_) => true,
             RowContent::Approval(item) => item.is_allowed(),
             _ => false,
@@ -1514,10 +1514,58 @@ impl TranscriptModel {
         let from = summary.and_then(|k| turns.iter().position(|id| *id == key(k))).unwrap_or(0);
         let mut out = HashSet::new();
         for id in &turns[from..] {
-            let items: Vec<usize> = turn.clone().filter(|&k| key(k) == *id).collect();
+            // Without the error's own words over again (`is_error_echo`),
+            // before the reply is chosen: left in, they beat a summary the
+            // turn wrote just before its login ran out, and taking them out
+            // afterwards left that turn with no reply at all (Codex's
+            // review, 13 Nov).
+            let items: Vec<usize> = turn.clone().filter(|&k| key(k) == *id && !self.is_error_echo(k)).collect();
             out.extend(self.reply_of(&items));
         }
         out
+    }
+
+    /// A failed turn's last message when it's the error over again. The
+    /// Claude CLI writes its own "You've hit your 5-hour limit · resets
+    /// 11:30am" as a message, and the runner's error says the same words, so
+    /// the transcript had them twice, one above the other (13 Nov 2026). A
+    /// finished turn draws only the error.
+    fn is_error_echo(&self, k: usize) -> bool {
+        let item = &self.items[k];
+        let RowContent::Assistant(said) = &item.content else { return false };
+        // Its turn's error; for a message that never got its turn (one that
+        // was streaming as the app reconnected keeps none), the error right
+        // after it.
+        let error = match &item.turn_id {
+            Some(turn) => self.error_row_for_turn.get(turn).and_then(|id| self.item_index.get(id)).and_then(|&i| self.items.get(i)),
+            None => self.items.get(k + 1),
+        };
+        let Some(RowContent::Error { message, .. }) = error.map(|row| &row.content) else { return false };
+        let message = message.trim();
+        !message.is_empty() && message == said.text.trim()
+    }
+
+    /// The error of a turn that stopped at its login's limit, with the
+    /// runner's note after it saying what it did about that: moved to
+    /// another login, or is waiting for room (`is_login_note`). The note
+    /// stays on show and says which login ran out and when it's back, so
+    /// the error isn't drawn as well: it sat red over a thread that had
+    /// carried on by itself. With no such note (a thread told not to carry
+    /// on, say) the error stays: it's all there is to say why the thread
+    /// stopped.
+    fn limit_was_handled(&self, k: usize) -> bool {
+        let item = &self.items[k];
+        if !matches!(item.content, RowContent::Error { kind: Some(TurnErrorKind::UsageLimit), .. }) {
+            return false;
+        }
+        // The notes between this turn and the next one.
+        self.items[k + 1..].iter().filter(|later| later.turn_id != item.turn_id).take_while(|later| later.turn_id.is_none()).any(|later| later.content.is_login_note())
+    }
+
+    /// What a finished turn doesn't draw at all, in its line of work or out
+    /// of it: something else on show says the same.
+    fn is_unshown(&self, k: usize) -> bool {
+        self.is_error_echo(k) || self.limit_was_handled(k)
     }
 
     /// One turn's reply: the messages it wrote after its last real step and
@@ -1636,7 +1684,7 @@ impl TranscriptModel {
     /// the work carried on. The note an edit of Mike's leaves stays.
     fn stays_out(&self, k: usize, replies: &HashSet<usize>) -> bool {
         let item = &self.items[k];
-        if replies.contains(&k) || item.id.starts_with("rw:") || item.content.is_wake_note() {
+        if replies.contains(&k) || item.id.starts_with("rw:") || item.content.is_wake_note() || item.content.is_login_note() {
             return true;
         }
         match &item.content {
@@ -1681,7 +1729,7 @@ impl TranscriptModel {
     /// Something of the agent's that a finished stretch shows on its own
     /// (not Mike's message, the footer or a card that's gone).
     fn shows_in_stretch(&self, k: usize, replies: &HashSet<usize>) -> bool {
-        if !self.stays_out(k, replies) {
+        if !self.stays_out(k, replies) || self.is_unshown(k) {
             return false;
         }
         match &self.items[k].content {
@@ -1745,7 +1793,7 @@ impl TranscriptModel {
             if self.stays_out(i, &replies) {
                 return Some((row.id.clone(), None));
             }
-            return Some((row.id.clone(), turn.into_iter().find(|&k| !self.stays_out(k, &replies)).map(|k| format!("g:{}", self.items[k].id))));
+            return Some((row.id.clone(), turn.into_iter().find(|&k| !self.stays_out(k, &replies) && !self.is_unshown(k)).map(|k| format!("g:{}", self.items[k].id))));
         }
         let start = self.run_start(i as isize);
         Some((row.id.clone(), if self.run_end(i as isize) - start > 1 { Some(format!("g:{}", self.items[start].id)) } else { None }))
@@ -1866,7 +1914,7 @@ impl TranscriptModel {
                 // Every row of a finished turn starts at its first item, so a
                 // change anywhere in it rebuilds it whole (run_start).
                 let replies = self.replies(turn.clone());
-                let folded: Vec<usize> = turn.clone().filter(|&k| !self.stays_out(k, &replies) && !self.is_floating_card(k)).collect();
+                let folded: Vec<usize> = turn.clone().filter(|&k| !self.stays_out(k, &replies) && !self.is_floating_card(k) && !self.is_unshown(k)).collect();
                 // The line of work goes above the reply, even when the reply
                 // came first: a turn that only answered has its summary
                 // folded under it (reply_of).
@@ -1901,7 +1949,7 @@ impl TranscriptModel {
                 });
                 for k in turn.clone() {
                     let row = &self.items[k];
-                    if self.is_floating_card(k) {
+                    if self.is_floating_card(k) || self.is_unshown(k) {
                         continue;
                     }
                     if Some(k) == review_at && Some(k) != group_at {

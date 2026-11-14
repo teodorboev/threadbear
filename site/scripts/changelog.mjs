@@ -20,8 +20,14 @@
 //         "media"?: { "type": "clip", "src": "x.mp4", "poster": "x.webp", "width", "height", "alt" }
 //                 | { "type": "image", "src": "x.webp", "width", "height", "alt" } }
 //     ],
-//     "added": ["..."], "changed": ["..."], "fixed": ["..."]
+//     "added": ["...", { "text": "...", "credit": "Wayne Sutton" }], "changed": [...], "fixed": [...]
 //   }
+// A line is its text, or { text, credit } when it came from someone else: their PR, fork, issue
+// or report (Mike, 13 Nov: "attribute any fixes or whatever to people if it came from other
+// people"). Highlights take a credit the same way. Each name in a credit is linked from
+// site/changelog/people.json (a name to their X account if their GitHub profile gives one, else
+// their fork of Threadbear, else their GitHub profile), and the build refuses a credit that
+// names nobody in it.
 // Media names are relative to /media/changelog/<release>/.
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
@@ -33,8 +39,24 @@ const MEDIA_NAME = /^[a-z0-9][a-z0-9-]*\.(webp|png|jpg|mp4)$/;
 /** The media address for a file of a release. */
 export const mediaPath = (release, name) => `/media/changelog/${release}/${name}`;
 
+/** site/changelog/people.json: who's thanked, and where their name links to. */
+export function readPeople(dir) {
+  const people = JSON.parse(readFileSync(join(dir, "people.json"), "utf8"));
+  for (const [name, url] of Object.entries(people)) {
+    if (!/^https:\/\/(x\.com|github\.com)\//.test(url)) throw new Error(`site/changelog/people.json: ${name}'s link should be their X or GitHub page`);
+  }
+  return people;
+}
+
+/** The names of `people` that `credit` mentions, as whole words. */
+const namesIn = (credit, people) =>
+  Object.keys(people).filter((n) => new RegExp(`(^|[^\\p{L}])${n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}($|[^\\p{L}])`, "u").test(credit));
+
 /** Every release file in `dir`, checked, newest first. A bad one stops the build with its name. */
-export function readReleases(dir) {
+export function readReleases(dir, people = readPeople(dir)) {
+  const checkCredit = (credit, at) => {
+    if (credit && !namesIn(credit, people).length) throw new Error(`${at}: the credit "${credit}" names nobody in site/changelog/people.json; add them there with a link`);
+  };
   const files = readdirSync(dir).filter((f) => /^\d{4}-\d{2}-\d{2}\.json$/.test(f)).sort().reverse();
   return files.map((file) => {
     const where = `site/changelog/${file}`;
@@ -47,7 +69,8 @@ export function readReleases(dir) {
     if (r.release !== file.slice(0, 10)) throw new Error(`${where}: "release" should be ${file.slice(0, 10)}`);
     for (const k of KINDS) {
       r[k] ??= [];
-      if (!Array.isArray(r[k]) || r[k].some((l) => typeof l !== "string" || !l.trim())) throw new Error(`${where}: "${k}" should be a list of lines`);
+      const ok = (l) => (typeof l === "string" ? l.trim() : l && typeof l.text === "string" && l.text.trim() && typeof l.credit === "string" && l.credit.trim());
+      if (!Array.isArray(r[k]) || !r[k].every(ok)) throw new Error(`${where}: "${k}" should be a list of lines, each its text or { text, credit }`);
     }
     r.highlights ??= [];
     r.highlights.forEach((h, i) => {
@@ -64,6 +87,8 @@ export function readReleases(dir) {
       if (!(m.width > 0 && m.height > 0)) throw new Error(`${at}: media needs its width and height`);
       if (!m.alt?.trim()) throw new Error(`${at}: media needs alt text saying what it shows`);
     });
+    r.highlights.forEach((h, i) => checkCredit(h.credit, `${where} highlight ${i + 1}`));
+    for (const k of KINDS) r[k].forEach((l) => checkCredit(l.credit, `${where} ${k} line "${(l.text ?? l).slice(0, 40)}"`));
     if (!r.highlights.length && !KINDS.some((k) => r[k].length)) throw new Error(`${where} has nothing in it`);
     return r;
   });
@@ -104,8 +129,23 @@ function media(release, m) {
   throw new Error(`Unknown media type ${m.type}`);
 }
 
+/** "Thanks to <name>" after a card's or a line's text, when it came from someone else. */
+let people = {};
+const creditTag = (who) => {
+  if (!who) return "";
+  let html = pageText(who);
+  // Longest first, so a name inside a longer one isn't linked twice.
+  for (const name of namesIn(who, people).sort((a, b) => b.length - a.length)) {
+    html = html.replace(pageText(name), `<a href="${people[name]}">${pageText(name)}</a>`);
+  }
+  return ` <span class="cl-credit">Thanks to ${html}</span>`;
+};
+
+/** A plain line: its text, and who it came from when it says. */
+const lineHtml = (l) => (typeof l === "string" ? pageText(l) : `${pageText(l.text)}${creditTag(l.credit)}`);
+
 function highlight(release, h) {
-  const credit = h.credit ? ` <span class="cl-credit">Thanks to ${pageText(h.credit)}</span>` : "";
+  const credit = creditTag(h.credit);
   return `          <article class="cl-feature">
             <p class="cl-kind ${h.kind}">${LABELS[h.kind]}</p>
             <h3>${pageText(h.title)}</h3>
@@ -115,7 +155,8 @@ function highlight(release, h) {
 }
 
 /** The page's content, for writePage. */
-export function changelogPage({ releases, githubUrl }) {
+export function changelogPage({ releases, githubUrl, people: who = {} }) {
+  people = who;
   const sections = releases.map((r, i) => {
     const { weekday, date, year } = dayName(r.release);
     const counts = KINDS.map((k) => [k, r[k].length + r.highlights.filter((h) => h.kind === k).length]).filter(([, n]) => n);
@@ -127,7 +168,7 @@ export function changelogPage({ releases, githubUrl }) {
     const lists = KINDS.filter((k) => r[k].length).map((k) => `            <div>
               <p class="cl-kind ${k}">${r.highlights.length ? (k === "added" ? "Also new" : `Also ${k}`) : LABELS[k]}</p>
               <ul>
-${r[k].map((l) => `                <li>${pageText(l)}</li>`).join("\n")}
+${r[k].map((l) => `                <li>${lineHtml(l)}</li>`).join("\n")}
               </ul>
             </div>`);
     return `        <section class="cl-release" id="${r.release}" aria-labelledby="h-${r.release}">

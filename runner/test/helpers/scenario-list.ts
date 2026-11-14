@@ -16,6 +16,66 @@ export type Scenario = { name: string; play: (p: Play) => void; shows: string[] 
 
 export const SCENARIOS: Scenario[] = [
   {
+    name: 'a Notion board card mentioned beside a draft picture',
+    shows: ['Please check', 'Pick the share button colour'],
+    play: (p) => {
+      p.say('Ready for the card.');
+      p.endTurn({ needs: 'nothing' });
+      const dir = tmpDir('tb-board-mention-');
+      const file = path.join(dir, 'draft.png');
+      fs.writeFileSync(file, makePng(4, 4));
+      p.send('Please check [Picture 1] [Pick the share button colour](https://www.notion.so/1a2b3c4d5e6f40718293a4b5c6d7e8f9) ', [{ path: file, mediaType: 'image/png' }]);
+      p.say('I will read Pick the share button colour and compare the picture.');
+      p.endTurn({ needs: 'nothing' });
+    },
+  },
+  {
+    name: 'a message saved after Stop before the model started',
+    shows: ['Please fix the spot in this picture.', 'Your stopped message and pictures are saved for your next message.', 'Continuing on another model.', 'I can fix the spot.'],
+    play: (p) => {
+      p.say('Ready.');
+      p.endTurn({ needs: 'nothing' });
+      p.send('Please fix the spot in this picture.');
+      p.earlyStop();
+      p.send('Continuing on another model.');
+      p.say('I can fix the spot.');
+      p.endTurn({ needs: 'nothing' });
+    },
+  },
+  {
+    name: 'a message sent from the phone app',
+    shows: ['The photo can wait until tomorrow.'],
+    play: (p) => {
+      p.say('I will check the photo.');
+      p.endTurn({ needs: 'nothing' });
+      p.sendFromPhone('The photo can wait until tomorrow.');
+      p.say('All right, I will leave it for tomorrow.');
+      p.endTurn({ needs: 'nothing' });
+    },
+  },
+  {
+    // bruce's Claude login was signed out (canary, 13 Nov): its turns
+    // failed there, and this Mac showed each as an empty reply.
+    name: 'a turn that failed',
+    shows: ['The last turn failed'],
+    play: (p) => {
+      p.fail('Failed to authenticate: OAuth session expired and could not be refreshed');
+    },
+  },
+  {
+    // A Pixel thread ran out on one login and carried on on another, and
+    // on the Mac it showed the limit's words and then a reply, with
+    // nothing to say it had changed login (13 Nov). The note isn't in
+    // `shows`: the website and the phone leave it out.
+    name: 'a thread that moved to another login',
+    shows: ['Half way there.'],
+    play: (p) => {
+      p.say('Half way there.');
+      p.endTurn({ needs: 'nothing' });
+      p.loginMoved();
+    },
+  },
+  {
     name: 'a decision card, with what each answer does and a pick',
     shows: ['Same thread or new?', 'One thread that moves', 'The old one is archived'],
     play: (p) => {
@@ -32,15 +92,6 @@ export const SCENARIOS: Scenario[] = [
         { question: 'Deploy the fix?', options: [{ label: 'Deploy' }, { label: 'Wait' }], links: [{ title: 'See the diff', url: 'https://github.com/mikecann/threadbear/pull/1' }] },
         { question: 'Plug in the phone and say when.' },
       ] });
-    },
-  },
-  {
-    name: 'a card with a command to run',
-    shows: ['Backfill the titles on prod?', 'npx convex run --prod migrations:backfill'],
-    play: (p) => {
-      p.say('It needs your OK for prod.');
-      p.runAsks();
-      p.endTurn({ needs: 'you', asks: [{ question: 'Backfill the titles on prod?', run: 'npx convex run --prod migrations:backfill' }] });
     },
   },
   {

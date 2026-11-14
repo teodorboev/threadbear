@@ -1105,3 +1105,47 @@ test("runner: a trusted hook whose script changed after the last look isn't run;
   assert.equal(h.events(thread.id).filter((e) => e.type === 'action.run').length, 0);
   assert.equal(fs.existsSync(ran), false);
 });
+
+// Trust pressed on two patches one after the other (the Patches panel's
+// two rows): the second came while the first one's re-read was still
+// going, in a slow badge. That read had already found the second patch
+// untrusted, and the second press's re-read was dropped because a read
+// was running, so the row kept saying "Changed since you trusted it"
+// until the next poll, 15 to 20 seconds later (13 Nov 2026).
+test('runner: Trust pressed on a second patch while the first one is still loading loads both', async () => {
+  const root = tmpDir();
+  const project = path.join(root, 'app');
+  const dir = path.join(project, '.threadbear', 'patches');
+  fs.mkdirSync(dir, { recursive: true });
+  // a's badge says it has started, then waits to be let go: by then the
+  // read has looked at b (files load in order, live state after).
+  const gate = tmpDir();
+  const entered = path.join(gate, 'entered');
+  const go = path.join(gate, 'go');
+  fs.writeFileSync(
+    path.join(dir, 'a.ts'),
+    `import fs from 'node:fs';\nexport default { panels: [{ title: "A", url: "https://example.com/a", badge: async () => { fs.writeFileSync(${JSON.stringify(entered)}, ''); while (!fs.existsSync(${JSON.stringify(go)})) await new Promise((r) => setTimeout(r, 20)); return 1; } }] };\n`,
+  );
+  fs.writeFileSync(path.join(dir, 'b.ts'), `export default { panels: [{ title: "B", url: "https://example.com/b", badge: () => 1 }] };\n`);
+  const home = tmpDir();
+  const h = makeHarness(home, {}, { panelsRoot: root, patchTrust: new PatchTrust({ file: path.join(home, 'patch-trust.json') }) });
+  const { thread } = h.runner.create({ text: 'hi', accountId: 'claude-3', cwd: project });
+  await tick();
+  await h.runner.patchesIdle();
+  const shown = h.runner.get(thread.id).patches!;
+  const [a, b] = ['a', 'b'].map((id) => shown.find((p) => p.id === id)!);
+  assert.equal(a.untrusted, 'new');
+  assert.equal(b.untrusted, 'new');
+
+  const first = h.runner.trustPatches(thread.id, [{ file: a.file!, hash: a.hash! }]);
+  for (let i = 0; !fs.existsSync(entered); i++) {
+    assert.ok(i < 400, `a's badge never ran: ${JSON.stringify(h.runner.get(thread.id).patches)}`);
+    await new Promise((r) => setTimeout(r, 20));
+  }
+  const second = h.runner.trustPatches(thread.id, [{ file: b.file!, hash: b.hash! }]);
+  fs.writeFileSync(go, '');
+  await Promise.all([first, second]);
+  const after = h.runner.get(thread.id);
+  assert.deepEqual(after.patches?.filter((p) => p.untrusted).map((p) => p.id), []);
+  assert.deepEqual(after.panels?.filter((p) => p.title === 'A' || p.title === 'B').map((p) => p.title).sort(), ['A', 'B']);
+});

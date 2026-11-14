@@ -1,0 +1,115 @@
+{
+  "release": "2026-11-12",
+  "highlights": [
+    {
+      "kind": "added",
+      "title": "Another lab's review, finding by finding",
+      "text": "When your other provider reviews a thread's change, each thing it finds gets a number, and the thread has to answer every one: fixed, disputed with why, or left for you. The done card lists them with what was done, and the phone and website show them too.",
+      "media": {
+        "type": "image",
+        "src": "review-findings.webp",
+        "width": 1000,
+        "height": 540,
+        "alt": "A done card with \"Reviewed by Codex (codex-main), 2 rounds: passed\" and three findings: two with green ticks marked Fixed with what changed, and one with an orange mark marked Disputed with the thread's reason."
+      }
+    },
+    {
+      "kind": "added",
+      "title": "Parts of a project",
+      "text": "A project can be a part of another: Make a Part of in the project's menu. A part folds under its parent in the sidebar and is listed on the parent's page, and its threads are told the parent's goals as well as its own.",
+      "media": {
+        "type": "clip",
+        "src": "parts.mp4",
+        "poster": "parts.webp",
+        "width": 1600,
+        "height": 838,
+        "alt": "The Threadbear project's page. Photo sync is made a part of Threadbear: it leaves the sidebar's list, a Parts section with Photo sync appears at the top of the page, and opening Threadbear's row in the sidebar shows its threads with Photo sync folded under them."
+      }
+    },
+    {
+      "kind": "changed",
+      "title": "Projects: a row each, and tabs on the page",
+      "text": "With the Decisions experiment on, the sidebar's Projects list is one row a project, with its decisions or thread count, and its arrow shows the threads. A project's page has Decisions and Project tabs; ⇧⌘[ and ⇧⌘] step between them.",
+      "media": {
+        "type": "clip",
+        "src": "projects.mp4",
+        "poster": "projects.webp",
+        "width": 1600,
+        "height": 1058,
+        "alt": "The Projects sidebar with a row for each of Photo sync, Threadbear, Walkies and Not in a project. Threadbear's and Photo sync's arrows open and fold their threads, then clicking Threadbear opens its page on the Decisions tab with its questions; the Project tab shows its goals, state and notes, then it goes back to Decisions."
+      }
+    },
+    {
+      "kind": "changed",
+      "title": "Usage's weekly charts show the whole week",
+      "text": "Each login's weekly chart in the Usage panel shows the last seven days with their names along the bottom, and breaks the line where the week reset. A switch in the panel's Settings card hides Weekly Fable.",
+      "media": {
+        "type": "image",
+        "src": "usage-weekly.webp",
+        "width": 600,
+        "height": 640,
+        "alt": "A login in the Usage panel at its 5-hour limit, with a weekly chart from Friday to Saturday whose line jumps up at Sunday's reset and runs on dotted to when it would run out, and under it a Settings card with a Show Weekly Fable switch."
+      }
+    }
+  ],
+  "added": [
+    "Search finds a thread by what it's about, not just its title: the librarian gives each thread a few search words, so \"dentist\" finds \"Wisdom tooth meeting location\". On the phone, search also looks through every message",
+    {
+      "text": "The phone app shows a plan in full: a plan card that opens it in a sheet, with Copy and Share, and Go ahead on Claude's plan card",
+      "credit": "Wayne Sutton"
+    },
+    "Click a picture's chip or thumbnail in the message box to look at it in Quick Look",
+    "Schedule… in the message box's + menu opens a new schedule with what you've typed",
+    "A link to another site in a patch's panel opens in your browser (or over the panel, as your web links setting says), and the panel's bar gets a Back button",
+    "A quiet inbox: threads another thread started archive themselves once they're finished, and a thread waiting only on its helpers hibernates until they're done (an experiment)"
+  ],
+  "changed": [
+    "Move to another machine is on for everyone, no longer an experiment",
+    "Reply buttons, schedule checks and standing instructions are on for everyone, no longer experiments",
+    "The recap box on threads quiet for 12 hours is gone, after a day of trying it",
+    "A pool thread that ran out of room carries on as soon as any login in its pool has room again, and a login is used down to 1% left rather than 10%",
+    "The agent hears which of its reply buttons you pressed, so it doesn't do the same job again",
+    "Pasting several lines into the Terminal asks first, when the shell would run each line as it arrived",
+    {
+      "text": "Builds and tests Threadbear starts run at low priority rather than in the background, which was far too slow on some Macs; jobPriority in runner.json picks",
+      "credit": "Ville Lahdenvuo-Malta"
+    },
+    "The runner starts a couple of seconds faster",
+    "Messages from Android say they came from the phone app, not the iPhone app",
+    "The done card counts work pushed to a branch but not merged as still open (with the loose ends experiment on)",
+    "The new app for Mac, Windows and Linux (an experiment) caught up on most of this one: the Terminal, Settings, Scheduled, Usage, the options review window, the limit box, videos and PDFs in the side pane, panels that glide, and sends that wait out a runner restart. It also shows the model a sub-agent runs on, keeps your last 24 threads ready so switching back is instant, and installs its updates by itself"
+  ],
+  "fixed": [
+    "Closing the Terminal could leave the thread blank until you switched threads",
+    "An archived thread could leave a gap in the inbox for a few seconds on a busy Mac",
+    "The context ring's popover could run down past the bottom of the window",
+    {
+      "text": "The slash command list stays on the screen the message box is on, and goes under the box when there's more room there",
+      "credit": "Wayne Sutton"
+    },
+    "A long wait line between turns stays on one line",
+    "A long project name in the sidebar no longer runs under a row's hover buttons",
+    {
+      "text": "A home patch could make an Auto thread ask before every file edit; now only the commands it really runs count, and the card says which patch",
+      "credit": "Ville Lahdenvuo-Malta"
+    },
+    {
+      "text": "Two logins on the same email in a shared pool are no longer merged into one",
+      "credit": "UomoMacchina"
+    },
+    {
+      "text": "Joining a second Mac: tb is on the PATH, the host name it prints works, and ssh failures say what went wrong",
+      "credit": "Wayne Sutton"
+    },
+    "Picking another login or folder between turns no longer stops the agent's sub-agents",
+    {
+      "text": "On Windows, the new app names files by their normal drive path, so links to files open there",
+      "credit": "Platima"
+    },
+    {
+      "text": "Threadbear's guard on its own secrets folder caught fewer spellings than it should: other capital letters, and the runner's home variable",
+      "credit": "Platima"
+    },
+    "Closed several security holes, including a schedule edit that could approve a changed check, a repository's own git settings running from the done card's check, and a web panel's page opening browser tabs by itself"
+  ]
+}

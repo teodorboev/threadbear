@@ -115,7 +115,7 @@ impl ThreadPane {
                         .file_drag(Some(path.clone()))
                         .child(img(super::markdown::file_picture(&path)).w(px(frame.w)).h(px(frame.h)).rounded(px(8.)).object_fit(ObjectFit::Cover))
                         .test_support()
-                        .aria_label(label),
+                        .role(Role::Image).aria_label(label),
                 );
                 continue;
             };
@@ -141,7 +141,7 @@ impl ThreadPane {
                     )
                 })
                 .test_support()
-                .aria_label(label),
+                .role(Role::Image).aria_label(label),
             );
         }
         grid
@@ -161,10 +161,14 @@ impl ThreadPane {
     }
 
     /// Attachments sit above the bubble, right-aligned, with no box.
-    pub(crate) fn user_images(&self, images: &[ImageRef], cx: &mut Context<Self>) -> AnyElement {
+    pub(crate) fn user_images(&self, images: &[ImageRef], ix: usize, phone: bool, cx: &mut Context<Self>) -> AnyElement {
         let width = (self.column_width() * BUBBLE_SHARE).floor();
         let sizes: Vec<_> = images.iter().map(pixel_size).collect();
         let (frames, height) = image_frames(&sizes, width, USER_THUMB_HEIGHT, GRID_MAX_WIDTH, IMAGE_GAP, true);
-        div().mb(px(IMAGE_GAP)).child(self.image_grid(images, frames, height, width, cx)).into_any_element()
+        let left = frames.iter().map(|f| f.x).fold(width, f32::min);
+        div().relative().mb(px(IMAGE_GAP))
+            .child(self.image_grid(images, frames, height, width, cx))
+            .when(phone, |d| d.child(div().absolute().left(px(left - 24.)).top(px(height - 26.)).child(super::phone::mark(ix, cx))))
+            .into_any_element()
     }
 }

@@ -2,16 +2,18 @@
 import { After, Before, setDefaultTimeout, setWorldConstructor, Status, World, type IWorldOptions } from '@cucumber/cucumber';
 import fs from 'node:fs';
 import path from 'node:path';
+import { StandInBrowserBear } from './browserbear.ts';
 import { sleep, type Driver, type Dump, type Row, type Thread } from './driver.ts';
 import { GpuiDriver } from './gpui.ts';
 import { longThreadFolder } from './long-thread.ts';
 import { SwiftDriver } from './swift.ts';
-import { removeTempFolders } from './temp.ts';
+import { removeTempFolders, tempFolder } from './temp.ts';
 import { webRuntimeCleanup, webRuntimeSetup } from './web-runtime.ts';
 
 // Whatever a person running the specs asked for (features/README.md), kept
 // apart from the long-thread scenarios setting it for themselves.
 const startingFixtures = process.env.TB_MOCK_FIXTURES;
+const startingScriptedTurns = process.env.MOCK_SCRIPTED_TURNS;
 
 setDefaultTimeout(90_000);
 
@@ -32,6 +34,8 @@ export class ThreadbearWorld extends World {
   shareResult?: string;
   /** The thread whose page flew to its heading (archive-flight.steps.ts). */
   flownFrom?: string;
+  /** A stand-in BrowserBear, for @browserbear scenarios (support/browserbear.ts). */
+  bear?: StandInBrowserBear;
 
   constructor(options: IWorldOptions) {
     super(options);
@@ -77,6 +81,14 @@ export function describe(d: Dump): string {
 
 setWorldConstructor(ThreadbearWorld);
 
+// A pin request must survive other pane updates while its highlights arrive.
+Before({ tags: '@panel.requests and @highlights.pinned' }, () => {
+  process.env.THREADBEAR_MOCK_HIGHLIGHTS_DELAY_MS = '5000';
+});
+After({ tags: '@panel.requests and @highlights.pinned' }, () => {
+  delete process.env.THREADBEAR_MOCK_HIGHLIGHTS_DELAY_MS;
+});
+
 // The loading rows only show while the list is on its way, so that scenario's
 // mock answers late. Before the app starts, hence above the Before below.
 Before({ tags: '@sidebar.skeleton' }, () => {
@@ -96,6 +108,18 @@ After({ tags: '@thread.loading or @thread.kept' }, () => {
   delete process.env.THREADBEAR_MOCK_EVENTS_DELAY_MS;
 });
 
+// A real mock turn that can be interrupted while its picture is loading.
+// Seeded "running" rows have no executing turn for Stop to interrupt.
+Before({ tags: '@picture-loading' }, () => {
+  const file = path.join(tempFolder('threadbear-picture-turn-'), 'turns.json');
+  fs.writeFileSync(file, JSON.stringify([{ match: '^Hold the turn for picture input$', reply: 'Still working. '.repeat(100), chunk: 1, chunkMs: 250 }]));
+  process.env.MOCK_SCRIPTED_TURNS = file;
+});
+After({ tags: '@picture-loading' }, () => {
+  if (startingScriptedTurns === undefined) delete process.env.MOCK_SCRIPTED_TURNS;
+  else process.env.MOCK_SCRIPTED_TURNS = startingScriptedTurns;
+});
+
 Before(async function (this: ThreadbearWorld, { pickle }) {
   // A scenario about paging needs a thread longer than one page of events.
   const long = pickle.tags.some((t) => t.name === '@long-thread');
@@ -109,9 +133,18 @@ Before(async function (this: ThreadbearWorld, { pickle }) {
   // and the projectDecisions experiment on in its hello.
   if (pickle.tags.some((t) => t.name === '@project-decisions')) process.env.TB_MOCK_DECISIONS = '1';
   else delete process.env.TB_MOCK_DECISIONS;
+  // Open Anything's experiment off: the mock's hello leaves it out.
+  if (pickle.tags.some((t) => t.name === '@open-anything-off')) process.env.TB_MOCK_OPEN_ANYTHING_OFF = '1';
+  else delete process.env.TB_MOCK_OPEN_ANYTHING_OFF;
   // Parts of a project: Photo sync as a part of Threadbear.
   if (pickle.tags.some((t) => t.name === '@project-parts')) process.env.TB_MOCK_PARTS = '1';
   else delete process.env.TB_MOCK_PARTS;
+  // A stand-in BrowserBear, its folder handed to the app. Without the tag the
+  // app has none: a scripted app never reaches the real one.
+  if (pickle.tags.some((t) => t.name === '@browserbear')) {
+    this.bear = await StandInBrowserBear.start();
+    process.env.BROWSERBEAR_HOME = this.bear.home;
+  } else delete process.env.BROWSERBEAR_HOME;
   // The web runtime's folder for this scenario (support/web-runtime.ts).
   if ((await webRuntimeSetup(pickle.tags.map((t) => t.name))) === 'skipped') return 'skipped';
   await this.app.start();
@@ -127,6 +160,7 @@ After(async function (this: ThreadbearWorld, { result, pickle }) {
     if (fs.existsSync(file)) this.attach(fs.readFileSync(file), 'image/png');
   }
   await this.app.stop();
+  await this.bear?.stop();
   // Only now: Windows won't remove the folder the Terminal's shell is in.
   removeTempFolders();
   webRuntimeCleanup();

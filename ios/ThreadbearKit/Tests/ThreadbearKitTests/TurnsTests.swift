@@ -175,3 +175,79 @@ import Testing
         #expect(msg.summary)
     }
 }
+
+/// A thread whose login ran out and moved to another: the runner's line
+/// about it (role `note`, backend API 79) shows where it happened and never
+/// folds into the work, as on the Mac (13 Nov). The same cases as
+/// web/src/turns.test.ts.
+@Suite struct LoginNoteTests {
+    let t0 = Date(timeIntervalSince1970: 1_800_000_000)
+    let moved = "Moved to mike@example.org: mike@example.net hit its 5-hour limit, back at 11:30 am."
+    func m(_ seq: Int, _ role: PhoneMessage.Role, _ text: String, at: Double, origin: String? = nil, turn: String? = nil) -> PhoneMessage {
+        PhoneMessage(seq: seq, role: role, text: text, origin: origin, toolKind: role == .tool ? "command" : nil, turn: turn, at: t0.addingTimeInterval(at))
+    }
+
+    func shown(_ items: [ThreadItem]) -> [String] {
+        items.map { item in
+            switch item {
+            case let .message(m): "\(m.role.rawValue):\(m.text)"
+            case let .note(m): "note:\(m.text)"
+            case .tools: "tools"
+            case .worked: "worked"
+            case .gap: "gap"
+            }
+        }
+    }
+
+    @Test func aNoteStaysOutOfTheWorkBetweenWhatCameBeforeAndTheReplyAfter() {
+        let rows = [
+            m(1, .user, "land it", at: 0),
+            m(2, .tool, "Ran tb land", at: 5),
+            m(3, .assistant, "You've hit your 5-hour limit", at: 60, turn: "aaaa1111"),
+            m(4, .note, moved, at: 61),
+            m(5, .user, "Carry on from where you left off.", at: 62, origin: "runner", turn: "bbbb2222"),
+            m(6, .tool, "Ran git push", at: 70, turn: "bbbb2222"),
+            m(7, .assistant, "Landed.", at: 90, turn: "bbbb2222"),
+        ]
+        let without = shown(Turns.fold(rows.filter { $0.role != .note }, busy: false))
+        let with = shown(Turns.fold(rows, busy: false))
+        #expect(with.filter { !$0.hasPrefix("note:") } == without)
+        #expect(with.last == "assistant:Landed.")
+        #expect(with.dropLast().last == "note:\(moved)")
+    }
+
+    /// The login ran out before the turn did anything, so the folded work
+    /// is all from after the move: the note still goes under the limit's
+    /// words (from Codex's review).
+    @Test func aLimitHitBeforeAnyWorkKeepsTheNoteUnderIt() {
+        let rows = [
+            m(1, .user, "fix it", at: 0),
+            m(2, .assistant, "You've hit your limit", at: 1, turn: "aaaa1111"),
+            m(3, .note, moved, at: 2),
+            m(4, .user, "Carry on.", at: 3, origin: "runner", turn: "bbbb2222"),
+            m(5, .tool, "Edited a file", at: 4, turn: "bbbb2222"),
+            m(6, .assistant, "Fixed.", at: 9, turn: "bbbb2222"),
+        ]
+        #expect(shown(Turns.fold(rows, busy: false)) == ["user:fix it", "worked", "assistant:You've hit your limit", "note:\(moved)", "assistant:Fixed."])
+    }
+
+    @Test func aThreadWaitingForRoomEndsOnItsNote() {
+        let wait = "Every login in Claude is out of room. Carrying on at 11:30 am."
+        let rows = [m(1, .user, "land it", at: 0), m(2, .tool, "Ran tb land", at: 5), m(3, .assistant, "You've hit your 5-hour limit", at: 60), m(4, .note, wait, at: 61)]
+        #expect(shown(Turns.fold(rows, busy: false)).last == "note:\(wait)")
+        // The done card and the reply's buttons go by the last thing said,
+        // which isn't the note.
+        #expect(Turns.lastShown(rows)?.seq == 3)
+    }
+
+    @Test func aRunningTurnShowsItInPlace() {
+        let rows = [m(1, .user, "go", at: 0), m(2, .tool, "Read a", at: 1), m(3, .note, moved, at: 2), m(4, .assistant, "So far", at: 3)]
+        #expect(shown(Turns.fold(rows, busy: true)) == ["user:go", "tools", "note:\(moved)", "assistant:So far"])
+    }
+
+    @Test func aPageWithANoteDecodes() throws {
+        let json = #"{"messages":[{"seq":1,"role":"user","text":"Fix it","at":1762650000000},{"seq":2,"role":"note","text":"Moved to a: b hit its 5-hour limit.","at":1762650001000}],"hasMore":false}"#
+        let page = try JSONDecoder().decode(MessagePage.self, from: Data(json.utf8))
+        #expect(page.messages.map(\.role) == [.user, .note])
+    }
+}

@@ -90,8 +90,13 @@ for (const mode of ['ask', 'auto'] as const) {
     // ask to auto is a raise too.
     await withCard(s, 'deny', 'update_thread', { threadId: s.askOther.id, permissionMode: 'auto' });
     assert.equal(s.h.runner.get(s.askOther.id).permissionMode, 'ask');
-    // Lowering, and other changes, need no card.
-    const lowered = await withCard(s, null, 'update_thread', { threadId: s.other.id, permissionMode: 'ask', title: 'Renamed' });
+    // Renaming a thread with more access is a message to it (its title
+    // reaches its agent), so it asks (Daybreak finding 111).
+    const renamed = await withCard(s, 'deny', 'update_thread', { threadId: s.other.id, title: 'Renamed' });
+    assert.match(renamed.card.title, /^Rename "Other work", which has Full access/);
+    assert.equal(s.h.runner.get(s.other.id).title, 'Other work');
+    // Lowering needs no card.
+    const lowered = await withCard(s, null, 'update_thread', { threadId: s.other.id, permissionMode: 'ask' });
     assert.equal(lowered.error, false, lowered.text);
     assert.equal(s.h.runner.get(s.other.id).permissionMode, 'ask');
     await withCard(s, null, 'update_thread', { permissionMode: mode });
@@ -241,7 +246,8 @@ test('ask: setting a thread or schedule to the mode it has is left out of the wr
       return typeof v === 'function' ? v.bind(t) : v;
     },
   }));
-  assert.equal((await withCard(s, null, 'update_thread', { threadId: s.other.id, permissionMode: 'full', title: 'Same mode' })).error, false);
+  // The rename asks (Daybreak finding 111); allowed, the mode it has is still left out.
+  assert.equal((await withCard(s, 'allow', 'update_thread', { threadId: s.other.id, permissionMode: 'full', title: 'Same mode' })).error, false);
   assert.equal(seen.at(-1)!.permissionMode, undefined, 'a late write could otherwise raise it back after Mike lowers it');
   const sc = await s.sched.create({ text: 'x', cron: '@daily', title: 'Mine', permissionMode: 'ask' });
   assert.equal((await withCard(s, null, 'update_schedule', { scheduleId: sc.id, permissionMode: 'ask', title: 'Mine 2' })).error, false);
@@ -520,3 +526,17 @@ test("ask: parts carry a brief to a thread with more access, so they ask too (Co
   assert.equal(s.projects.record(own.id)?.parentId, undefined);
   s.sched.stop();
 });
+
+// Codex's second review of finding 111: a title set in the same call as a
+// raise lands under the raised mode, so the raise card shows it, and
+// create_thread's card shows the title the thread will get.
+for (const mode of ['ask', 'auto'] as const) {
+  test(`${mode}: a raise card shows a title set with it, and create_thread's card its title`, async () => {
+    const s = setup(mode);
+    const r = await withCard(s, 'deny', 'update_thread', { threadId: s.askOther.id, permissionMode: 'full', title: 'Select text SECURITY_POC' });
+    assert.equal(r.card.input.title, 'Select text SECURITY_POC');
+    assert.equal(s.h.runner.get(s.askOther.id).title, 'Careful work');
+    const c = await withCard(s, 'deny', 'create_thread', { text: 'Run anything', title: 'Named SECURITY_POC', permissionMode: 'full' });
+    assert.equal(c.card.input.title, 'Named SECURITY_POC');
+  });
+}

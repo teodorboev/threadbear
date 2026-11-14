@@ -49,15 +49,26 @@ echo "$host $cmd" >>"$FAKE/ssh.log"
 [ -d "$d" ] || exit 255
 # The watch's ping: fails once the host's "dead" file is there.
 if [ "$cmd" = true ]; then [ -f "$d/dead" ] && exit 255; exit 0; fi
+# The last check's fresh connection: the same, with a marker, and a host's
+# "login-124" file has its shell exit 124 after printing it.
+if [ "$cmd" = "echo tb-answers" ]; then [ -f "$d/dead" ] && exit 255; echo tb-answers; [ ! -f "$d/login-124" ] || exit 124; exit 0; fi
 run_copy() {
   # A host's "hang" file: it stops answering as the check starts.
   if [ -f "$d/hang" ]; then : >"$d/dead"; sleep 300; exit 0; fi
   # "stubborn": the same, but the hung check ignores SIGTERM.
   if [ -f "$d/stubborn" ]; then : >"$d/dead"; trap '' TERM; sleep 300; exit 0; fi
   # A host's "drop" file: the connection goes during the check (ssh's 255).
-  [ ! -f "$d/drop" ] || exit 255
+  [ ! -f "$d/drop" ] || { [ ! -f "$d/drop-dead" ] || : >"$d/dead"; exit 255; }
   script="$(printf '%s' "$cmd" | grep -oE "$d/home/[^ \\\\']*/scripts/check-remote.sh" | head -1)"
   if [ -n "$script" ] && [ -f "$script" ] && [ -f "$(dirname "$script")/../.check-changed" ]; then
+    # A host's "slow" file: the check takes that many seconds, its copy moved
+    # out of runs/ meanwhile, as --on-host does once it has the lock.
+    if [ -f "$d/slow" ]; then
+      run="$(cd "$(dirname "$script")/.." && pwd)"
+      mv "$run" "$run.started" || { echo "no copy on $host for: $cmd"; exit 1; }
+      sleep "$(cat "$d/slow")"
+      mv "$run.started" "$run"
+    fi
     echo "ran on $host $1 from $script"
     [ -z "$PEEK" ] || (cd "$(dirname "$script")/.." && bash -c "$PEEK") >"$FAKE/peek"
     # A failed step's log path, as check.sh prints it there, and one that
@@ -81,6 +92,13 @@ run_copy() {
     fi
   else echo "no copy on $host for: $cmd"; exit 1; fi
 }
+# A host's "queue" file: a check waiting in line there waits for the number
+# of seconds in it (another check, or a build, holding the lock).
+wait_line() {
+  [ -f "$d/queue" ] || return 0
+  echo "$host waiting" >>"$FAKE/waits.log"
+  sleep "$(cat "$d/queue")"
+}
 # The host's commands find a df that prints its "df-out" file; the real awk
 # reads that, from the script's own command.
 PATH="$d/bin:$PATH"
@@ -92,19 +110,32 @@ case "$cmd" in
   *"uname -s"*)
     # A host's "probe-fails" file: it answers, but the probe's mkdir fails.
     [ ! -f "$d/probe-fails" ] || exit 1
+    # "probe-255": the probe's connection fails as ssh's own 255, though a
+    # fresh one (the ping) still gets in.
+    [ ! -f "$d/probe-255" ] || exit 255
     # A host's "base" file says what folder it reports, if not its own.
     b="$d/home/.cache/threadbear-check"; [ -f "$d/base" ] && b="$(cat "$d/base")"
+    # A host's "free-after" file: busy for that many more probes, then free.
+    if [ -f "$d/free-after" ]; then
+      n="$(cat "$d/free-after")"
+      if [ "$n" -le 0 ]; then echo free >"$d/state"; else echo $((n - 1)) >"$d/free-after"; fi
+    fi
     # A host's "os" file says what system it is, if not a Mac.
     printf '%s\\n%s\\n%s\\n' "$b" "$(cat "$d/os" 2>/dev/null || echo Darwin)" "$(cat "$d/state")"
     # What the probe runs after the lock's "fi && ", for real.
     (cd "$d/home" && bash -c "\${cmd##*fi && }") ;;
+  # A blocking run can start with a nonblocking -k probe too. Match its
+  # actual blocking lock first, so that probe doesn't turn it into "now".
+  *"lockf -k"*) wait_line; run_copy "after waiting" ;;
   *"lockf -t 0 -k"*)
     n="$(cat "$d/lose" 2>/dev/null || echo 0)"
     if [ "$n" -gt 0 ]; then echo $((n - 1)) >"$d/lose"; [ ! -f "$d/df-after" ] || cp "$d/df-after" "$d/df-out"; [ -f "$d/looks-free" ] || echo busy >"$d/state"; exit 75; fi
     run_copy now ;;
-  *"lockf -k"*) run_copy "after waiting" ;;
   *"flock -n -E 75"*) run_copy now ;;
-  *"flock "*) run_copy "after waiting" ;;
+  *"flock "*) wait_line; run_copy "after waiting" ;;
+  # A host's "lose-ack" file: a withdrawal's rename happens, but its answer
+  # never comes back.
+  "mv '"*) bash -c "$cmd"; [ ! -f "$d/lose-ack" ] || sleep 30 ;;
   *) bash -c "$cmd" ;;
 esac
 `;
@@ -131,7 +162,7 @@ export const GiB = 1024 * 1024;
 
 // df: what the host's df prints (plenty free, if not given). dfAfter: what it
 // prints once a copy or a run has failed there. os: Linux, if not a Mac.
-type Host = { state: string; lose?: number; looksFree?: boolean; base?: string; df?: string; dfAfter?: string; os?: string; hang?: boolean; hangCopy?: boolean; drop?: boolean; stubborn?: boolean };
+type Host = { state: string; lose?: number; looksFree?: boolean; base?: string; df?: string; dfAfter?: string; os?: string; hang?: boolean; hangCopy?: boolean; drop?: boolean; dropDead?: boolean; stubborn?: boolean; queue?: number; loseAck?: boolean; freeAfter?: number; slow?: number };
 export function setup(hosts: Record<string, Host>, opts: { home?: string } = {}) {
   const tmp = tmpDir('check-remote-');
   const home = opts.home ?? shortHome();
@@ -155,6 +186,11 @@ export function setup(hosts: Record<string, Host>, opts: { home?: string } = {})
     if (s.hang) fs.writeFileSync(path.join(fake, h, 'hang'), '');
     if (s.stubborn) fs.writeFileSync(path.join(fake, h, 'stubborn'), '');
     if (s.drop) fs.writeFileSync(path.join(fake, h, 'drop'), '');
+    if (s.dropDead) fs.writeFileSync(path.join(fake, h, 'drop-dead'), '');
+    if (s.queue !== undefined) fs.writeFileSync(path.join(fake, h, 'queue'), String(s.queue));
+    if (s.freeAfter !== undefined) fs.writeFileSync(path.join(fake, h, 'free-after'), String(s.freeAfter));
+    if (s.loseAck) fs.writeFileSync(path.join(fake, h, 'lose-ack'), '');
+    if (s.slow !== undefined) fs.writeFileSync(path.join(fake, h, 'slow'), String(s.slow));
     if (s.hangCopy) fs.writeFileSync(path.join(fake, h, 'hang-copy'), '');
     if (s.dfAfter !== undefined) fs.writeFileSync(path.join(fake, h, 'df-after'), s.dfAfter);
     fs.writeFileSync(path.join(fake, h, 'df-out'), s.df ?? macDf(100 * GiB));
@@ -162,6 +198,8 @@ export function setup(hosts: Record<string, Host>, opts: { home?: string } = {})
     fs.writeFileSync(path.join(fake, h, 'bin', 'df'), `#!/bin/bash\n[ "$*" = "-Pk ." ] || exit 9\ncat "${path.join(fake, h, 'df-out')}"\n`, { mode: 0o755 });
   }
   fs.copyFileSync(SCRIPT, path.join(repo, 'scripts', 'check-remote.sh'));
+  // What it runs the check under on the host (hangup-guard.sh).
+  for (const f of ['remote-guard-lib.sh', 'hangup-guard.sh']) fs.copyFileSync(path.join(path.dirname(SCRIPT), f), path.join(repo, 'scripts', f));
   // What it reads to tell the Swift app's files from the GPUI app's in app/.
   fs.copyFileSync(path.join(path.dirname(SCRIPT), 'swift-freeze.sh'), path.join(repo, 'scripts', 'swift-freeze.sh'));
   fs.chmodSync(path.join(repo, 'scripts', 'swift-freeze.sh'), 0o755);
@@ -179,6 +217,8 @@ export function setup(hosts: Record<string, Host>, opts: { home?: string } = {})
     run(hostList: string, staySecs: number, peek = '', env: Record<string, string> = {}) {
       const base: NodeJS.ProcessEnv = { ...process.env };
       delete base.XDG_CACHE_HOME;
+      delete base.THREADBEAR_CHECK_PREFER;
+      delete base.THREADBEAR_CHECK_GROUP;
       const r = spawnSync('bash', [path.join(repo, 'scripts', 'check-remote.sh'), hostList, '--quick'], {
         encoding: 'utf8',
         env: { ...base, HOME: home, TMPDIR: tmpdir, PATH: `${bin}:${process.env.PATH}`, FAKE: fake, PEEK: peek, THREADBEAR_CHECK_STAY_SECS: String(staySecs), ...env },
@@ -189,7 +229,7 @@ export function setup(hosts: Record<string, Host>, opts: { home?: string } = {})
         const runs = path.join(fake, h, 'home', '.cache', 'threadbear-check', 'runs');
         return fs.existsSync(runs) ? fs.readdirSync(runs) : [];
       };
-      return { ...r, ssh: read('ssh.log'), sshOpts: read('ssh-opts.log'), rsyncPeek: read('rsync-peek'), copies: read('copies.log').trim().split('\n').filter(Boolean), left, peek: read('peek') };
+      return { ...r, waits: read('waits.log'), ssh: read('ssh.log'), sshOpts: read('ssh-opts.log'), rsyncPeek: read('rsync-peek'), copies: read('copies.log').trim().split('\n').filter(Boolean), left, peek: read('peek') };
     },
   };
 }

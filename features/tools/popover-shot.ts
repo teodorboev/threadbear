@@ -16,6 +16,9 @@ import path from 'node:path';
 import { GpuiDriver } from '../support/gpui.ts';
 import { SwiftDriver } from '../support/swift.ts';
 import { sleep, type Driver } from '../support/driver.ts';
+import { ensurePerfLock } from './perf-lock.ts';
+
+await ensurePerfLock();
 
 const [outArg, title, menu, ...steps] = process.argv.slice(2);
 if (!outArg || !title || !menu) throw new Error('usage: popover-shot.ts <out folder> <thread title> <menu> [command ...]');

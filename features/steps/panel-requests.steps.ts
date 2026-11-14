@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { previewLine } from '../support/pane.ts';
+import { highlightsFetching, previewLine } from '../support/pane.ts';
 import type { ThreadbearWorld } from '../support/world.ts';
 
 const pinned = new WeakMap<ThreadbearWorld, string>();
@@ -20,12 +20,53 @@ When('the agent of {string} pinned a file of its own and showed it', async funct
   fs.writeFileSync(file, '# Notes\n\nShown by the agent.\n');
   pinned.set(this, file);
   await this.app.do({ cmd: 'mock', method: 'pin', params: { threadId, path: file, show: true } });
+  const state = await this.app.do({ cmd: 'mock', method: 'panelState', params: { threadId } });
+  const request = JSON.parse(state.replace(/^(\w+ )?ok /, '')).request;
+  assert.ok(request, 'the pin has no pending show request');
+  requested.set(this, { threadId, requestId: request.id });
 });
 
 Then('the pane is showing the pinned file', async function (this: ThreadbearWorld) {
   const file = pinned.get(this);
   assert.ok(file, 'nothing was pinned');
-  await this.until(`the pane to show ${path.basename(file)}`, (d) => previewLine(d)?.endsWith(path.basename(file)));
+  await this.until(`the pane to show ${path.basename(file)}`, (d) => previewLine(d)?.endsWith(path.basename(file)), 30_000);
+  fs.rmSync(path.dirname(file), { recursive: true, force: true });
+});
+
+When('the agent continues replying while the pinned file loads', async function (this: ThreadbearWorld) {
+  const threadId = (await this.app.dump()).selection?.id;
+  assert.ok(threadId, 'no thread open');
+  await this.app.do({ cmd: 'mock', method: 'replaceReply', params: { threadId, text: 'The pinned notes are ready.' } });
+  await this.until('the updated reply', (d) => d.transcript.rows.some((r) => r.text === 'The pinned notes are ready.'));
+});
+
+When('the agent unpins that file before I look', async function (this: ThreadbearWorld) {
+  const { threadId } = requested.get(this)!;
+  await this.app.do({ cmd: 'mock', method: 'unpin', params: { threadId, highlightId: `file:${pinned.get(this)}` } });
+});
+
+When('the agent keeps working while I open the file', async function (this: ThreadbearWorld) {
+  const { threadId } = requested.get(this)!;
+  await this.app.do({ cmd: 'mock', method: 'stream', params: { threadId, seconds: 60, hz: 10, tools: true } });
+});
+
+When('the next two highlights fetches will fail', async function (this: ThreadbearWorld) {
+  const { threadId } = requested.get(this)!;
+  await this.app.do({ cmd: 'mock', method: 'failHighlights', params: { threadId, count: 2 } });
+});
+
+When('I look away until the failed highlights fetch stops', async function (this: ThreadbearWorld) {
+  await this.app.do({ cmd: 'focus', on: false });
+  for (let i = 0; i < 150; i += 1) {
+    if ((await panelState(this)).highlightsFailed > 0 && !highlightsFetching(await this.app.dump())) return;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  assert.fail('the failed highlights fetch did not stop while away');
+});
+
+Then('the pane has no file preview', async function (this: ThreadbearWorld) {
+  assert.equal(previewLine(await this.app.dump()), undefined);
+  const file = pinned.get(this)!;
   fs.rmSync(path.dirname(file), { recursive: true, force: true });
 });
 
@@ -56,7 +97,7 @@ Then('the dock has the {string} panel', async function (this: ThreadbearWorld, p
   await this.until(`the ${panel} panel in the dock`, (d) => new RegExp(`\\b${panel}\\b`).test(d.dock ?? ''));
 });
 
-async function panelState(world: ThreadbearWorld): Promise<{ request: { id: string } | null; shown: string[] }> {
+async function panelState(world: ThreadbearWorld): Promise<{ request: { id: string } | null; shown: string[]; highlightsFailed: number }> {
   const asked = requested.get(world);
   assert.ok(asked, 'no panel was asked for');
   const out = await world.app.do({ cmd: 'mock', method: 'panelState', params: { threadId: asked.threadId } });
@@ -65,7 +106,7 @@ async function panelState(world: ThreadbearWorld): Promise<{ request: { id: stri
 
 Then('the runner heard the panel was shown', async function (this: ThreadbearWorld) {
   const asked = requested.get(this)!;
-  for (let i = 0; i < 100; i += 1) {
+  for (let i = 0; i < 200; i += 1) {
     const state = await panelState(this);
     if (state.shown.includes(asked.requestId) || state.request === null) return;
     await new Promise((resolve) => setTimeout(resolve, 100));

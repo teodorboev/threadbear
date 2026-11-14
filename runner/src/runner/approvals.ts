@@ -226,7 +226,7 @@ export const approvalsPart = {
       const answer = req.canAlwaysAllow ? resolve : (a: ToolApprovalAnswer) => resolve(a.decision === 'allowAlways' ? { ...a, decision: 'allow' } : a);
       const macOnly = !remoteCardShowsAll(req.name, req.input, st.rec.cwd, req.title);
       const queued = req.toolUseId && req.queued?.length ? new Set(req.queued.map((c) => c.itemId)) : undefined;
-      this.addApproval(st, { approvalId, kind: 'tool', title: String(body.title), main: Boolean(req.toolUseId), ...(plan ? { plan } : {}), ...(macOnly ? { macOnly } : {}), ...(req.toolUseId ? { itemId: req.toolUseId } : {}), ...(queued ? { queued } : {}), resolve: answer }, body, req.signal);
+      this.addApproval(st, { approvalId, kind: 'tool', title: String(body.title), main: Boolean(req.toolUseId), ...(plan ? { plan } : {}), ...(macOnly ? { macOnly } : {}), ...(req.toolUseId ? { itemId: req.toolUseId } : {}), ...(queued ? { queued } : {}), ...(req.fullAllows && !plan ? { fullAllows: true } : {}), resolve: answer }, body, req.signal);
       if (queued) this.emit(st, { type: 'approval.queued', approvalId, calls: req.queued! }, st.rt.turn?.turnId);
     });
   },

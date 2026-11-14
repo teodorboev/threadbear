@@ -29,6 +29,8 @@ const OPENERS: &[&str] = &[
     // The Mac's own video and PDF views (gpui/native/media_views.m): what
     // makes one reads the file, so only the gate's `show_media` does.
     "tb_media_open",
+    "tb_media_thumbnail",
+    "tb_file_icon_png(",
     // And nothing in the Objective-C beside the app opens anything either.
     "openURL:",
     "openFile:",
@@ -57,11 +59,36 @@ const ALLOWED: &[&str] = &["gpui/src/open_gate.rs", "client/tests/mock_runner.rs
 /// The Objective-C beside the app (its native/ folders) is read too: the
 /// video and PDF views are made in one, and only the gate asks for one.
 const ALLOWED_LINES: &[(&str, &str, usize)] = &[
+    // This removes only this machine's exact authority from a file URI.
+    // It opens nothing: Terminal passes the result through open_gate::open_link.
+    ("core/src/terminal.rs", r#"(!host.is_empty() && host.eq_ignore_ascii_case(hostname)).then(|| format!("file://{}", &rest[host.len()..]))"#, 1),
     ("gpui/src/terminal.rs", "let pty = tty::new(&options, self.size.window_size(), 0)?;", 1),
     ("gpui/src/hang_watch.rs", "let mut sample = Command::new(\"/usr/bin/sandbox-exec\");", 1),
     ("gpui/src/app_update.rs", "let started = Command::new(\"/bin/sh\").arg(\"-c\").arg(wait).arg(\"sh\").args(open).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn();", 1),
+    // A handover opens the app's own installed bundle as its second copy,
+    // never anything from a thread (handover.rs).
+    ("gpui/src/handover.rs", "let mut command = std::process::Command::new(\"/usr/bin/open\");", 1),
     ("gpui/src/app_update.rs", "let out = Command::new(\"/usr/bin/git\").args(rules::rev_parse_arguments(checkout)).stdin(Stdio::null()).output().ok()?;", 1),
     ("gpui/src/app_update.rs", "let child = Command::new(program).args(arguments).current_dir(installed::home_dir()).stdin(Stdio::null()).stdout(out).stderr(err).spawn();", 1),
+    // Build-time SDK/compiler discovery and the fixed Translate source compile.
+    // No app runtime, link, file or runner content supplies these commands.
+    ("gpui/build.rs", "let sdk = Command::new(\"xcrun\").args([\"--sdk\", \"macosx\", \"--show-sdk-path\"]).output().expect(\"find macOS SDK\");", 1),
+    ("gpui/build.rs", "let compiler = Command::new(\"xcrun\").args([\"--find\", \"swiftc\"]).output().expect(\"find swiftc\");", 1),
+    ("gpui/build.rs", "let status = Command::new(&compiler).args([\"-parse-as-library\", \"-emit-object\", \"-O\", \"-import-objc-header\", \"native/text_selection.h\", \"-module-name\", \"ThreadbearTranslation\", \"-target\", &format!(\"{arch}-apple-macosx13.0\"), \"-sdk\", sdk, \"-module-cache-path\"]).arg(out.join(\"swift-modules\"))", 1),
+    // Encodes the gate's checked descriptor (an application's icon is its icns file).
+    ("gpui/native/file_icons.m", "int tb_file_icon_png(int fd, long long length, void **output) {", 1),
+    // Reads only the system display preference. This NSWorkspace property
+    // opens no URL or file and takes no runner-controlled argument.
+    ("gpui/src/style.rs", "objc2_app_kit::NSWorkspace::sharedWorkspace().accessibilityDisplayShouldIncreaseContrast()", 1),
+    // A test that reads Launch Services' list for Chrome's id, to see an
+    // impostor's icon being drawn didn't register it (Daybreak 112). Opens nothing.
+    ("gpui/src/open_gate/icon_tests.rs", "use objc2_app_kit::NSWorkspace;", 1),
+    ("gpui/src/open_gate/icon_tests.rs", "let urls = NSWorkspace::sharedWorkspace().URLsForApplicationsWithBundleIdentifier(&id);", 1),
+    // This standalone harness makes its own descriptors/media; it never renders runner data.
+    ("gpui/tests/native/media_hover.m", "extern size_t tb_media_thumbnail(int fd,long long length,const char *name,bool pdf,const TBMediaVersion *expected,unsigned char *out,size_t capacity);", 1),
+    ("gpui/tests/native/media_hover.m", "count=tb_media_thumbnail(fd,size,name,pdf,&expected,out.mutableBytes,capacity);", 1),
+    // The raster helper also receives only the gate's checked descriptor.
+    ("gpui/native/media_views.m", "size_t tb_media_thumbnail(int fd, long long length, const char *name, bool pdf, const TBMediaVersion *expected, unsigned char *out, size_t capacity) {", 1),
     // Where the video and PDF views are made, called only from the gate.
     ("gpui/native/media_views.m", "void *tb_media_open(void *nativeParent, int fd, long long length, const char *path, int kind, bool muted, float volume) {", 1),
     ("gpui/src/swift_import.rs", "let out = Command::new(\"/usr/bin/defaults\").args([\"export\", \"com.mikerosoft.threadbear\", \"-\"]).stderr(Stdio::null()).output().map_err(|e| format!(\"couldn't run defaults: {e}\"))?;", 1),
@@ -249,4 +276,53 @@ fn the_media_views_read_only_what_the_gate_checked() {
         }
     }
     assert!(found.is_empty(), "the media views must read only the gate's file and send their links back to it:\n{}", found.join("\n"));
+}
+
+/// Daybreak 112 (13 Nov 2026): any folder's .app can claim another app's
+/// bundle id with Launch Services, and asking NSWorkspace for a bundle's icon
+/// can register it. So the gate never asks it for one (an app's icon is its
+/// icns file, read like any other), and every application it starts by a
+/// fixed id (Chrome for a profile, Simulator) passes `signed_as`, the
+/// owner's signature check, before `/usr/bin/open` sees its path.
+#[test]
+fn fixed_apps_start_only_once_signed_and_icons_never_ask_launch_services() {
+    let desktop = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().to_owned();
+    let gate = std::fs::read_to_string(desktop.join("gpui/src/open_gate.rs")).unwrap().replace("\r\n", "\n");
+    assert!(!gate.contains("iconForFile"), "the gate asks NSWorkspace for an icon");
+    let mut native = Vec::new();
+    rust_files(&desktop.join("gpui"), &mut native);
+    for file in native.iter().filter(|f| f.extension().is_some_and(|e| e == "m")) {
+        let text = std::fs::read_to_string(file).unwrap();
+        assert!(!text.contains("iconForFile") && !text.contains("[NSWorkspace"), "{} asks NSWorkspace", file.display());
+    }
+    let chrome = fn_body(&gate, "fn start_chrome_profile(");
+    let check = chrome.find("signed_as(path, GOOGLE_CHROME)").expect("Chrome is checked");
+    assert!(check < chrome.find("Command::new(\"/usr/bin/open\")").unwrap(), "checked before it's started");
+    assert!(chrome.contains(".arg(&real)"), "the checked path is the one started");
+    assert!(gate.contains("certificate leaf[subject.OU] = \\\"EQHXZ8M8AV\\\""), "Google's team");
+    assert!(!gate.contains("URLForApplicationWithBundleIdentifier(&NSString::from_str(threadbear_core::reply_links::CHROME_BUNDLE_ID))"), "Chrome by id, not the running one");
+    let simulator = fn_body(&gate, "fn apple_simulator(");
+    assert!(simulator.contains("signed_as(path, \"anchor apple and identifier"));
+    assert_eq!(gate.matches("Command::new(\"/usr/bin/open\")").count(), 1, "one place starts an application by path");
+}
+
+/// A top-level function's body, up to its closing `}` line. The source is
+/// read with `\r\n` endings on a Windows checkout, where splitting at
+/// `"\n}\n"` found nothing and the "body" ran to the end of the file, so a
+/// check moved into a later function still passed. Line endings are made
+/// `\n` first.
+fn fn_body(source: &str, signature: &str) -> String {
+    let source = source.replace("\r\n", "\n");
+    let rest = source.split(signature).nth(1).unwrap_or_else(|| panic!("{signature} not found"));
+    rest.split("\n}\n").next().unwrap().to_owned()
+}
+
+#[test]
+fn a_function_body_ends_at_its_own_brace_with_either_line_ending() {
+    let source = "fn start_chrome_profile(path: &Path) {\n    open(path);\n}\n\nfn later() {\n    signed_as(path, GOOGLE_CHROME);\n}\n";
+    for text in [source.to_owned(), source.replace('\n', "\r\n")] {
+        let body = fn_body(&text, "fn start_chrome_profile(");
+        assert!(body.contains("open(path);"));
+        assert!(!body.contains("signed_as"), "a check in a later function counts for this one");
+    }
 }

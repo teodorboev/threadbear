@@ -22,6 +22,14 @@ When('Mike has a release of 10 Nov with 3 new changes', async function (this: Th
   await this.app.do({ cmd: 'mock', method: 'updates', params: { state: 'idle', upstream: { state: 'available', release } } });
 });
 
+When('my copy has 2 changes of its own to the old app', async function (this: ThreadbearWorld) {
+  const changes = [
+    { commit: 'abc1234def567890abc1234def567890abc1234d', short: 'abc1234', subject: 'Orange dock badge', date: '2026-11-02T09:00:00+08:00', files: ['dock/Sources/Badge.swift'] },
+    { commit: '0123456789abcdef0123456789abcdef01234567', short: '0123456', subject: 'Bigger sidebar font', date: '2026-10-20T10:00:00+08:00', files: ['app/Sources/Threadbear/Views/Sidebar.swift'] },
+  ];
+  await this.app.do({ cmd: 'mock', method: 'updates', params: { state: 'idle', swiftChanges: { state: 'ready', checkout: '/Users/me/threadbear', changes } } });
+});
+
 // The app's own update, made up (`updates` with `preview`, as both apps'
 // screenshots use): staged is def5678 over abc1234.
 When("the app's next version, def5678, is ready", async function (this: ThreadbearWorld) {
@@ -30,6 +38,14 @@ When("the app's next version, def5678, is ready", async function (this: Threadbe
 
 When("the app's next version is waiting for a Mac to build it on", async function (this: ThreadbearWorld) {
   await this.app.do({ cmd: 'updates', preview: 'waiting' });
+});
+
+When("the app's next version is waiting for main to settle", async function (this: ThreadbearWorld) {
+  await this.app.do({ cmd: 'updates', preview: 'settling' });
+});
+
+When('no Mac is trusted to build the app\'s next version', async function (this: ThreadbearWorld) {
+  await this.app.do({ cmd: 'updates', preview: 'no-builder' });
 });
 
 // The app menu is the first one, whatever it's called. SwiftUI rebuilds its
@@ -96,6 +112,24 @@ When('the app comes back from restarting onto its next version on the Scheduled 
   await this.app.do({ cmd: 'updates', restore: { mode: 'scheduled', selection: thread.id, front: false } });
 });
 
+// What a restart would save now, then put back as a new launch would
+// (`fresh`: no thread's place remembered, none kept loaded), with the given
+// thread open on the Inbox.
+When('the app comes back from restarting onto its next version with {string} open', async function (this: ThreadbearWorld, title: string) {
+  const thread = await this.until(`a thread called "${title}"`, (d) => this.thread(d, title));
+  const state = JSON.parse(okValue(await this.app.do({ cmd: 'updates', restartState: true })));
+  await this.app.do({ cmd: 'updates', restore: { ...state, mode: 'inbox', selection: thread.id, front: false }, fresh: true });
+  await this.until(`"${title}" open`, (d) => d.selection?.id === thread.id);
+});
+
+When('the app restarts onto its next version with {string} open', function () {
+  throw new Error('Manual: on the installed app, open the thread, then Restart to Update from the app menu, and watch the window stay put showing it');
+});
+
+Then('the window stays on screen showing {string} throughout', function () {
+  throw new Error('Manual: the window never goes or flashes, and comes back on the same thread at the same place');
+});
+
 Then('the sidebar shows the Scheduled list with {string} open', async function (this: ThreadbearWorld, title: string) {
   const id = restored.get(title);
   assert.ok(id, `"${title}" wasn't put back`);
@@ -121,4 +155,8 @@ Then('the update popover says {string}', async function (this: ThreadbearWorld, 
     await new Promise((done) => setTimeout(done, 200));
   }
   assert.fail(`the popover doesn't say "${line}": ${JSON.stringify(lines)}`);
+});
+
+When('the web runtime needs a security update', async function (this: ThreadbearWorld) {
+  await this.app.do({ cmd: 'mock', method: 'updates', params: { state: 'idle', webRuntimeProblem: "Web runtime: CEF is over two weeks behind stable. Chromium's sandbox is off." } });
 });

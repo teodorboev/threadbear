@@ -94,11 +94,13 @@ public protocol Backend: Sendable {
     func quickAsk(_ ask: QuickAskRecord) async throws -> String
     /// The newest `limit` messages of a thread, tool lines included, live
     /// (backend API 2). Reads Convex alone, so it works while the Mac sleeps;
-    /// more history is a bigger limit.
-    func messages(_ threadId: String, limit: Int) -> AsyncThrowingStream<MessagePage, Error>
+    /// more history is a bigger limit. `notes` asks for the login notes
+    /// too (role `note`), of a backend that has them (API 79): an older one
+    /// refuses an argument it doesn't know.
+    func messages(_ threadId: String, limit: Int, notes: Bool) -> AsyncThrowingStream<MessagePage, Error>
     /// API 2: up to `limit` messages and tool lines before `beforeSeq`, once,
     /// for scrolling back past what the live page holds (MessageHistory).
-    func olderMessages(_ threadId: String, beforeSeq: Int, limit: Int) async throws -> MessagePage
+    func olderMessages(_ threadId: String, beforeSeq: Int, limit: Int, notes: Bool) async throws -> MessagePage
     /// API 37: a thread's pictures from `from` on, live. It re-runs only when
     /// a picture row changes, so it covers rows read once (MessageHistory).
     func images(_ threadId: String, from: Int) -> AsyncThrowingStream<[MessageImage], Error>
@@ -299,12 +301,12 @@ public final class ConvexBackend: Backend, @unchecked Sendable {
         live("phone:thread", ["threadId": .string(threadId)], as: ThreadDetail?.self, missing: .some(nil))
     }
 
-    public func messages(_ threadId: String, limit: Int) -> AsyncThrowingStream<MessagePage, Error> {
-        live("phone:messages", ["threadId": .string(threadId), "limit": .number(Double(limit)), "tools": .bool(true)], as: MessagePage.self)
+    public func messages(_ threadId: String, limit: Int, notes: Bool) -> AsyncThrowingStream<MessagePage, Error> {
+        live("phone:messages", ["threadId": .string(threadId), "limit": .number(Double(limit)), "tools": .bool(true)].merging(notes ? ["notes": .bool(true)] : [:]) { a, _ in a }, as: MessagePage.self)
     }
 
-    public func olderMessages(_ threadId: String, beforeSeq: Int, limit: Int) async throws -> MessagePage {
-        let answer = try await transport.query("phone:messages", args(["threadId": .string(threadId), "beforeSeq": .number(Double(beforeSeq)), "limit": .number(Double(limit)), "tools": .bool(true)]))
+    public func olderMessages(_ threadId: String, beforeSeq: Int, limit: Int, notes: Bool) async throws -> MessagePage {
+        let answer = try await transport.query("phone:messages", args(["threadId": .string(threadId), "beforeSeq": .number(Double(beforeSeq)), "limit": .number(Double(limit)), "tools": .bool(true)].merging(notes ? ["notes": .bool(true)] : [:]) { a, _ in a }))
         return try Self.decode(MessagePage.self, answer)
     }
 

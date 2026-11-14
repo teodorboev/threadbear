@@ -11,7 +11,10 @@
 import { execFileSync, spawn } from 'node:child_process';
 import { GpuiDriver } from '../support/gpui.ts';
 import { sleep, type Dump } from '../support/driver.ts';
-import { assertInFront, swiftTool, windowFrame } from './real-screen.ts';
+import { displays, EDGE, gestureGuard, guardInput, movePointer, pointer, realDrag, swiftTool, windowFrame, type Point } from './real-screen.ts';
+import { ensurePerfLock } from './perf-lock.ts';
+
+await ensurePerfLock();
 
 const gesture = swiftTool('post-gesture');
 const dragger = swiftTool('realdrag');
@@ -28,10 +31,16 @@ try {
 const fingers = (contentDx: number) => (natural ? contentDx : -contentDx);
 /** Two fingers at a screen point: `moves` content-way steps across, then lift. */
 function swipe(x: number, y: number, moves: [number, number][], momentum = false): void {
+  guardInput(app.pid!, [[x, y]]);
   const tokens = moves.map(([dx, dy]) => `${fingers(dx)},${natural ? dy : -dy}`);
-  execFileSync(gesture, [String(x), String(y), '0', ...tokens, ...(momentum ? ['M'] : [])]);
+  execFileSync(gesture, [String(x), String(y), '0', ...tokens, ...(momentum ? ['M'] : [])], { env: { ...process.env, ...gestureGuard(app.pid!) } });
 }
 const steps = (total: number, count: number): [number, number][] => Array.from({ length: count }, () => [total / count, 0]);
+
+/** A real mouse drag (or a click), checked just before and while it's posted (realDrag). */
+function drag(from: Point, to: Point, hold: number, dropPid = app.pid!): void {
+  realDrag(dragger, from, to, hold, { pid: app.pid!, dropPid });
+}
 
 const app = new GpuiDriver();
 const results: string[] = [];
@@ -65,6 +74,7 @@ async function rowPoint(title: string): Promise<[number, number]> {
   return [wx + x, wy + y];
 }
 
+const pointerWas = pointer();
 await app.start();
 try {
   for (let i = 0; i < 300; i += 1) {
@@ -85,16 +95,22 @@ try {
   await open('Morning brief');
   await open('Make uploads resume after a crash');
   let row = await rowPoint('Morning brief');
-  assertInFront(app.pid!, [row, middle]);
   // A click on a blank part of the transcript first, to make the window key.
-  execFileSync(dragger, [String(middle[0]), String(middle[1]), String(middle[0]), String(middle[1]), '0', '']);
+  drag(middle, middle, 0);
   await sleep(400);
 
   // A row: the fingers held part way, it's that far along...
-  const held = spawn(gesture, [String(row[0]), String(row[1]), '1500', ...steps(-40, 8).map(([dx, dy]) => `${fingers(dx)},${natural ? dy : -dy}`)]);
+  guardInput(app.pid!, [row]);
+  const held = spawn(gesture, [String(row[0]), String(row[1]), '1500', ...steps(-40, 8).map(([dx, dy]) => `${fingers(dx)},${natural ? dy : -dy}`)], { env: { ...process.env, ...gestureGuard(app.pid!) }, stdio: ['ignore', 'ignore', 'inherit'] });
+  // Listened for at once: a refusal after the hover ends it well inside the sleep.
+  const heldDone = new Promise<void>((done, fail) => {
+    held.on('error', fail);
+    held.on('exit', (code) => (code === 0 ? done() : fail(new Error(`post-gesture stopped (exit ${code}); see above`))));
+  });
+  heldDone.catch(() => {});
   await sleep(1100);
   const along = await app.do({ cmd: 'row-swipe' });
-  await new Promise((done) => held.on('exit', done));
+  await heldDone;
   check('a row follows the fingers part way', /offset -40 armed false/.test(along), along);
   // ...and let go short of the line, it goes back into place.
   await sleep(700);
@@ -138,9 +154,12 @@ try {
   check('a swipe right over a row goes back', await until((d) => d.selection?.title === 'Morning brief'), (await app.dump()).selection?.title);
   await open('Make uploads resume after a crash');
 
-  // The mouse: a row dragged left past the line is archived too.
+  // The mouse: a row dragged left past the line is archived too. The line is
+  // about a third of the row's width along (RowSwipe::threshold), so the drop can stay on the
+  // window rather than go 220 points left, past its edge and maybe the
+  // screen's, where the Dock comes up.
   row = await rowPoint('Morning brief');
-  execFileSync(dragger, [String(row[0]), String(row[1]), String(row[0] - 220), String(row[1]), '0.1', '']);
+  drag(row, [Math.max(row[0] - 220, windowFrame(app.pid!)[0] + 30), row[1]], 0.1);
   check('a row dragged left past the line is archived', await until((d) => section(d, 'Morning brief') === 'Archived'), section(await app.dump(), 'Morning brief'));
   await app.do({ cmd: 'undo-archive' });
   await until((d) => section(d, 'Morning brief') === 'Inbox');
@@ -150,7 +169,7 @@ try {
   // A row dragged into the open thread goes into its message as its chip,
   // and the thread the press opened gives way to the one it's dropped on.
   row = await rowPoint('Morning brief');
-  execFileSync(dragger, [String(row[0]), String(row[1]), String(middle[0]), String(middle[1]), '0.2', '']);
+  drag(row, middle, 0.2);
   await sleep(700);
   const chips = await app.do({ cmd: 'composer-chips' }).catch((e) => String(e));
   const after = (await app.dump()).selection?.title;
@@ -160,17 +179,23 @@ try {
   // Files dragged out of the window go as the files themselves, to a window
   // of our own beside it (app/Tools/droptarget.swift), as a drop on the
   // Finder would copy into whatever folder someone has open there. Right of
-  // the window if there's room, else left of it.
-  const target: [number, number, number, number] = wx + ww + 260 < 1900 ? [wx + ww + 20, wy + 150, 240, 240] : [Math.max(0, wx - 260), wy + 150, 240, 240];
-  async function dragOut(what: string, from: [number, number], name: string): Promise<void> {
-    const to: [number, number] = [target[0] + 120, target[1] + 120];
+  // the window if there's room, else left of it, touching it so the drag
+  // never crosses anyone else's window on the way (realDrag checks the path).
+  // Worked out from the window as it is for each drag, as it's resized between.
+  const fits = (x: number) => displays().some(([dx, , dw]) => x >= dx + EDGE && x + 240 <= dx + dw - EDGE);
+  /** `at` is in the window, from its top left. */
+  async function dragOut(what: string, at: [number, number], name: string): Promise<void> {
+    const [fx, fy, fw] = windowFrame(app.pid!);
+    const from: Point = [fx + at[0], fy + at[1]];
+    const target: [number, number, number, number] = fits(fx + fw) ? [fx + fw, fy + 150, 240, 240] : [fx - 240, fy + 150, 240, 240];
+    const to: Point = [target[0] + 120, target[1] + 120];
     const drops = spawn(dropTarget, [...target.map(String), '12']);
     let said = '';
     drops.stdout.on('data', (d) => (said += d));
     for (let i = 0; i < 50 && !said.includes('ready'); i += 1) await sleep(100);
     try {
-      assertInFront(app.pid!, [from]);
-      execFileSync(dragger, [String(from[0]), String(from[1]), String(to[0]), String(to[1]), '0.4', '']);
+      // The drop goes to our own drop target, checked by its pid.
+      drag(from, to, 0.4, drops.pid!);
       await sleep(1200);
       const dropped = said.split('\n').find((l) => l.startsWith('dropped '))?.slice('dropped '.length) ?? '';
       check(`${what} dragged out of the window goes as its file`, dropped.endsWith(`/${name}`), dropped || 'nothing dropped');
@@ -186,7 +211,7 @@ try {
   const highlight = await app.do({ cmd: 'label-point', label: 'pricing-before.png' }).catch((e) => String(e));
   if (highlight.startsWith('ok')) {
     const [, rx, ry] = highlight.split(' ').map(Number);
-    await dragOut('a Highlights file', [wx + rx, wy + ry], 'pricing-before.png');
+    await dragOut('a Highlights file', [rx, ry], 'pricing-before.png');
   } else {
     check('a Highlights file dragged out of the window goes as its file', false, highlight);
   }
@@ -205,7 +230,7 @@ try {
   const tile = await app.do({ cmd: 'tile-point', count: 2 }).catch((e) => String(e));
   if (tile.startsWith('ok')) {
     const [, tx, ty, name] = tile.split(' ');
-    await dragOut('a picture', [wx + Number(tx), wy + Number(ty)], name);
+    await dragOut('a picture', [Number(tx), Number(ty)], name);
   } else {
     check('a picture dragged out of the window goes as its file', false, tile);
   }
@@ -216,6 +241,18 @@ try {
   console.log(results.join('\n'));
   console.log(failed === 0 && !process.exitCode ? 'PASS' : 'FAIL');
   if (failed) process.exitCode = 1;
-  await app.stop();
-  process.exit();
+  try {
+    await app.stop();
+  } catch (error) {
+    // A failed stop is a failed run, even after every check passed.
+    console.error(error instanceof Error ? error.message : error);
+    process.exitCode = 1;
+  } finally {
+    try {
+      movePointer(pointerWas);
+    } catch {
+      // Putting it back is a courtesy; the run's result stands.
+    }
+    process.exit();
+  }
 }

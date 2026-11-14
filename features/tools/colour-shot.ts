@@ -18,6 +18,9 @@ import { GpuiDriver } from '../support/gpui.ts';
 import { SwiftDriver } from '../support/swift.ts';
 import { sleep, type Driver } from '../support/driver.ts';
 import { windowFrame, work } from './real-screen.ts';
+import { ensurePerfLock } from './perf-lock.ts';
+
+await ensurePerfLock();
 
 const [outArg, which, look = 'dark'] = process.argv.slice(2);
 if (!outArg || !which) throw new Error('usage: colour-shot.ts <out.png> swift|gpui [light|dark]');

@@ -228,6 +228,9 @@ export const poolsPart = {
     if (rec.sessionUsed || rt.session) rec.handoff ??= { fromCwd: rec.moved?.fromCwd ?? rec.cwd, fromAccountId: rec.accountId };
     delete rec.moved;
     rec.accountId = to.id;
+    // The app keeps this note on show by its shape, "Moved to <login>:
+    // <why>" (is_login_note in desktop/core/src/reducer/row.rs), so Mike
+    // sees a thread change login by itself. Reword it there too.
     let note = `Moved to ${to.title}: ${why}.`;
     if (to.provider !== rec.provider) {
       rec.provider = to.provider;
@@ -246,7 +249,7 @@ export const poolsPart = {
       if (!rt.turn) this.releaseSession(st);
     }
     rec.updatedAt = this.isoNow();
-    this.emit(st, { type: 'system.note', text: note }, rt.turn?.turnId);
+    this.emit(st, { type: 'system.note', text: note, login: true }, rt.turn?.turnId);
     this.markDirty(st);
   },
 
@@ -274,7 +277,9 @@ export const poolsPart = {
       rec.carryOnAtReset = false;
       if (rec.waitingForRoom) {
         delete rec.waitingForRoom;
-        this.emit(st, { type: 'system.note', text: "Won't carry on by itself. Send a message when you want it to." });
+        // Stays on show in the app by its first words, under the wait
+        // note it takes back (is_login_note in desktop/core/src/reducer/row.rs).
+        this.emit(st, { type: 'system.note', text: "Won't carry on by itself. Send a message when you want it to.", login: true });
         this.armRoomTimer();
       }
       this.markDirty(st);
@@ -299,7 +304,9 @@ export const poolsPart = {
     const who = w.accountId ? (this.accounts.get(w.accountId)?.title ?? w.accountId) : undefined;
     // The time it's back, not the minute after it the wait adds.
     const at = resetTime(new Date(Date.parse(w.waitUntil) - (who ? WAIT_SLACK_MS : 0)).toISOString(), now);
-    this.emit(st, { type: 'system.note', text: `${lead} Carrying on at ${at}${who ? ` when ${who} is back` : ''}.` });
+    // "Carrying on at" is what keeps this note on show in the app
+    // (is_login_note in desktop/core/src/reducer/row.rs).
+    this.emit(st, { type: 'system.note', text: `${lead} Carrying on at ${at}${who ? ` when ${who} is back` : ''}.`, login: true });
     this.markDirty(st);
     this.armRoomTimer();
   },

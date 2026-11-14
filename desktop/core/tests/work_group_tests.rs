@@ -824,6 +824,31 @@ fn testAfterAWakeAReplacedSummaryGivesWay() {
     assert!(model.row("a:e1.summary").is_none(), "folded into the work");
 }
 
+/// One reply: a turn sent back for a card its reply asked for ("Say go and
+/// I'll merge", under a done card). The runner writes the reply again under
+/// the new card, so it is the reply by the same rule, and neither the first
+/// copy nor what the agent said before its first end_turn shows beside it.
+#[test]
+fn testAReplyWrittenAgainUnderACorrectedCardIsTheOnlyReply() {
+    let model = from_events(vec![
+        user(1, "Should we release it?"),
+        started(2),
+        call(3, "c1").with_turn("t1"),
+        result(4, "c1").with_turn("t1"),
+        text(5, "m0", "Checked main against prod.").with_turn("t1"),
+        end_turn_call(6, "e1"),
+        result_text(7, "e1", "Noted: this thread is done. Now write your reply.").with_turn("t1"),
+        event_turn(8, "assistant.text", json!({"itemId": "m1", "text": "It's ready. Say go and I'll merge main into prod.", "final": true}), Some("t1")),
+        end_turn_call(9, "e2"),
+        result_text(10, "e2", "Noted: this thread will wait in Needs you. Stop here, with no more text: your message above is the reply.").with_turn("t1"),
+        event_turn(11, "assistant.text", json!({"itemId": "e2.reply", "text": "It's ready. Say go and I'll merge main into prod.", "final": true}), Some("t1")),
+        done(12),
+    ]);
+    assert!(model.row("a:e2.reply").is_some());
+    assert!(model.row("a:m1").is_none(), "the first copy folds into the work");
+    assert!(model.row("a:m0").is_none(), "and so does what came before the first end_turn");
+}
+
 /// From Codex's review: one reply, woken, and stopped with no new card while
 /// other work runs. The report shows, beside the earlier reply.
 #[test]

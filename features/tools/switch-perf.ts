@@ -23,7 +23,11 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { GpuiDriver } from '../support/gpui.ts';
+import { ensurePerfLock } from './perf-lock.ts';
+
 import { sleep } from '../support/driver.ts';
+
+await ensurePerfLock();
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 let ids = process.argv.slice(2);

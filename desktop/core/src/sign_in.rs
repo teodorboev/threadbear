@@ -10,20 +10,16 @@
 
 /// The thread's login to sign in again, or None: never for another runner's
 /// thread (that Mac's login is signed in on that Mac, and nothing its runner
-/// says may pick what runs here), and an unknown login falls back to the
-/// main one of a provider there is, named in fixed words (`signInAccount`).
-pub fn account_for(provider: &str, remote: bool, known: Option<SignInAccount>) -> Option<SignInAccount> {
-    if remote {
+/// says may pick what runs here). Missing metadata never selects a fallback
+/// login or guesses its credential folder.
+pub fn account_for(account_id: &str, provider: &str, remote: bool, known: Option<SignInAccount>) -> Option<SignInAccount> {
+    if remote || account_id.is_empty() {
         return None;
     }
-    if let Some(known) = known {
-        return Some(known);
-    }
-    match provider {
-        "claude" => Some(SignInAccount { id: "claude-main".into(), provider: "claude".into(), title: "Claude".into(), config_dir: String::new() }),
-        "codex" => Some(SignInAccount { id: "codex-main".into(), provider: "codex".into(), title: "Codex".into(), config_dir: String::new() }),
-        _ => None,
-    }
+    let known = known?;
+    if known.id != account_id { return None; }
+    if !provider.is_empty() && known.provider != provider { return None; }
+    known.can_sign_in().then_some(known)
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -34,11 +30,25 @@ pub struct SignInAccount {
     pub config_dir: String,
 }
 
+impl SignInAccount {
+    pub fn can_sign_in(&self) -> bool {
+        match self.provider.as_str() {
+            "claude" | "" => self.id == "claude-main" || !self.config_dir.trim().is_empty(),
+            // codex-main's CODEX_HOME can also be customized by the runner.
+            "codex" => !self.config_dir.trim().is_empty(),
+            _ => true,
+        }
+    }
+}
+
 /// A provider's own sign-in, as `ProviderInfo.loginCommand` has it.
 pub fn login_command(provider: &str) -> &'static str {
     match provider {
         "codex" => "codex login",
-        _ => "claude auth login",
+        "cursor" => "agent login",
+        "opencode" => "opencode auth login",
+        "claude" | "" => "claude auth login",
+        _ => "",
     }
 }
 
@@ -62,6 +72,18 @@ pub fn file_safe(id: &str) -> String {
 /// (Codex is often Threadbear's own copy, not on the PATH); empty uses the
 /// PATH's.
 pub fn script(account: &SignInAccount, cli_path: &str) -> String {
+    script_with_command(account, cli_path, login_command(&account.provider))
+}
+
+/// The hello's command is a program and arguments, never shell source.
+pub fn script_with_command(account: &SignInAccount, cli_path: &str, command: &str) -> String {
+    script_named(account, cli_path, command, &crate::logins::provider_title(&account.provider))
+}
+
+pub fn script_named(account: &SignInAccount, cli_path: &str, command: &str, name: &str) -> String {
+    if !account.can_sign_in() || command.trim().is_empty() {
+        return "#!/bin/zsh -l\nprintf '%s\\n' 'Sign-in is unavailable for this login. Refresh the accounts in Threadbear.'\n".into();
+    }
     let codex = account.provider == "codex";
     let mut env = String::new();
     if codex && !account.config_dir.is_empty() {
@@ -70,12 +92,14 @@ pub fn script(account: &SignInAccount, cli_path: &str) -> String {
     if (account.provider == "claude" || account.provider.is_empty()) && account.id != "claude-main" && !account.config_dir.is_empty() {
         env = format!("CLAUDE_CONFIG_DIR={} ", quoted(&account.config_dir));
     }
-    let name = crate::logins::provider_title(&account.provider);
     // "claude auth login": the program, then what it's asked to do.
-    let mut words = login_command(&account.provider).split(' ');
+    let mut words = command.split_whitespace();
     let program = words.next().unwrap_or("claude");
-    let command = words.collect::<Vec<_>>().join(" ");
-    let binary = if cli_path.is_empty() { program.to_owned() } else { quoted(cli_path) };
+    let argument = |s: &str| {
+        if !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || "-_./".contains(c)) { s.to_owned() } else { quoted(s) }
+    };
+    let command = words.map(argument).collect::<Vec<_>>().join(" ");
+    let binary = if cli_path.is_empty() { argument(program) } else { quoted(cli_path) };
     let first = quoted(&format!("Signing in to {name} for Threadbear ({}).", one_line(&account.title)));
     format!(
         "#!/bin/zsh -l\nexport PATH=\"$HOME/.local/bin:$PATH\"\nprintf '%s\\n' {first}\necho\n{env}{binary} {command}\necho\necho \"Done. Go back to Threadbear and press Send again. You can close this window.\"\n"
@@ -112,15 +136,15 @@ mod tests {
 
     #[test]
     fn another_runners_thread_never_picks_a_sign_in_here() {
-        assert_eq!(account_for("claude", true, Some(account("claude-main", "claude", "me", ""))), None, "even with a login of that id here");
-        assert_eq!(account_for("claude$(touch /tmp/x)", false, None), None, "no such provider: no sign-in");
-        assert_eq!(account_for("codex", false, None).map(|a| a.id), Some("codex-main".into()));
+        assert_eq!(account_for("claude-main", "claude", true, Some(account("claude-main", "claude", "me", ""))), None, "even with a login of that id here");
+        assert_eq!(account_for("claude-main", "claude$(touch /tmp/x)", false, None), None, "no such provider: no sign-in");
+        assert_eq!(account_for("codex-main", "codex", false, None), None, "missing metadata must not guess a login's folder");
     }
 
     #[test]
     fn a_logins_name_is_printed_never_run() {
         let title = "claude$(touch injected) `touch injected` \"q\" 'q' \\ $HOME\nsecond line; touch injected";
-        let s = script(&account("../../evil id", "claude", title, ""), "/usr/bin/true");
+        let s = script(&account("claude-main", "claude", title, ""), "/usr/bin/true");
         let printed = s.lines().find(|l| l.starts_with("printf")).unwrap();
         // The whole name is inside one pair of single quotes, its own quote
         // closed and reopened, and the newline gone.

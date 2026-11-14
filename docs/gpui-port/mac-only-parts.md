@@ -84,7 +84,11 @@ Tests: 31 functions in 373 lines, nearly all on the tree. Drag feel is only test
 3. `QLThumbnailGenerator`: `LinkPeek.swift:145`, `FolderBrowser.swift:1274`.
 4. `ThumbnailLoader` (ImageIO, not Quick Look): decodes at drawn size off the main thread, 4 concurrent, 24 MB cache.
 
-GPUI has no Quick Look or equivalent (grep empty). **[inferred]** Windows and Linux have no comparable previewer, so plan a small in-app viewer for images, video and PDF, and "open in default app" for the rest.
+The GPUI app uses macOS's Quick Look thumbnail generator for Office and iWork
+documents (`desktop/gpui/native/media_views.m`). It reads a private snapshot
+from the file descriptor the open gate checked, then displays a plain image
+without links or document actions. AVKit and PDFKit show videos and PDFs.
+Windows and Linux still offer those files in their default app through the gate.
 
 **(c) Must preserve.**
 - [ ] Click a tile: preview, arrow through only the local, real pictures in that message.

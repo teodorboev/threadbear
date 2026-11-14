@@ -50,9 +50,9 @@ public enum RunnerAuth {
     /// an impostor could just pretend to be an old runner.
     ///
     /// `dialedPort` is the port of a loopback URL, what a relay on this Mac
-    /// would have to change; for another Mac (behind `tailscale serve`, so
-    /// the dialed port is the proxy's) it's nil and the runner's own word
-    /// for its port is used.
+    /// would have to change; for any other host (runner.json's `host`, maybe
+    /// behind a proxy whose port isn't the runner's) it's nil and the
+    /// runner's own word for its port is used.
     public static func answer(challenge message: Data, token: String, dialedPort: Int?, clientNonce: String = newNonce()) throws -> (request: String, expected: String) {
         guard let object = try? JSONSerialization.jsonObject(with: message) as? [String: Any],
               object["method"] as? String == "auth.challenge",

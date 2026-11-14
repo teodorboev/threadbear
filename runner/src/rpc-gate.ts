@@ -118,6 +118,12 @@ export class CallerGate {
   // mode filled in, what only a client with the token may say taken out).
   check(threadId: string, method: string, p: Params): Params {
     const caller = this.authority(threadId);
+    // Any agent's move, Full's too: it never starts a turn by itself
+    // (Runner.update's carry-on after a limit is Mike's pick from the menu).
+    if (method === 'threads.update' && (p.cwd !== undefined || p.accountId !== undefined || p.poolId !== undefined)) p = { ...p, byAgent: true };
+    // Reinstalling stops every thread's runner; an agent hands that to the
+    // user (install-runner.sh refuses from a thread too), Full access or not.
+    if (method === 'runner.reinstall') throw new RpcError(ErrorCode.notAllowed, "Reinstalling the runner stops every thread's turn, so it's the user's to do: Reinstall now in the app's Updates panel.");
     if (caller.mode === 'full' && !caller.confined) return p;
     if (GATED_READS.has(method)) return p;
     const who = caller.confined ? 'This thread runs in a sandbox' : `This thread is on ${MODE_NAMES[caller.mode]}`;
@@ -180,14 +186,19 @@ export class CallerGate {
     if (!id) return out;
     const self = id === threadId;
     for (const k of Object.keys(p)) {
-      if (!['threadId', 'title', 'titleBy', 'cwd', 'accountId', 'poolId', 'model', 'effort', 'permissionMode', 'snoozedUntil', 'archived', 'archivedBy', 'starred'].includes(k)) {
+      if (!['threadId', 'title', 'titleBy', 'cwd', 'accountId', 'poolId', 'model', 'effort', 'permissionMode', 'snoozedUntil', 'archived', 'archivedBy', 'starred', 'byAgent'].includes(k)) {
         throw needs(`setting ${k} on a thread`);
       }
     }
     if (self && (p.archived === true || (p.snoozedUntil !== undefined && p.snoozedUntil !== null))) {
       throw new RpcError(ErrorCode.notAllowed, "Can't snooze or archive the thread this runs in from inside its own turn. Call end_turn with archive: true or a snooze instead.");
     }
-    if (p.title !== undefined) out.titleBy = 'agent';
+    if (p.title !== undefined) {
+      // Its words reach that thread's agent and others' (update_thread asks
+      // the same; Daybreak finding 111).
+      if (!self && above(this.targetAccess(id), caller)) throw needs(`renaming ${this.title(id)}`, 'update_thread');
+      out.titleBy = 'agent';
+    }
     if (p.archived === true) out.archivedBy = 'agent';
     else delete out.archivedBy;
     if (p.permissionMode !== undefined) {
@@ -204,6 +215,8 @@ export class CallerGate {
       if (this.deps.schedules?.list(id).some((sc) => sc.threadId === id && sc.check?.trim())) throw needs(`moving ${self ? 'this thread' : this.title(id)}, whose folder a schedule's check runs in`, 'move_thread');
       // Never out of a sandbox from here.
       out.unconfine = false;
+      // Nor starting a turn by itself (Runner.update's carry-on).
+      out.byAgent = true;
     }
     return out;
   }

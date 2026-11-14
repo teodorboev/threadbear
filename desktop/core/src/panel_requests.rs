@@ -11,17 +11,24 @@ use std::collections::HashSet;
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", default)]
 pub struct PanelRequest {
+    #[serde(default, deserialize_with = "crate::wire::id")]
     pub id: String,
-    /// "highlights", "patches", "usage", "updates", "connectors", or one of
-    /// the thread's panels' ids.
+    /// "highlights", "browser", "patches", "usage", "updates", "connectors",
+    /// or one of the thread's panels' ids.
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub panel: String,
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub title: String,
     /// "tab", "left", "right", "top", "bottom" or "window".
     #[serde(rename = "where")]
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub place: Option<String>,
     /// `pin` with `show`: the pin to open (the panel is "highlights").
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub highlight: Option<String>,
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub reload: Option<bool>,
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub at: String,
 }
 
@@ -50,8 +57,7 @@ pub const HIGHLIGHTS: &str = "threadbear.highlights";
 pub const PATCHES: &str = "threadbear.patches";
 
 /// The panel a request names, or None when the thread hasn't got it (a
-/// patch can go between the request and the look), or this app hasn't (the
-/// Browser pane).
+/// patch can go between the request and the look).
 pub fn panel(request: &PanelRequest, thread: &ThreadSummary) -> Option<RequestedPanel> {
     match request.panel.as_str() {
         "highlights" => Some(RequestedPanel::Section(HIGHLIGHTS.to_owned())),
@@ -59,7 +65,9 @@ pub fn panel(request: &PanelRequest, thread: &ThreadSummary) -> Option<Requested
         "usage" => Some(RequestedPanel::Usage),
         "updates" => Some(RequestedPanel::Updates),
         "connectors" => Some(RequestedPanel::Connectors),
-        "threadbear.browser" | "browser" => None,
+        // BrowserBear's handoff asks for it: the page the agent handed over
+        // is listed there, marked as Mike's turn, with Done.
+        crate::browserbear::PANEL_ID | "browser" => Some(RequestedPanel::Section(crate::browserbear::PANEL_ID.to_owned())),
         other => thread.panels.iter().flatten().any(|p| p["id"].as_str() == Some(other)).then(|| RequestedPanel::Section(other.to_owned())),
     }
 }
@@ -121,6 +129,8 @@ mod tests {
         assert_eq!(panel(&request("gone", None), &t), None, "a panel the thread hasn't got");
         assert_eq!(panel(&request("patches", None), &t), None, "no patches");
         assert_eq!(panel(&request("usage", None), &t), Some(RequestedPanel::Usage));
+        assert_eq!(panel(&request("browser", None), &t), Some(RequestedPanel::Section("threadbear.browser".into())), "the Browser pane");
+        assert_eq!(panel(&request("threadbear.browser", None), &t), Some(RequestedPanel::Section("threadbear.browser".into())));
         assert_eq!(place(&request("usage", Some("left"))), RequestedPlace::Side("left".into()));
         assert_eq!(place(&request("usage", Some("sideways"))), RequestedPlace::Usual);
         assert_eq!(place(&request("usage", Some("window"))), RequestedPlace::Window);

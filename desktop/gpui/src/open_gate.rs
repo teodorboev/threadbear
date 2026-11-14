@@ -93,12 +93,37 @@ pub(crate) fn open_web(url: &str, cx: &mut App) -> bool {
     }
 }
 
+/// A web page from a thread, a pin or a panel, in the browser, unless an
+/// agent already has it open through BrowserBear: then that tab comes to
+/// Mike instead of a second one opening (agent_browser.rs, `handoff`; the
+/// Swift app's `openWebPage`). Anything but a web address is refused as
+/// `open_web` refuses it.
+pub(crate) fn open_web_page(url: &str, cx: &mut App) {
+    let LinkKind::Web(web) = policy::link_kind(url) else {
+        open_web(url, cx);
+        return;
+    };
+    if !crate::agent_browser::may_hand_off(&web) {
+        system_open(&web, cx);
+        return;
+    }
+    cx.spawn(async move |cx| {
+        let asked = web.clone();
+        // Up to 4 s on BrowserBear's socket, off the main thread.
+        let handed = cx.background_executor().spawn(async move { crate::agent_browser::handoff(&asked) }).await;
+        if !handed {
+            cx.update(|cx| system_open(&web, cx));
+        }
+    })
+    .detach();
+}
+
 /// Any link from a thread, a page, a patch or a pin: a web page in the
-/// browser, a file through `open_file` (a relative one from `cwd`), anything
+/// browser (or an agent's tab already on it), a file through `open_file` (a relative one from `cwd`), anything
 /// else only once Mike says yes to it.
 pub(crate) fn open_link(url: &str, origin: Origin, cwd: &str, cx: &mut App) {
     match policy::link_kind(url) {
-        LinkKind::Web(web) => system_open(&web, cx),
+        LinkKind::Web(web) => open_web_page(&web, cx),
         LinkKind::File(path) => match policy::absolute(&path, cwd, &crate::files::home_dir()) {
             Some(path) => open_file(&path, origin, cx),
             None => refuse(format!("Threadbear couldn't tell where {} is.", threadbear_core::highlights::last_component(&path)), cx),
@@ -124,23 +149,155 @@ pub(crate) fn open_in_chrome_profile(url: &str, directory: &str, cx: &mut App) {
     if scripted_opens(&format!("chrome {directory} {web}")) {
         return;
     }
-    if !start_chrome_profile(&web, directory) {
-        system_open(&web, cx);
+    #[cfg(target_os = "macos")]
+    {
+        // The Chrome that's running (the profiles are only offered while it
+        // is), never whichever bundle Launch Services has for Chrome's id:
+        // any folder's .app can claim that id, and `open -na` starts the
+        // bundle it's given (Daybreak 112, 13 Nov 2026). Its signature is
+        // checked off the main thread (a quarter of a second), with a note
+        // up meanwhile, and anything but Google's own Chrome isn't started.
+        let Some(chrome) = running_chrome().filter(|p| policy::real_path(Path::new(p)).is_ok_and(|r| installed_where_apps_are(&r))) else {
+            system_open(&web, cx);
+            return;
+        };
+        let Some(app) = cx.try_global::<GateNotices>().and_then(|n| n.0.upgrade()) else { return };
+        let directory = directory.to_owned();
+        cx.defer(move |cx| {
+            if !app.update(cx, |app, cx| app.begin_note("opening-chrome", "Opening Chrome…", cx)) { return; }
+            cx.spawn(async move |cx| {
+                let page = web.clone();
+                let result = cx.background_executor().spawn(async move { start_chrome_profile(&chrome, &page, &directory) }).await;
+                cx.update(|cx| {
+                    app.update(cx, |app, cx| app.end_note("opening-chrome", cx));
+                    if let Err(why) = result { refuse(why, cx) }
+                });
+            }).detach();
+        });
+        return;
     }
+    #[cfg(not(target_os = "macos"))]
+    system_open(&web, cx);
+}
+
+/// The running Chrome's bundle, if there is one.
+#[cfg(target_os = "macos")]
+fn running_chrome() -> Option<String> {
+    use objc2_app_kit::NSRunningApplication;
+    use objc2_foundation::NSString;
+    let running = NSRunningApplication::runningApplicationsWithBundleIdentifier(&NSString::from_str(threadbear_core::reply_links::CHROME_BUNDLE_ID));
+    (0..running.count()).find_map(|i| running.objectAtIndex(i).bundleURL().and_then(|u| u.path()).map(|p| p.to_string()))
+}
+
+/// What Google's Chrome is signed as: Apple's anchor for a Developer ID,
+/// Chrome's own id and Google's team. A copy with Chrome's id but anything
+/// else inside fails it.
+/// Where an app this gate starts by itself may be: the Mac's own folders
+/// for apps, which an agent confined to a project can't write. Chrome in
+/// ~/Applications goes to the default browser without its profile.
+#[cfg(target_os = "macos")]
+const INSTALLED_APPS: &[&str] = &["/Applications/", "/System/Applications/", "/Library/Developer/"];
+
+/// Whether a real (symlinks followed) path is under `INSTALLED_APPS`.
+#[cfg(target_os = "macos")]
+fn installed_where_apps_are(real: &Path) -> bool {
+    INSTALLED_APPS.iter().any(|root| real.starts_with(root))
 }
 
 #[cfg(target_os = "macos")]
-fn start_chrome_profile(web: &str, directory: &str) -> bool {
-    use objc2_app_kit::NSWorkspace;
-    use objc2_foundation::NSString;
-    let Some(app) = NSWorkspace::sharedWorkspace().URLForApplicationWithBundleIdentifier(&NSString::from_str(threadbear_core::reply_links::CHROME_BUNDLE_ID)) else { return false };
-    let Some(app) = app.path().map(|p| p.to_string()) else { return false };
-    std::process::Command::new("/usr/bin/open").args(["-na", &app, "--args", &format!("--profile-directory={directory}"), web]).spawn().is_ok()
+const GOOGLE_CHROME: &str = "anchor apple generic and identifier \"com.google.Chrome\" and certificate leaf[subject.OU] = \"EQHXZ8M8AV\"";
+
+#[cfg(target_os = "macos")]
+fn start_chrome_profile(path: &str, web: &str, directory: &str) -> Result<(), String> {
+    let real = signed_as(path, GOOGLE_CHROME).map_err(|_| "The Chrome that's running isn't Google's Chrome, so Threadbear didn't open the page in it.".to_owned())?;
+    std::process::Command::new("/usr/bin/open").arg("-na").arg(&real).args(["--args", &format!("--profile-directory={directory}"), web]).spawn().map(|_| ()).map_err(|e| format!("Chrome didn't open: {e}"))
 }
 
-#[cfg(not(target_os = "macos"))]
-fn start_chrome_profile(_web: &str, _directory: &str) -> bool {
-    false
+/// The application at `path`, symlinks followed, if it's installed where
+/// apps are (`INSTALLED_APPS`) and its code signature is valid and meets
+/// `requirement` (`codesign -R`), so a fixed button or menu never starts a
+/// bundle that only borrowed another app's id. The place matters too: the
+/// check and `open` each read the bundle at its path, so a signed copy in a
+/// project folder could be swapped between them by whatever writes there
+/// (Codex's review of the Daybreak 112 fix).
+#[cfg(target_os = "macos")]
+fn signed_as(path: &str, requirement: &str) -> Result<std::path::PathBuf, ()> {
+    let real = policy::real_path(Path::new(path)).map_err(|_| ())?;
+    if !installed_where_apps_are(&real) { return Err(()); }
+    let signed = std::process::Command::new("/usr/bin/codesign")
+        // Not --strict: that also refuses extended attributes on the bundle
+        // ("detritus"), which a real Chrome on a real Mac can have (Tinker
+        // Desk's did), and says nothing about who made the code. The
+        // signature, the sealed resources and the requirement are checked.
+        .args(["--verify", &format!("-R={requirement}")])
+        .arg(&real).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).status();
+    if signed.is_ok_and(|s| s.success()) { Ok(real) } else { Err(()) }
+}
+
+/// The picture panel's fixed destination, as in Swift's ImagePanel. Nothing
+/// from a patch can choose a program or supply arguments here.
+pub(crate) fn open_simulator(cx: &mut App) {
+    if scripted_opens("application com.apple.iphonesimulator") { return; }
+    #[cfg(target_os = "macos")]
+    {
+        use objc2_app_kit::NSWorkspace;
+        use objc2_foundation::NSString;
+        let url = NSWorkspace::sharedWorkspace().URLForApplicationWithBundleIdentifier(&NSString::from_str("com.apple.iphonesimulator"));
+        let Some(path) = url.and_then(|u| u.path()).map(|p| p.to_string()) else { refuse("Simulator isn't installed on this Mac.".into(), cx); return };
+        let Some(app) = cx.try_global::<GateNotices>().and_then(|n| n.0.upgrade()) else { return };
+        cx.defer(move |cx| {
+            if !app.update(cx, |app, cx| app.begin_note("opening-simulator", "Opening Simulator…", cx)) { return; }
+            cx.spawn(async move |cx| {
+                let result = cx.background_executor().spawn(async move { apple_simulator(&path) }).await;
+                cx.update(|cx| {
+                    app.update(cx, |app, cx| app.end_note("opening-simulator", cx));
+                    match result {
+                        Ok(path) => system_open(&policy::file_url(&path), cx),
+                        Err(why) => refuse(why, cx),
+                    }
+                });
+            }).detach();
+        });
+        return;
+    }
+    #[cfg(not(target_os = "macos"))]
+    refuse("Simulator is only available on macOS.".to_owned(), cx);
+}
+
+#[cfg(target_os = "macos")]
+fn apple_simulator(path: &str) -> Result<String, String> {
+    if policy::real_path(Path::new(path)).is_err() { return Err("Simulator isn't there any more.".to_owned()); }
+    // Any .app on this Mac can be registered with Launch Services (Finder
+    // and Spotlight do it on sight). A copied bundle id must never turn this
+    // fixed button into a way to run that application without the gate's
+    // usual question.
+    let real = signed_as(path, "anchor apple and identifier \"com.apple.iphonesimulator\"").map_err(|_| "The registered Simulator isn't Apple's Simulator, so Threadbear didn't open it.".to_owned())?;
+    Ok(real.to_string_lossy().into_owned())
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod simulator_tests {
+    #[test]
+    fn the_selected_xcodes_simulator_passes_the_apple_signature_check() {
+        let selected = std::process::Command::new("/usr/bin/xcode-select").arg("-p").output().unwrap();
+        let developer = String::from_utf8_lossy(&selected.stdout);
+        let simulator = std::path::Path::new(developer.trim()).join("Applications/Simulator.app");
+        // The command-line-tools-only Mac has no Simulator. GitHub's Mac
+        // check has Xcode and exercises its real nested app signature.
+        if !simulator.exists() { return; }
+        assert!(super::apple_simulator(&simulator.to_string_lossy()).is_ok(), "Apple's installed Simulator was refused");
+    }
+
+    #[test]
+    fn a_copied_simulator_bundle_id_does_not_allow_an_unsigned_application() {
+        let folder = std::env::temp_dir().join(format!("tb-unsigned-simulator-{}.app", std::process::id()));
+        let _ = std::fs::remove_dir_all(&folder);
+        threadbear_core::private_file::dir(&folder.join("Contents")).unwrap();
+        threadbear_core::private_file::write(&folder.join("Contents/Info.plist"), br#"<?xml version="1.0"?><plist version="1.0"><dict><key>CFBundleIdentifier</key><string>com.apple.iphonesimulator</string><key>CFBundlePackageType</key><string>APPL</string></dict></plist>"#).unwrap();
+        let result = super::apple_simulator(&folder.to_string_lossy());
+        let _ = std::fs::remove_dir_all(folder);
+        assert!(result.is_err(), "An unsigned app with Simulator's id passed: {result:?}");
+    }
 }
 
 /// The browser web pages open in, with its bundle id (`DefaultBrowser.current()`),
@@ -253,9 +410,139 @@ pub(crate) fn open_file(path: &str, origin: Origin, cx: &mut App) {
     }
 }
 
+/// A small, read-only raster for a local PDF or video hover card. Called on
+/// the background executor; the asset loader serializes decoders. Failure keeps the kind icon.
+#[cfg(target_os = "macos")]
+pub(crate) fn media_thumbnail(path: &str, origin: Origin, expected: Option<policy::MediaVersion>) -> Option<Vec<u8>> {
+    use std::os::fd::IntoRawFd as _;
+    use std::os::unix::ffi::OsStrExt as _;
+    let expected = expected?;
+    let kind = policy::media_kind(path)?;
+    if !matches!(kind, policy::Media::Pdf | policy::Media::Video) { return None }
+    let pdf = kind == policy::Media::Pdf;
+    let policy::MediaVerdict::Show(checked) = policy::decide_media(path, origin) else { return None };
+    if policy::media_version(&checked.file.metadata().ok()?) != Some(expected) { return None }
+    if pdf && checked.len > 16 * 1024 * 1024 { return None }
+    let name = std::ffi::CString::new(checked.real.as_os_str().as_bytes()).ok()?;
+    let length = i64::try_from(checked.len).ok()?;
+    extern "C" {
+        fn tb_media_thumbnail(file: i32, length: i64, name: *const std::ffi::c_char, pdf: bool, expected: *const policy::MediaVersion, out: *mut u8, capacity: usize) -> usize;
+    }
+    let mut png = vec![0; 2 * 1024 * 1024];
+    // The native function owns the descriptor on every path, reopens no original path,
+    // caps its raster at 552×340 and its system thumbnail request at five seconds.
+    let count = unsafe { tb_media_thumbnail(checked.file.into_raw_fd(), length, name.as_ptr(), pdf, &expected, png.as_mut_ptr(), png.len()) };
+    if count == 0 || count > png.len() { return None }
+    png.truncate(count);
+    Some(png)
+}
+
+#[cfg(not(target_os = "macos"))]
+pub(crate) fn media_thumbnail(_path: &str, _origin: Origin, _expected: Option<policy::MediaVersion>) -> Option<Vec<u8>> { None }
+
 // ---------------------------------------------------------------- shown in the app
 
-/// A video or a PDF in the Mac's own view (media_view.rs), in `opening`'s
+/// The gate's checked icon input: an icns or PDF file, open, with its length.
+/// An application's icon is its own icns file, found and read like any other
+/// (`application_icon`).
+#[cfg(target_os = "macos")]
+pub(crate) struct CheckedIcon(std::fs::File, u64);
+
+/// Resolve and read only on a worker, including for application bundles on
+/// a disk that may be slow. Remote paths never name a file on this Mac.
+#[cfg(target_os = "macos")]
+pub(crate) fn read_icon(path: &Path, origin: Origin) -> Result<CheckedIcon, std::io::Error> {
+    if origin == Origin::OtherMac || !path.is_absolute() {
+        return Err(std::io::Error::other("That icon isn't on this Mac"));
+    }
+    let ext = |p: &Path| p.extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
+    let wanted = ext(path);
+    let real = policy::real_path(path)?;
+    if ext(&real) != wanted || !matches!(wanted.as_str(), "app" | "pdf" | "icns") {
+        return Err(std::io::Error::other("That isn't a Mac icon"));
+    }
+    if wanted == "app" {
+        if !real.is_dir() { return Err(std::io::Error::other("That isn't an application bundle")); }
+        return application_icon(&real);
+    }
+    checked_icon_file(&real, &wanted)
+}
+
+/// An application's icon, read as a file from inside its bundle: the icns
+/// its Info.plist names (CFBundleIconFile) in Contents/Resources. Never
+/// NSWorkspace's icon for it, which can register the bundle with Launch
+/// Services, so a folder's .app claiming Chrome's id could be the one a
+/// launch by that id starts (Daybreak 112, 13 Nov 2026). An app whose icon
+/// is only in an asset catalog shows its patch's symbol instead.
+#[cfg(target_os = "macos")]
+fn application_icon(bundle: &Path) -> Result<CheckedIcon, std::io::Error> {
+    extern "C" {
+        fn tb_bundle_icon_file(plist: *const u8, length: usize, output: *mut u8, capacity: usize) -> isize;
+    }
+    let inside = |p: &Path| -> Result<std::path::PathBuf, std::io::Error> {
+        let real = policy::real_path(p)?;
+        if real.starts_with(bundle) && real != bundle { Ok(real) } else { Err(std::io::Error::other("That application's icon is outside it")) }
+    };
+    const PLIST_BYTES: usize = 1024 * 1024;
+    let plist = policy::local_read(&inside(&bundle.join("Contents/Info.plist"))?, PLIST_BYTES + 1)?;
+    if plist.len() > PLIST_BYTES { return Err(std::io::Error::other("That application's Info.plist is too big")); }
+    let mut name = [0u8; 256];
+    let length = unsafe { tb_bundle_icon_file(plist.as_ptr(), plist.len(), name.as_mut_ptr(), name.len()) };
+    let name = usize::try_from(length).ok().and_then(|n| std::str::from_utf8(&name[..n]).ok()).unwrap_or_default();
+    // A file name in Resources, nothing that climbs or names a folder.
+    if name.is_empty() || name.starts_with('.') || name.contains(['/', '\\', '\0']) {
+        return Err(std::io::Error::other("That application names no icon file"));
+    }
+    let file = if name.to_ascii_lowercase().ends_with(".icns") { name.to_owned() } else { format!("{name}.icns") };
+    let real = inside(&bundle.join("Contents/Resources").join(file))?;
+    checked_icon_file(&real, "icns")
+}
+
+/// `real`, opened, if it's a small regular file of the kind `wanted` says
+/// (`pdf` or `icns`) by its first bytes.
+#[cfg(target_os = "macos")]
+fn checked_icon_file(real: &Path, wanted: &str) -> Result<CheckedIcon, std::io::Error> {
+    let file = policy::local_open(real)?;
+    let meta = file.metadata()?;
+    if !meta.is_file() || meta.len() > 32 * 1024 * 1024 {
+        return Err(std::io::Error::other("That icon isn't a small regular file"));
+    }
+    let mut head = [0u8; 8];
+    let got = std::os::unix::fs::FileExt::read_at(&file, &mut head, 0)?;
+    let matches = if wanted == "pdf" {
+        policy::looks_like(policy::Media::Pdf, &head[..got], meta.len())
+    } else {
+        got == 8 && head.starts_with(b"icns") && u32::from_be_bytes(head[4..8].try_into().unwrap()) as u64 == meta.len()
+    };
+    if !matches { return Err(std::io::Error::other("That file isn't the icon it names")); }
+    Ok(CheckedIcon(file, meta.len()))
+}
+
+/// PNG bytes for a checked patch icon, on a worker (ImageIO and
+/// CoreGraphics). AppKit never sees the application.
+#[cfg(target_os = "macos")]
+pub(crate) fn icon_png(icon: CheckedIcon) -> Result<Vec<u8>, std::io::Error> {
+    use std::os::fd::AsRawFd as _;
+    extern "C" {
+        fn tb_file_icon_png(fd: i32, length: i64, output: *mut *mut std::ffi::c_void) -> i32;
+        fn free(data: *mut std::ffi::c_void);
+    }
+    let mut output = std::ptr::null_mut();
+    let CheckedIcon(file, length) = icon;
+    let length = unsafe { tb_file_icon_png(file.as_raw_fd(), length as i64, &mut output) };
+    if output.is_null() || length <= 0 { return Err(std::io::Error::other("That icon couldn't be decoded")); }
+    // AppKit hands over a malloc copy, so Rust owns neither an Objective-C
+    // object nor the allocation after this copy and free.
+    let bytes = unsafe { std::slice::from_raw_parts(output.cast::<u8>(), length as usize).to_vec() };
+    unsafe { free(output); }
+    Ok(bytes)
+}
+
+#[cfg(all(test, target_os = "macos"))]
+#[path = "open_gate/icon_tests.rs"]
+mod icon_tests;
+
+/// A video, PDF or document thumbnail in the Mac's own view (media_view.rs), in `opening`'s
 /// window view: only this Mac's own file, and only a real one of the kind
 /// the view is for, after its symlinks are followed (`decide_media`). The
 /// view is handed the file the rules opened and checked, and reads that,
@@ -267,10 +554,11 @@ pub(crate) fn open_file(path: &str, origin: Origin, cx: &mut App) {
 pub(crate) fn show_media(path: &str, origin: Origin, kind: crate::media_view::Kind, opening: crate::media_view::Opening) -> Result<crate::media_view::Media, String> {
     use crate::media_view::Kind;
     use policy::{Media, MediaVerdict};
-    let wants = if kind == Kind::PaneDocument { Media::Pdf } else { Media::Video };
+    let wants = match kind { Kind::PaneDocument => Media::Pdf, Kind::PaneQuickLook => Media::Office, _ => Media::Video };
     let name = threadbear_core::highlights::last_component(path).to_owned();
     if policy::media_kind(path) != Some(wants) {
-        return Err(format!("{name} isn't {}, so Threadbear didn't open it.", if wants == Media::Pdf { "a PDF" } else { "a video" }));
+        let what = match wants { Media::Pdf => "a PDF", Media::Office => "an Office or iWork document", Media::Video => "a video" };
+        return Err(format!("{name} isn't {what}, so Threadbear didn't open it."));
     }
     match policy::decide_media(path, origin) {
         MediaVerdict::Refuse(why) => Err(why),

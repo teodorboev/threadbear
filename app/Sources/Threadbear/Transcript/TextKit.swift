@@ -355,8 +355,8 @@ final class TranscriptTextView: NSTextView {
     }
 
     /// Runs `body` with this text's thread as the one links are followed
-    /// in (AppModel.linkThreadId), so another Mac's thread in a panel has
-    /// its paths fetched from that Mac, not read as this Mac's.
+    /// in (AppModel.linkThreadId), so another Mac's thread in a panel never
+    /// has its paths read as this Mac's.
     func forItsThread<T>(_ threadId: String? = nil, _ body: () -> T) -> T {
         let app = AppModel.shared
         let saved = app.linkThreadId

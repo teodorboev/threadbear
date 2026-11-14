@@ -1,12 +1,13 @@
-# Threadbear: full Convex by default
+# Threadbear: full Convex
 
 Written 5 Nov 2026 in thread 3a33a492, after Jamie Turner's DM. Numbers are from
 Mike's M5 unless they say otherwise, and estimates say so.
 
 ## What we're doing and why
 
-Every finished thread event goes to the person's own Convex deployment, on by
-default with an off switch. Other machines' threads are then read and steered
+Every finished thread event can go to the person's own Convex deployment: off to
+start, offered once when a phone, the website or another machine would show it
+(changed from on by default on 13 Nov, see step 6). Other machines' threads are then read and steered
 through Convex, so the Tailscale link, runner tokens and `tb pair` can go.
 
 Two reasons:
@@ -20,7 +21,7 @@ Two reasons:
 
 | Question | Decision |
 |---|---|
-| Default | Full sync on, with an off switch |
+| Default | Off, and offered once when it would help: a phone or the website paired, or another machine added (Mike, 13 Nov) |
 | Order | Cut reads first, scrubbing before any tool output goes up |
 | Tool screenshots | Stay on the runner, fetched on tap, uploaded for a day |
 | Pasted pictures | Sync by default, own line in the docs that they can't be scrubbed (lands after the launch video, thread 531a6ae0) |
@@ -210,7 +211,36 @@ The original plan for this step follows.
 - Ask (the quick question feature) still talks to the archive server directly.
   `quickAsk` commands exist, so moving it is a small separate job.
 
-### 6. On by default
+### 6. Offered when it helps
+
+**Changed 13 Nov: offered when it helps, not on by default.** Mike's call, after
+weighing who benefits: every benefit of full sync is reading a thread somewhere
+other than the machine that ran it (the phone, the website, another machine, or a
+runner that's gone), so a one-Mac user would get the costs and none of the benefits.
+
+Setup leaves `sync.full` unset and says what it gives. The main runner asks once,
+in a thread of its own (`FullSyncOffer`, `src/convex-use.ts`), when it would help:
+a phone or browser token is issued here (`devices.issue`), another runner turns up
+on this backend (`remoteThreads.updated` with runners), or either is already true a
+few minutes after it starts (`sync:listTokens` and the other-runners list). The
+question names what happened ("You've paired your phone. Want it to show this
+Mac's tool output and diffs too, even when the Mac's asleep?"). It then notes
+`sync.fullAsked`, `sync.fullAskedThread` and `sync.fullAskedQuestion` so it never
+asks again. Mike's pick on that thread's card sets the answer: the runner does it
+itself, from the message's `answers` (Runner's `answered`, `fullSyncAnswerer`), only
+on an ask with exactly the noted question, the two options and what they do, and
+nothing else (the agent writes the card, and another thread could talk it into the
+same options under other words), and forgets the thread so it happens once (no
+answer leaves it off). The thread's agent can't set it unless it's
+on Full: an agent only reads the answer as words, and until 13 Nov any thread of the
+same mode could send it those words and have it run `tb settings full on` (Daybreak
+121). Agents' messages never carry `answers` (`src/rpc-gate.ts` takes them out). An install with `sync.full`
+set either way is never asked or changed, and a runner key's machine is never asked.
+`tb status` estimates this runner's use against Free and warns past 70% ("Warning
+before the limits" in docs/convex-backend.md); for its first day it shows what's
+been sent instead. Mike's runners have `sync.full: true` and
+`sync.usageWarning: false`. Built 13 Nov in 50ae02a4 (on by default, asked once) and
+reworked the same day to this. Not done: the iPhone opening tool output (1.0.5).
 
 **Free accounts, worked out 6 Nov** from 1.52 hours of real rows: 2,797 bodies, 5.21 MB, 221 M5
 turns, so about 24 KB of body rows a turn. Writes plus 30-day deletion make about 48 KB a turn of
@@ -234,9 +264,9 @@ nothing today. Keep it counting. It's not ready to hold anything back, and how m
 data is still unknown, as nothing in the sample hit the rules either.
 
 - Only once 2, 3 and 4 have run on Mike's runners, and step 5 works.
-- New installs: on, and setup says in plain words what goes up, what can't be
-  scrubbed, and where the switch is.
-- Existing installs: asked once, never switched silently.
+- New installs: off, offered once when it helps, and setup says in plain words
+  what it gives, what goes up, what can't be scrubbed, and where the switch is.
+- Existing installs: the same offer, never switched silently.
 - Update `docs/on-your-mac.md`, the README, the guide and the landing page's
   "What goes up to Convex?" and "Where your stuff lives" (`site/`) in the same
   landing.

@@ -57,10 +57,13 @@ When('I press the thread chip {string}', async function (this: ThreadbearWorld, 
 });
 
 // What the runner writes when another thread's agent sends this one a
-// message (send_message): its first line names that thread.
+// message (send_message): its first line names that thread, by the first 8
+// characters of its id as the runner writes it (threadbear-mcp.ts `from`).
+// With the whole id here, the GPUI app's chip passed while every real one
+// was drawn as plain words (13 Nov).
 When('the agent in {string} sends this thread a message', async function (this: ThreadbearWorld, title: string) {
   const sender = await this.until(`a thread called "${title}"`, (d) => this.thread(d, title));
-  await this.app.do({ cmd: 'send', text: `[Sent by the agent in the thread "${title}" (${sender.id})]` });
+  await this.app.do({ cmd: 'send', text: `[Sent by the agent in the thread "${title}" (${sender.id.slice(0, 8)})]` });
 });
 
 Then('the message is headed by the thread chip {string}', async function (this: ThreadbearWorld, title: string) {

@@ -97,6 +97,43 @@ pub(crate) fn run_once(settings: &mut Settings, cx: &App) -> Option<String> {
     rules::note(&filled, drafts)
 }
 
+/// The Swift app's tour, page intros and Finish setting up, brought across
+/// once, apart from the rest: the rest had already come across on Mike's Mac
+/// before this app had a tour, and without this it would start the tour on
+/// him. Till it's done (`swift_tour_import`), the tour doesn't start by itself
+/// (`Threadbear::tour_start_if_new`), so a `defaults` that failed this launch
+/// can't show the tour to someone who finished it there. Only on the real data
+/// folder, as `run_once`; anywhere else it counts as done with nothing to
+/// bring, so a dev runner's app gets the tour as a new Mac would.
+pub(crate) fn tour_once(settings: &mut Settings) {
+    if settings.saved.swift_tour_import.is_some() {
+        return;
+    }
+    let stand_in = std::env::var_os("THREADBEAR_SWIFT_DEFAULTS");
+    let defaults = if stand_in.is_none() && !crate::installed::on_real_data() {
+        Default::default()
+    } else {
+        match read_defaults(stand_in.as_deref()) {
+            Ok(defaults) => defaults,
+            Err(e) => {
+                eprintln!("threadbear: the Swift app's tour will be looked for again next launch: {e}");
+                return;
+            }
+        }
+    };
+    let before = settings.saved.clone();
+    let mut current = serde_json::to_value(&settings.saved).ok().and_then(|v| v.as_object().cloned()).unwrap_or_default();
+    rules::fill_missing(&mut current, rules::tour_state(&defaults));
+    if let Ok(saved) = serde_json::from_value(Value::Object(current)) {
+        settings.saved = saved;
+    }
+    settings.saved.swift_tour_import = Some(threadbear_core::inbox::iso_time(crate::now_ms()));
+    if let Err(e) = settings.save_checked() {
+        settings.saved = before;
+        eprintln!("threadbear: the Swift app's tour will be looked for again next launch: {e}");
+    }
+}
+
 /// Saves the record that `part` is done, before its writes: false (and the
 /// part left for next time) if the record didn't stick.
 fn record(settings: &mut Settings, part: &str, retry: &mut Option<String>) -> bool {
@@ -138,6 +175,16 @@ fn read_defaults(stand_in: Option<&std::ffi::OsStr>) -> Result<std::collections:
         Some(Plist::Dict(d)) => d,
         _ => Default::default(),
     })
+}
+
+/// This toast arrived after the main one-time import. Keep a milestone the
+/// Swift app already showed, even when that import finished on an older build.
+pub(crate) fn milestone_shown() -> Option<usize> {
+    let defaults = read_defaults(None).ok()?;
+    match defaults.get("threadMilestoneShown")? {
+        Plist::Integer(tier) => usize::try_from(*tier).ok(),
+        _ => None,
+    }
 }
 
 /// The Swift app's settings as an XML property list, through cfprefsd, so

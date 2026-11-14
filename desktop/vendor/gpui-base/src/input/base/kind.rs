@@ -78,6 +78,10 @@ impl MultiLineMode for EditorMode {}
 /// during an edit. Adding a field an editor renders belongs here and leaves
 /// the engine's callbacks alone.
 pub trait InputExtras: Default + 'static {
+    /// This app's: the whole value was set (`set_value`), which emits no
+    /// change, so what was drawn for the old text goes.
+    fn value_set(&mut self) {}
+
     /// Decoration ranges to paint, innermost collection first.
     fn decoration_layers(&self) -> Vec<&[TextDecoration]> {
         Vec::new()
@@ -366,8 +370,27 @@ impl InputModeKind for InputMode {
 impl InputModeKind for TextareaMode {
     const MULTI_LINE: bool = true;
 
-    /// Ordinary multi-line text needs nothing beyond the shared engine.
-    type Extras = ();
+    /// Ordinary multi-line text, with this app's marks under it (spelling).
+    type Extras = TextareaExtras;
+}
+
+/// This app's: what a textarea draws under ranges of its text, as an
+/// NSTextView marks misspelled words (Threadbear's message box). Set whole
+/// with [`crate::input::TextareaState::set_text_marks`]; the caller sets it
+/// again after each edit, so nothing here moves the ranges along.
+#[derive(Default)]
+pub struct TextareaExtras {
+    pub(crate) marks: Vec<TextDecoration>,
+}
+
+impl InputExtras for TextareaExtras {
+    fn value_set(&mut self) {
+        self.marks.clear();
+    }
+
+    fn decoration_layers(&self) -> Vec<&[TextDecoration]> {
+        if self.marks.is_empty() { Vec::new() } else { vec![&self.marks] }
+    }
 }
 // `EditorMode`'s implementation lives with the editor code, next to the
 // language features it dispatches to.

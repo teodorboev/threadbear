@@ -69,8 +69,17 @@ Feature: Acting on a thread from its sidebar row
   Scenario: Pick a time hibernates the thread until a date and time
     When I open the Hibernate menu for "Morning brief"
     And I choose "Pick a time…" in the menu
+    Then the Hibernate dialog shows a month calendar and a separate time field
     And I pick tomorrow at 9:00
     Then the "Hibernating" section lists "Morning brief"
+
+  @manual @sidebar.hibernate.pick
+  Scenario: An earlier time today can be corrected in the Hibernate dialog
+    When I open the Hibernate menu for "Morning brief"
+    And I choose "Pick a time…" in the menu
+    And I choose an earlier time today and press Hibernate
+    Then the Hibernate dialog says "That time has already gone. Pick a later one."
+    And its chosen day and time remain available to edit
 
   @sidebar.hibernate.wake
   Scenario: Wake when puts it away in my own words

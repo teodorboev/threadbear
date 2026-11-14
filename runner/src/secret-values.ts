@@ -459,16 +459,39 @@ export class KnownValues {
 
   mask(text: string): string {
     const re = this.compiled();
-    return re ? this.maskCutOff(text.replace(re, '[REDACTED]')) : text;
+    if (!re) return text;
+    const replaced = text.replace(re, '[REDACTED]');
+    const after = this.cutOff(replaced);
+    // A cut-off value is looked for in the text as it came too, not only
+    // once whole values are out: a shorter value that's the start of a
+    // longer one cut off at the end was taken out of it, and the rest of the
+    // longer one no longer looked like its start (Codex's review, 13 Nov
+    // 2026). Both are masked, so this never masks less than before.
+    const before = this.cutOff(text);
+    if (!before) return after ? `${replaced.slice(0, after[0])}[REDACTED]${replaced.slice(after[1])}` : replaced;
+    // Only then the places of the whole values, to put the two together.
+    const whole = [...text.matchAll(re)].map((m) => [m.index, m.index + m[0].length] as const);
+    const spans: (readonly [number, number])[] = [...whole, before];
+    if (after) spans.push([toOriginal(after[0], whole, false), toOriginal(after[1], whole, true)]);
+    spans.sort((a, b) => a[0] - b[0]);
+    let out = '';
+    let at = 0;
+    for (let k = 0; k < spans.length; ) {
+      let [start, end] = spans[k++]!;
+      while (k < spans.length && spans[k]![0] < end) end = Math.max(end, spans[k++]![1]);
+      out += `${text.slice(at, start)}[REDACTED]`;
+      at = end;
+    }
+    return out + text.slice(at);
   }
 
   // A value cut off at the end of the text: a title, a tool line or a message
   // cut short before this runner knew the value. All but the last few
   // characters would otherwise go up, and no whole-value match can see it. By
   // each value's first few characters in a table, so this costs the same however
-  // many values there are.
-  private maskCutOff(text: string): string {
-    if (text.length < MIN_CUT_OFF || !this.starts.size) return text;
+  // many values there are. Where it is, [start, end), or undefined.
+  private cutOff(text: string): [number, number] | undefined {
+    if (text.length < MIN_CUT_OFF || !this.starts.size) return undefined;
     const from = Math.max(0, text.length - this.longest - 64);
     const tail = text.slice(from);
     const ending = CUT_ENDING.exec(tail.slice(-200));
@@ -478,8 +501,21 @@ export class KnownValues {
       const candidates = this.starts.get(head.slice(at, at + MIN_CUT_OFF));
       if (!candidates) continue;
       const rest = head.slice(at);
-      if (candidates.some((v) => rest.length < v.length && v.startsWith(rest))) return `${text.slice(0, from + at)}[REDACTED]${tail.slice(end)}`;
+      if (candidates.some((v) => rest.length < v.length && v.startsWith(rest))) return [from + at, from + end];
     }
-    return text;
+    return undefined;
   }
+}
+
+// A place in the text with its whole values replaced by "[REDACTED]", as a
+// place in the text as it came. Inside a replacement, its start (or its end).
+function toOriginal(i: number, whole: (readonly [number, number])[], isEnd: boolean): number {
+  let delta = 0;
+  for (const [s, e] of whole) {
+    const rs = s + delta;
+    if (i < rs || (isEnd && i === rs)) break;
+    if (i < rs + 10 || (isEnd && i === rs + 10)) return isEnd ? e : s;
+    delta += 10 - (e - s);
+  }
+  return i - delta;
 }

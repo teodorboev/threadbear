@@ -6,17 +6,18 @@
 //
 // It shows over the pane's section the way a file preview does, with Back to
 // the section, and a preview opened after it takes its place.
+use crate::spinner::Spinner;
 use crate::app::Threadbear;
 use crate::highlights::{palette, SidePane};
 use crate::style::{self, size};
 use crate::{call, icons};
 use gpui_kit::component::input::{InputEvent, Textarea, TextareaState};
-use gpui_kit::component::{h_flex, spinner::Spinner, v_flex, Sizable as _, StyledExt as _};
+use gpui_kit::component::{h_flex, v_flex, Sizable as _, StyledExt as _};
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 // The zoom-aware px (style.rs), in place of GPUI's.
 use crate::style::px;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use threadbear_core::explain::{self as rules, ExplainSession};
 use threadbear_core::inbox::ThreadSummary;
 
@@ -25,7 +26,10 @@ use threadbear_core::inbox::ThreadSummary;
 #[derive(Default)]
 pub(crate) struct ExplainState {
     sessions: HashMap<String, ExplainSession>,
-    showing: HashSet<String>,
+    /// Per thread, the section its explanation shows over: the one chosen
+    /// when Explain was pressed, so a click in another section shown beside
+    /// it doesn't move it.
+    showing: HashMap<String, String>,
     next: u64,
     /// The follow-up box per thread, made at its first draw (it needs the
     /// window), with what it says when Return's pressed.
@@ -43,9 +47,10 @@ pub(crate) fn explain(app: &Entity<Threadbear>, thread: &ThreadSummary, selectio
         side.explain.next += 1;
         let session = ExplainSession::new(side.explain.next, selection, message);
         side.explain.sessions.insert(thread.id.clone(), session);
-        side.explain.showing.insert(thread.id.clone());
+        let section = side.section_for(thread);
+        side.explain.showing.insert(thread.id.clone(), section.clone());
         cx.notify();
-        side.section_for(thread)
+        section
     });
     // Over the section it's in, opening that if it's closed.
     app.update(cx, |t, cx| {
@@ -85,7 +90,12 @@ fn fetch(side: &Entity<SidePane>, thread_id: &str, index: usize, cx: &mut App) {
 impl SidePane {
     /// Whether this thread's pane is showing its explanation.
     pub(crate) fn explaining(&self, thread_id: &str) -> bool {
-        self.explain.showing.contains(thread_id) && self.explain.sessions.contains_key(thread_id)
+        self.explain.showing.contains_key(thread_id) && self.explain.sessions.contains_key(thread_id)
+    }
+
+    /// The section this thread's explanation shows over, while it's showing.
+    pub(crate) fn explaining_over(&self, thread_id: &str) -> Option<&str> {
+        self.explain.showing.get(thread_id).map(String::as_str).filter(|_| self.explain.sessions.contains_key(thread_id))
     }
 
     /// A preview opened over the section takes the explanation's place.
@@ -201,7 +211,7 @@ impl SidePane {
             .px(px(12.))
             .py(px(10.))
             .child(
-                crate::highlights::tipped(div().id("explain-follow-up").flex_1().min_w_0(), "Ask more about this. It stays out of the thread.")
+                crate::highlights::tipped_as(div().id("explain-follow-up").flex_1().min_w_0(), "Ask more about this. It stays out of the thread.", gpui_kit::Role::GenericContainer)
                     .child(crate::composer::bare_textarea(Textarea::new(&input)).text_size(px(size::LABEL)).line_height(px(style::natural_line(size::LABEL) + 2.))),
             )
             .child(send);
@@ -220,7 +230,7 @@ impl SidePane {
         }
         let input = cx.new(|cx| TextareaState::new(window, cx).placeholder("Ask a follow-up").auto_grow(1, 5).submit_on_enter(true));
         // A question typed and not asked: an update's restart waits for it.
-        crate::unsent::watch(&input, cx);
+        crate::unsent::watch(&input, "a follow-up question in Explain", cx);
         let id = thread_id.to_owned();
         let sub = cx.subscribe_in(&input, window, move |this, _, event: &InputEvent, window, cx| match event {
             InputEvent::PressEnter { shift: false, .. } => this.ask_follow_up(&id, window, cx),

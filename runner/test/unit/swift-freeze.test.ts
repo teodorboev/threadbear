@@ -13,14 +13,17 @@ import { fileURLToPath } from 'node:url';
 
 const script = path.join(path.dirname(fileURLToPath(import.meta.url)), '../../../scripts/swift-freeze.sh');
 
-function repo(origin: string, warnForks = false): string {
+// warnForks plays the script with WARN_FORKS set either way (it's been on
+// since the Swift app started offering the GPUI app, 13 Nov 2026).
+function repo(origin: string, warnForks = true): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'swift-freeze-'));
   const git = (...args: string[]) => spawnSync('git', args, { cwd: dir, encoding: 'utf8' });
   git('init', '-q', '-b', 'main');
   git('remote', 'add', 'origin', origin);
   fs.mkdirSync(path.join(dir, 'scripts'));
   let text = fs.readFileSync(script, 'utf8');
-  if (warnForks) text = text.replace(/^WARN_FORKS=0$/m, 'WARN_FORKS=1');
+  assert.match(text, /^WARN_FORKS=[01]$/m);
+  text = text.replace(/^WARN_FORKS=[01]$/m, `WARN_FORKS=${warnForks ? 1 : 0}`);
   fs.writeFileSync(path.join(dir, 'scripts/swift-freeze.sh'), text, { mode: 0o755 });
   return dir;
 }
@@ -102,8 +105,8 @@ test("Mike's copy refuses an agent's edit to the Swift app before it's written",
   assert.equal(edit(dir, 'app/Tools/mock-runner/server.ts').status, 0);
 });
 
-test("someone else's copy says nothing until the GPUI app is released to them", () => {
-  const dir = repo(FORK);
+test("someone else's copy says nothing while WARN_FORKS is off", () => {
+  const dir = repo(FORK, false);
   stage(dir, 'app/Sources/Threadbear/New.swift');
   const c = commit(dir);
   assert.equal(c.status, 0);
@@ -114,7 +117,7 @@ test("someone else's copy says nothing until the GPUI app is released to them", 
 });
 
 test("once released, someone else's copy warns but doesn't refuse", () => {
-  const dir = repo(FORK, true);
+  const dir = repo(FORK);
   stage(dir, 'app/Sources/Threadbear/New.swift');
   const c = commit(dir);
   assert.equal(c.status, 0);

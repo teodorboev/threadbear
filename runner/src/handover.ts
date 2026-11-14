@@ -20,9 +20,11 @@ import { RUNNER_VERSION, paths } from './config.ts';
 import { atomicWriteFileSync, readJsonSync } from './fsutil.ts';
 import type { Logger } from './log.ts';
 import { RunnerClient, RpcClientError } from './client.ts';
+import { openCardEvents } from './open-cards.ts';
 import { ErrorCode, RpcError } from './protocol.ts';
-import type { PermissionMode, ThreadSummary } from './protocol.ts';
+import type { PermissionMode, PersistedEvent, ThreadSummary } from './protocol.ts';
 import type { Notification, Runner } from './runner.ts';
+import { DRAIN_MAX_OLD_MS } from './runner.ts';
 import type { UsageReading } from './usage.ts';
 import type { AgentApprovalRequest, ProjectControl, RemoteControl, ScheduleControl, ThreadControl } from './threadbear-mcp.ts';
 import type { RemoteThreads } from './thread-index.ts';
@@ -110,8 +112,72 @@ function marked(t: ThreadSummary): ThreadSummary {
   return { ...t, onOldRunner: true };
 }
 
+// Peers.openCards: how long startup waits for it, and its page size (the
+// most threads.events gives).
+export const OPEN_CARDS_DEADLINE_MS = 5_000;
+const OPEN_CARDS_PAGE = 10_000;
+
+function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  const late = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`no answer in ${ms} ms`)), ms);
+  });
+  return Promise.race([p, late]).finally(() => clearTimeout(timer));
+}
+
+export { openCardEvents };
+
 export function isMoved(e: unknown): boolean {
   return (e instanceof RpcError || e instanceof RpcClientError) && e.code === ErrorCode.moved;
+}
+
+// Only installed on the draining server. Older releases refuse this method,
+// so the primary keeps their run due rather than steering into a busy turn.
+export function scheduledSendMethods(runner: Pick<Runner, 'sendScheduled' | 'findScheduledSend' | 'has' | 'mustGet' | 'unqueue' | 'draining' | 'clock'>) {
+  const deliver = (p: Record<string, unknown>) => {
+    if (typeof p.threadId !== 'string' || typeof p.text !== 'string' || typeof p.scheduleId !== 'string') throw new RpcError(ErrorCode.badParams, 'threadId, text and scheduleId must be strings');
+    if (p.run !== undefined && (typeof p.run !== 'string' || !p.run || p.run.length > 200)) throw new RpcError(ErrorCode.badParams, 'run must be a nonempty string of at most 200 characters');
+    if (!runner.has(p.threadId)) throw new RpcError(ErrorCode.moved, 'That thread has moved to the new runner.');
+    if (p.since !== undefined && (typeof p.since !== 'number' || !Number.isFinite(p.since) || p.since < 0)) throw new RpcError(ErrorCode.badParams, 'since must be a finite nonnegative time');
+    const since = p.since as number | undefined;
+    const run = p.run as string | undefined;
+    const prior = runner.findScheduledSend(p.threadId, p.scheduleId, run, since);
+    if (prior) return prior;
+    const { rt, rec } = runner.mustGet(p.threadId);
+    // A queued message on an old runner is discarded on crash recovery.
+    // Leave it due on the primary until this runner can start it now.
+    if (rt.turn || rt.editing || rt.moving || rt.cleaning || rt.preparing || rt.closing || rt.approvals.size || rec.queue.length || rec.wakeWhen?.pending || !rt.tasks.length) throw new RpcError(ErrorCode.busy, 'That thread cannot start its scheduled turn yet; try again in a moment.');
+    // Recurring check-ins must eventually leave a quiet spell for the
+    // old runner to hand over, even if its background shell never ends.
+    if (runner.draining && runner.clock.now() - runner.draining.since >= DRAIN_MAX_OLD_MS) throw new RpcError(ErrorCode.busy, 'That old runner is waiting to hand this thread over; try again in a moment.');
+    const sent = runner.sendScheduled(p.threadId, p.text, p.scheduleId, run, since);
+    if (runner.unqueue(p.threadId, sent.turnId)) throw new RpcError(ErrorCode.busy, 'That scheduled turn could not start yet; try again in a moment.');
+    return sent;
+  };
+  return {
+    'drain.sendScheduled': deliver,
+    'drain.sendScheduledOnce': (p: Record<string, unknown>) => {
+      if (typeof p.run !== 'string' || !p.run) throw new RpcError(ErrorCode.badParams, 'run is required');
+      return deliver(p);
+    },
+  };
+}
+
+export async function sendScheduled(runner: Pick<Runner, 'sendScheduled' | 'has'>, peers: Pick<Peers, 'call'>, threadId: string, text: string, scheduleId: string, run?: string, since?: number): Promise<{ turnId: string }> {
+  try {
+    return await peers.call(threadId, run ? 'drain.sendScheduledOnce' : 'drain.sendScheduled', { threadId, text, scheduleId, ...(run ? { run, since } : {}) }) as { turnId: string };
+  } catch (e) {
+    // The handedOver notification precedes this refusal. The primary now
+    // owns it; deliver locally instead of losing this tick to the race.
+    if (isMoved(e)) {
+      if (!runner.has(threadId)) throw new RpcError(ErrorCode.busy, 'That thread is still moving to this runner; try again in a moment.');
+      return runner.sendScheduled(threadId, text, scheduleId, run, since);
+    }
+    // An unkeyed fallback cannot recognize a delivery after a lost reply.
+    // Keep this one-time handover wait instead of restoring that duplicate.
+    if (e instanceof RpcError && e.code === ErrorCode.methodNotFound) throw new RpcError(ErrorCode.busy, 'The old runner cannot deliver scheduled messages yet; try again after its thread moves across.');
+    throw e;
+  }
 }
 
 // ------------------------------------------------------------------ Peers
@@ -143,6 +209,24 @@ export type PeersDeps = {
 };
 
 // The primary's side: one connection per draining runner.
+// What drain.openCards answered for one thread. A release from the morning
+// of 13 Nov 2026 took no threadId and answered every kept thread's cards at
+// once, as { threads: [{ threadId, events }] }; read as the new shape that
+// was events: undefined, which threw in seedCards and lost every card after
+// it (Daybreak 122). Its answer is small (open cards, not logs), so each
+// thread takes its own entry from it. Anything else is unknown: that thread
+// keeps its row as it is.
+export function openCardsAnswer(r: unknown, threadId: string): PersistedEvent[] | undefined {
+  const events = (v: unknown) => (Array.isArray(v) ? (v.filter((e) => e && typeof e === 'object' && typeof (e as { seq?: unknown }).seq === 'number' && typeof (e as { type?: unknown }).type === 'string') as PersistedEvent[]) : undefined);
+  const o = r && typeof r === 'object' ? (r as { events?: unknown; threads?: unknown }) : undefined;
+  if (Array.isArray(o?.events)) return events(o.events);
+  if (Array.isArray(o?.threads)) {
+    const t = (o.threads as unknown[]).find((x) => x && typeof x === 'object' && (x as { threadId?: unknown }).threadId === threadId) as { events?: unknown } | undefined;
+    return t ? events(t.events) : undefined;
+  }
+  return undefined;
+}
+
 export class Peers {
   private deps: PeersDeps;
   private peers = new Map<number, Peer>();
@@ -327,6 +411,89 @@ export class Peers {
 
   owns(threadId: string): boolean {
     return Boolean(this.ownerOf(threadId));
+  }
+
+  // The cards (approvals, questions, secrets) still open on each draining
+  // runner's threads, oldest first, with each thread read, for the sync to
+  // put back on their rows
+  // (ConvexSync.seedCards). It subscribed from the end, so it never saw
+  // their requests, and the old runner's own sync stopped at the handover.
+  // Each draining runner works a thread's out from its own log
+  // (drain.openCards) and sends only those, every thread at once: read here
+  // a thread at a time on one shared deadline, the first slow answer of a
+  // busy startup used it up and no kept thread on either draining runner
+  // was read (THREADBEAR-1Z), and reading every log at once could pile up
+  // past the 32 MiB a runner lets wait on a connection (rpc.ts CLOSE_BYTES),
+  // which closes it, and the primary would stop a healthy runner as gone.
+  // By `deadlineMs` at most, as startup waits on it: a thread not read in
+  // time, or not at all, keeps its row as it is, and costs no other thread.
+  async openCards(opts: { deadlineMs?: number; page?: number } = {}): Promise<{ thread: ThreadSummary; events: PersistedEvent[] }[]> {
+    const until = Date.now() + (opts.deadlineMs ?? OPEN_CARDS_DEADLINE_MS);
+    const size = opts.page ?? OPEN_CARDS_PAGE;
+    type Read = { peer: Peer; threadId: string; events: PersistedEvent[] };
+    const unknown = (e: unknown) => (e instanceof RpcClientError || e instanceof RpcError) && e.code === ErrorCode.methodNotFound;
+    const fromPeer = async (peer: Peer): Promise<Read[]> => {
+      const ids = [...peer.threads.keys()];
+      let old = false;
+      const asked = await Promise.all(
+        ids.map(async (threadId): Promise<Read | undefined> => {
+          try {
+            const r = await withTimeout(peer.client.call<unknown>('drain.openCards', { threadId }), Math.max(1, until - Date.now()));
+            const events = openCardsAnswer(r, threadId);
+            if (events) return { peer, threadId, events };
+            this.deps.log.warn("a draining runner's open cards came back in a shape not known here", { threadId, pid: peer.info.pid });
+            return undefined;
+          } catch (e) {
+            if (unknown(e)) old = true;
+            else this.deps.log.warn("could not read a draining runner's open cards", { threadId, pid: peer.info.pid, error: String((e as Error)?.message ?? e) });
+            return undefined;
+          }
+        }),
+      );
+      if (!old) return asked.filter((r) => r !== undefined);
+      // A release from before drain.openCards (the first handover after it
+      // came in): its logs as before it, one thread at a time so only one
+      // page is ever out on the connection, the whole log a page at a time
+      // from the end: a sub-agent's card can outlive the turn that asked it,
+      // with any amount of work after it (Codex's review, 13 Nov). Left as it
+      // was: giving each thread a share of the time instead leaves the pages
+      // of the ones that ran out still coming, which together can reach the
+      // 32 MiB above (the other lab's review).
+      const read: Read[] = [];
+      for (const threadId of ids) {
+        const log: PersistedEvent[] = [];
+        try {
+          let before: number | undefined;
+          for (;;) {
+            const left = until - Date.now();
+            if (left <= 0) throw new Error('out of time');
+            const page = await withTimeout(peer.client.call<{ events: PersistedEvent[] }>('threads.events', { threadId, limit: size, ...(before !== undefined ? { beforeSeq: before } : {}) }), left);
+            log.unshift(...page.events);
+            const first = page.events[0]?.seq;
+            // Not a short page: an edit's cut can make one short mid-log.
+            if (first === undefined || first <= 1) break;
+            before = first;
+          }
+        } catch (e) {
+          this.deps.log.warn("could not read a draining runner's open cards", { threadId, pid: peer.info.pid, error: String((e as Error)?.message ?? e) });
+          continue;
+        }
+        read.push({ peer, threadId, events: openCardEvents(log) });
+      }
+      return read;
+    };
+    const read = (await Promise.all([...this.peers.values()].map(fromPeer))).flat();
+    // Each thread as it is now, once every log is read, as the caller seeds
+    // in the same tick: one read early may have asked for a card since and
+    // said it waits, which the summary from then (idle) would undo (Codex's
+    // review). One handed over meanwhile had no card open (a thread with
+    // one isn't), and is here now.
+    const out: { thread: ThreadSummary; events: PersistedEvent[] }[] = [];
+    for (const { peer, threadId, events } of read) {
+      const now = peer.threads.get(threadId);
+      if (now) out.push({ thread: now, events });
+    }
+    return out;
   }
 
   // A thread a draining runner had when it went, until it's taken in here.
@@ -600,6 +767,14 @@ export class ThreadRouter implements ThreadControl {
     return this.runner.endTurnNudged(threadId);
   }
 
+  unreadMessage(threadId: string): boolean {
+    return this.runner.unreadMessage(threadId);
+  }
+
+  cardReopened(threadId: string): boolean {
+    return this.runner.cardReopened(threadId);
+  }
+
   openSubagentCards(threadId: string): string[] {
     return this.runner.openSubagentCards(threadId);
   }
@@ -753,7 +928,6 @@ export function phoneCommands(runner: Runner, remote?: Pick<Peers, 'owns' | 'cal
     interrupt: (id) => at(id, 'threads.interrupt', {}, () => runner.interrupt(id, { byMike: true })),
     quickAsk: (p) => runner.quickAsk(p),
     pressButton: (id, buttonId) => at(id, 'buttons.press', { buttonId }, () => runner.pressButton(id, buttonId)),
-    listButtons: (id) => at(id, 'buttons.list', {}, () => runner.listButtons(id)),
     threadCommands: (id) => at(id, 'threads.commands', {}, () => runner.threadCommands(id)),
   };
 }

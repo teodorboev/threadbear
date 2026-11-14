@@ -8,7 +8,7 @@ use crate::projects::project_icon;
 use crate::style::{self, px};
 use crate::{icons, now_ms};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
-use gpui_kit::component::spinner::Spinner;
+use crate::spinner::Spinner;
 use gpui_kit::component::{h_flex, v_flex, ActiveTheme as _, Sizable as _, StyledExt as _};
 use gpui_kit::prelude::*;
 use gpui_kit::*;
@@ -71,7 +71,7 @@ impl Threadbear {
 
     /// The cards the search leaves, in order: (title, id).
     pub(crate) fn shown_project_cards(&self, cx: &App) -> Vec<(String, String)> {
-        let sections = Sections::build(&self.projects.list, self.threads.values(), now_ms());
+        let sections = Sections::build(&self.projects.list, self.threads.values().map(|t| &**t), now_ms());
         let cards = rules::cards(&sections, 3, self.project_decisions_on());
         rules::matching(cards, &self.projects_query(cx).unwrap_or_default()).into_iter().map(|c| (c.project.title.clone(), c.project.id.clone())).collect()
     }
@@ -90,7 +90,7 @@ impl Threadbear {
         let decisions = self.project_decisions_on();
         let query = self.projects_query(cx);
         let (all, total, summary) = {
-            let sections = Sections::build(&self.projects.list, self.threads.values(), now_ms());
+            let sections = Sections::build(&self.projects.list, self.threads.values().map(|t| &**t), now_ms());
             let all = rules::cards(&sections, 3, decisions);
             let total = all.len();
             let summary = match &query {
@@ -305,7 +305,7 @@ impl Threadbear {
         if self.open_project().is_some() || self.home_page() != Some(crate::shell::SidebarMode::Projects) {
             return None;
         }
-        let sections = Sections::build(&self.projects.list, self.threads.values(), now_ms());
+        let sections = Sections::build(&self.projects.list, self.threads.values().map(|t| &**t), now_ms());
         let cards = rules::cards(&sections, 3, self.project_decisions_on());
         Some(
             cards
@@ -341,7 +341,7 @@ fn blurred_backdrop(path: &str) -> Option<Arc<Image>> {
 /// `ThreadCount`: how many open threads it has, in the tile's corner.
 fn thread_count_badge(count: usize, id: &str, cx: &App) -> AnyElement {
     let secondary = style::secondary_text(cx);
-    crate::highlights::tipped(
+    crate::highlights::tipped_as(
         h_flex()
             .id(gpui_kit::SharedString::from(format!("project-count-{id}")))
             .gap(px(4.))
@@ -354,7 +354,7 @@ fn thread_count_badge(count: usize, id: &str, cx: &App) -> AnyElement {
             .line_height(px(14.))
             .font_medium()
             .text_color(secondary),
-        rules::open_threads_tip(count),
+        rules::open_threads_tip(count), gpui_kit::Role::GenericContainer,
     )
     .child(icons::symbol("bubble.left.and.bubble.right").with_size(px(11.)).text_color(secondary))
     .child(count.to_string())

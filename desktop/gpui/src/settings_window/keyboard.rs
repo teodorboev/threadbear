@@ -6,9 +6,10 @@
 // The keys stay in shortcuts.json, which an agent can change too, and the app
 // picks up (shell.rs, `watch_shortcuts`); this writes it. The rules are
 // threadbear_core::keyboard.
+use crate::a11y::A11yRole as _;
 use super::{section, SettingsWindow};
 use crate::app::Threadbear;
-use crate::highlights::tipped;
+use crate::highlights::{tipped, tipped_as};
 use crate::push_button::PushButton;
 use crate::{icons, style};
 use gpui_kit::base::TestSupportExt as _;
@@ -198,6 +199,11 @@ impl SettingsWindow {
         problem
     }
 
+    /// A command whose experiment is off isn't listed (`ShortcutCommand::experiment`).
+    fn listed(&self, command: ShortcutCommand, cx: &App) -> bool {
+        command.experiment().is_none() || self.app.upgrade().is_some_and(|a| a.read(cx).open_anything_on())
+    }
+
     /// The whole page (`KeyboardSettings`): the search at the top, the
     /// groups scrolling under it, and the file's line and Reset All at the
     /// foot, which stay put.
@@ -207,7 +213,7 @@ impl SettingsWindow {
         let bindings = self.bindings(cx);
         let mut sections: Vec<AnyElement> = Vec::new();
         for group in Group::ALL {
-            let commands: Vec<ShortcutCommand> = group.commands().into_iter().filter(|c| rules::matches(*c, &words, &bindings)).collect();
+            let commands: Vec<ShortcutCommand> = group.commands().into_iter().filter(|c| self.listed(*c, cx) && rules::matches(*c, &words, &bindings)).collect();
             if commands.is_empty() {
                 continue;
             }
@@ -220,7 +226,7 @@ impl SettingsWindow {
         let field = div()
             .id("settings-keyboard-search")
             .test_support()
-            .aria_label(rules::SEARCH_PROMPT)
+            .a11y_role(Role::GenericContainer).aria_label(rules::SEARCH_PROMPT)
             .tip(rules::SEARCH_PROMPT)
             .h(px(29.))
             .pl(px(16.))
@@ -255,7 +261,7 @@ impl SettingsWindow {
             .text_size(px(12.))
             .line_height(px(style::natural_line(12.)))
             .when_some(problem, |s, problem| s.child(h_flex().gap(px(6.)).items_start().text_color(orange).child(div().pt(px(1.)).child(icons::symbol("exclamationmark.triangle").with_size(px(12.)))).child(div().flex_1().child(problem))))
-            .child(h_flex().items_center().child(tipped(div().id("settings-keyboard-file"), path).text_color(secondary).child(rules::FOOTER)).child(div().flex_1()).child(reset_all));
+            .child(h_flex().items_center().child(tipped_as(div().id("settings-keyboard-file"), path, gpui_kit::Role::GenericContainer).text_color(secondary).child(rules::FOOTER)).child(div().flex_1()).child(reset_all));
         let me = cx.entity().downgrade();
         v_flex()
             .id("settings-keyboard")
@@ -299,7 +305,7 @@ impl SettingsWindow {
                 div()
                     .id(SharedString::from(format!("settings-key-reset-{}", command.name())))
                     .test_support()
-                    .aria_label(format!("Reset {}", command.title()))
+                    .role(Role::Button).aria_label(format!("Reset {}", command.title()))
                     .tip(tip.clone())
                     .flex_none()
                     .cursor_pointer()
@@ -342,7 +348,7 @@ impl SettingsWindow {
             .test_support()
             // Its name for VoiceOver and the specs, as Swift's
             // accessibilityLabel: "Archive, ⌘E".
-            .aria_label(rules::cap_label(command, bindings))
+            .role(Role::Button).aria_label(rules::cap_label(command, bindings))
             .tip(tip.clone())
             .flex_none()
             .min_w(px(78.))
@@ -403,7 +409,7 @@ impl SettingsWindow {
     pub(super) fn keyboard_dump(&self, cx: &App) -> Value {
         let bindings = self.bindings(cx);
         let words = self.search_text(cx);
-        let rows: Vec<String> = Group::ALL.iter().flat_map(|g| g.commands()).filter(|c| rules::matches(*c, &words, &bindings)).map(|c| rules::line(c, &bindings)).collect();
+        let rows: Vec<String> = Group::ALL.iter().flat_map(|g| g.commands()).filter(|c| self.listed(*c, cx) && rules::matches(*c, &words, &bindings)).map(|c| rules::line(c, &bindings)).collect();
         let recorder = &self.keyboard.recorder;
         let question = rules::question(&recorder.outcome).filter(|_| recorder.command.is_some());
         json!({
@@ -505,7 +511,7 @@ pub(crate) fn automation(app: &Entity<Threadbear>, cmd: &Value, cx: &mut App) ->
             let click = |label: &str, prefix: bool, window: &mut Window, cx: &mut App| -> bool {
                 let found = window.elements().into_iter().filter(|e| e.visible() && e.label().is_some_and(|l| if prefix { l.starts_with(label) } else { l == label })).last();
                 let Some(found) = found else { return false };
-                let at = found.bounds().center();
+                let at = found.visible_bounds().center();
                 window.pointer_move(at, None, cx);
                 window.pointer_down(at, MouseButton::Left, cx);
                 window.pointer_up(at, MouseButton::Left, cx);

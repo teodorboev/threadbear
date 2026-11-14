@@ -37,3 +37,10 @@ export async function patiently(cond: () => boolean, pollMs = 20): Promise<void>
   const end = Date.now() + PATIENCE_MS;
   while (!cond() && Date.now() < end) await new Promise((r) => setTimeout(r, pollMs));
 }
+
+// A shell loop that waits for `file`, for a check a test holds open. It also
+// gives up once this test process has gone: a test that failed or timed out
+// before writing the file used to leave the check, and the `tb land` waiting
+// on it, running for days on the check host (Tinker Desk, 7 to 11 Nov).
+export const holdUntil = (file: string): string =>
+  `while ! test -f '${file}' && kill -0 ${process.pid} 2>/dev/null; do sleep 0.05; done`;

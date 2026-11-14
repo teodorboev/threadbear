@@ -84,6 +84,13 @@ fn terminals(cx: &App) -> Option<Entity<Terminals>> {
     cx.try_global::<TerminalsGlobal>().map(|g| g.0.clone())
 }
 
+/// The Terminal draws its own text rather than using a kit input. Its
+/// keyboard focus must suppress an older reply selection in text services.
+/// This only reads existing focus handles; it never starts a shell.
+pub(crate) fn has_focus(window: &Window, cx: &App) -> bool {
+    terminals(cx).is_some_and(|terminals| terminals.read(cx).sessions.values().any(|session| session.read(cx).focus.is_focused(window)))
+}
+
 /// Whether any shell has something an update's restart would lose, as
 /// quitting ends every shell: a program running in it, or words at its
 /// prompt (core's `holds_a_restart`). Asked once a second (app_update.rs).
@@ -193,7 +200,7 @@ pub(crate) fn thread_deleted(id: &str, cx: &mut App) {
 /// The runner's whole list came back (on connecting): a shell whose thread
 /// isn't in it was deleted while the app wasn't listening, and one whose
 /// thread is archived there goes too (`stopAll(except:)`, `stopArchived`).
-pub(crate) fn list_loaded(threads: &HashMap<String, threadbear_core::inbox::ThreadSummary>, cx: &mut App) {
+pub(crate) fn list_loaded(threads: &HashMap<String, std::sync::Arc<threadbear_core::inbox::ThreadSummary>>, cx: &mut App) {
     let Some(terminals) = terminals(cx) else { return };
     let keys: Vec<TerminalKey> = terminals.read(cx).sessions.keys().cloned().collect();
     let keeping: HashSet<&str> = threads.keys().map(String::as_str).collect();
@@ -422,7 +429,7 @@ impl Render for Terminals {
         let mut panel = v_flex().id("terminal-panel").size_full();
         if let Some(note) = target.note.clone() {
             // Over the terminal, when its folder isn't the thread's.
-            panel = panel.child(crate::highlights::tipped(
+            panel = panel.child(crate::highlights::tipped_as(
                 div()
                     .id("terminal-note")
                     .flex_none()
@@ -434,7 +441,7 @@ impl Render for Terminals {
                     .text_color(style::secondary_text(cx))
                     .line_clamp(2)
                     .child(note.clone()),
-                note,
+                note, gpui_kit::Role::GenericContainer,
             ));
         }
         let body = match session {
@@ -446,7 +453,7 @@ impl Render for Terminals {
                 // Its tip is what a spec presses it by, as in the Swift app.
                 let tip = format!("Start your login shell in {folder}");
                 let start = div()
-                    .id("terminal-start")
+                    .id("terminal-start").role(Role::Button)
                     .flex_1()
                     .min_h_0()
                     .w_full()
@@ -1159,6 +1166,62 @@ impl Session {
         !shift && self.mode().intersects(TermMode::MOUSE_MODE) && !self.exited
     }
 
+    /// A hyperlink printed by the program, or a path/address in its text.
+    /// The scan follows soft-wrapped lines, capped so a very long line can
+    /// never make a click stall the app.
+    fn link_at(&self, col: usize, row: usize) -> Option<String> {
+        use alacritty_terminal::term::cell::Flags;
+        let term = self.term.lock();
+        let grid = term.grid();
+        let cols = term.columns();
+        if col >= cols || row >= term.screen_lines() { return None; }
+        // Output can clear scrollback between two locks. Map the click and
+        // inspect its cells under this one lock, so it stays the same row.
+        let point = GridPoint::new(GridLine(row as i32 - grid.display_offset() as i32), Column(col));
+        let cell = &grid[point];
+        if let Some(link) = cell.hyperlink() {
+            return (link.uri().len() <= 4096).then(|| link.uri().to_owned());
+        }
+        let mut first = point.line;
+        while first > grid.topmost_line() && ((point.line.0 - first.0 + 2) as usize) * cols <= 4096 && grid[GridLine(first.0 - 1)][Column(cols - 1)].flags.contains(Flags::WRAPLINE) {
+            first = GridLine(first.0 - 1);
+        }
+        let mut chars = Vec::new();
+        let mut clicked = None;
+        let mut line = first;
+        loop {
+            for column in 0..cols {
+                let cell = &grid[line][Column(column)];
+                if line == point.line && column == col { clicked = Some(chars.len()); }
+                if cell.flags.intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER) {
+                    if line == point.line && column == col { clicked = chars.len().checked_sub(1); }
+                    continue;
+                }
+                chars.push(cell.c);
+                chars.extend(cell.zerowidth().into_iter().flatten());
+                if chars.len() > 4096 { return None; }
+            }
+            if line >= grid.bottommost_line() || !grid[line][Column(cols - 1)].flags.contains(Flags::WRAPLINE) { break; }
+            line = GridLine(line.0 + 1);
+        }
+        rules::link_word(&chars, clicked?)
+    }
+
+    fn open_link_at(&self, col: usize, row: usize, cx: &mut App) -> bool {
+        let Some(link) = self.link_at(col, row) else { return false };
+        let link = if link.get(..7).is_some_and(|s| s.eq_ignore_ascii_case("file://")) {
+            rules::local_file_url(&link, &system_hostname()).unwrap_or(link)
+        } else { link };
+        let home = crate::files::home_dir();
+        let target = rules::link_target(&link, &self.target.cwd, &home, |p| threadbear_core::open_policy::local_metadata(std::path::Path::new(p)).is_ok());
+        match target {
+            Some(rules::Link::File(path)) => crate::open_gate::open_file(&path, crate::open_gate::Origin::ThisMac, cx),
+            Some(rules::Link::Url(url)) => crate::open_gate::open_link(&url, crate::open_gate::Origin::ThisMac, &self.target.cwd, cx),
+            None => return false,
+        }
+        true
+    }
+
     fn report(&self, button: rules::MouseButton, pressed: bool, motion: bool, col: usize, row: usize, m: Modifiers) {
         let sgr = self.mode().contains(TermMode::SGR_MOUSE);
         if let Some(bytes) = rules::mouse_report(button, pressed, motion, col, row, m.shift, m.alt, m.control, sgr) {
@@ -1170,6 +1233,13 @@ impl Session {
         window.focus(&self.focus, cx);
         crate::web_panels::keyboard_to_app(window);
         let Some((col, row, side)) = self.cell_at(event.position, false) else { return };
+        // Command-click (Control-click off the Mac) follows a link; ordinary
+        // drags and the program's mouse reporting keep their usual behavior.
+        let follow = if cfg!(target_os = "macos") { event.modifiers.platform } else { event.modifiers.control };
+        if follow && !event.modifiers.shift && event.button == MouseButton::Left && event.click_count == 1 && self.open_link_at(col, row, cx) {
+            cx.stop_propagation();
+            return;
+        }
         let button = match event.button {
             MouseButton::Left => rules::MouseButton::Left,
             MouseButton::Middle => rules::MouseButton::Middle,
@@ -1289,6 +1359,27 @@ impl Session {
         format!("{} {} in {}", self.target.key, if self.exited { "exited" } else { "running" }, self.target.cwd)
     }
 }
+
+/// The OS's hostname, never DNS or an environment variable a shell controls.
+#[cfg(unix)]
+fn system_hostname() -> String {
+    let mut name = [0u8; 256];
+    if unsafe { libc::gethostname(name.as_mut_ptr().cast(), name.len()) } != 0 { return String::new(); }
+    std::ffi::CStr::from_bytes_until_nul(&name).ok().and_then(|s| s.to_str().ok()).unwrap_or("").to_owned()
+}
+
+#[cfg(windows)]
+fn system_hostname() -> String {
+    #[link(name = "kernel32")]
+    extern "system" { fn GetComputerNameExW(kind: i32, buffer: *mut u16, size: *mut u32) -> i32; }
+    let mut name = [0u16; 256];
+    let mut size = name.len() as u32;
+    if unsafe { GetComputerNameExW(1, name.as_mut_ptr(), &mut size) } == 0 { return String::new(); }
+    String::from_utf16_lossy(&name[..(size as usize).min(name.len())])
+}
+
+#[cfg(not(any(unix, windows)))]
+fn system_hostname() -> String { String::new() }
 
 impl Focusable for Session {
     fn focus_handle(&self, _cx: &App) -> FocusHandle {
@@ -1692,6 +1783,17 @@ pub(crate) fn automation(app: &Entity<Threadbear>, cmd: &Value, window: &mut Win
             let event = ScrollEvent { position: at, delta: ScrollDelta::Lines(point(0., -(lines as f32))), modifiers: Modifiers::default(), touch_phase: TouchPhase::Moved, source: ScrollSource::Pointer };
             window.dispatch_event(event.to_platform_input(), cx);
         }
+    }
+    if let Some(words) = cmd["follow"].as_str() {
+        window.render_frame(cx);
+        let session = session.as_ref().ok_or("no shell")?;
+        let s = session.read(cx);
+        let at = s.drawn_at.ok_or("the terminal hasn't been drawn")?;
+        let (row, col) = s.screen_lines().iter().enumerate().rev().find_map(|(r, line)| line.find(words).map(|i| (r, line[..i].chars().count()))).ok_or("that link isn't visible")?;
+        let position = point(at.origin.x + at.cell_width * (col as f32 + 0.5), at.origin.y + at.cell_height * (row as f32 + 0.5));
+        let modifiers = Modifiers { platform: cfg!(target_os = "macos"), control: !cfg!(target_os = "macos"), ..Default::default() };
+        window.dispatch_event(MouseDownEvent { button: MouseButton::Left, position, modifiers, click_count: 1, first_mouse: false }.to_platform_input(), cx);
+        window.dispatch_event(MouseUpEvent { button: MouseButton::Left, position, modifiers, click_count: 1 }.to_platform_input(), cx);
     }
     window.render_frame(cx);
     Ok(dump(app.read(cx), cx))

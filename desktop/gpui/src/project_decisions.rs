@@ -15,8 +15,8 @@ use crate::open_gate::Origin;
 use crate::style::{self, px};
 use crate::{call, now_ms};
 use gpui_kit::component::input::{InputEvent, TextareaState};
-use gpui_kit::component::spinner::Spinner;
-use gpui_kit::component::{h_flex, v_flex, ActiveTheme as _, Sizable as _, StyledExt as _};
+use crate::spinner::Spinner;
+use gpui_kit::component::{h_flex, v_flex, Sizable as _, StyledExt as _};
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 use serde_json::{json, Value};
@@ -55,7 +55,7 @@ pub(crate) struct DecisionCard {
     /// The boxes under "Something else", by ask.
     inputs: HashMap<usize, Entity<TextareaState>>,
     subs: Vec<Subscription>,
-    style: Option<((bool, u32), gpui_kit::base::TextViewStyle)>,
+    style: Option<(crate::style::ReadingStyleKey, gpui_kit::base::TextViewStyle)>,
 }
 
 impl DecisionCard {
@@ -158,14 +158,8 @@ impl AskHost for DecisionCard {
         self.place.clone()
     }
 
-    /// Run on an ask with a command (card_run.rs): through the app's runner,
-    /// as its answers go (`send_decision`).
-    fn ask_run_target(&self, _cx: &App) -> Option<crate::card_run::RunTarget> {
-        Some(crate::card_run::RunTarget { client: None, thread: self.thread.clone(), app: self.app.clone() })
-    }
-
     fn ask_reading_style(&mut self, cx: &App) -> gpui_kit::base::TextViewStyle {
-        let key = (cx.theme().is_dark(), style::zoom_percent());
+        let key = crate::style::reading_style_key(cx);
         match &self.style {
             Some((k, style)) if *k == key => style.clone(),
             _ => {
@@ -229,7 +223,7 @@ impl AskHost for DecisionCard {
         let input = cx.new(|cx| TextareaState::new(window, cx).placeholder("Say something else…").auto_grow(1, 8).submit_on_enter(true));
         // Its words are only here until they're sent, what was typed before
         // too: an update's restart waits for them (unsent.rs).
-        crate::unsent::watch(&input, cx);
+        crate::unsent::watch(&input, "a decision's Something else box on a project's page", cx);
         if !existing.is_empty() {
             input.update(cx, |s, cx| s.set_value(existing, window, cx));
         }
@@ -260,7 +254,7 @@ impl Threadbear {
     /// A project's threads (its parts' too) waiting on a card of asks, newest
     /// first, as its page lists them.
     pub(crate) fn decision_threads_for(&self, project_id: &str) -> Vec<ThreadSummary> {
-        let sections = Sections::build(&self.projects.list, self.threads.values(), now_ms());
+        let sections = Sections::build(&self.projects.list, self.threads.values().map(|t| &**t), now_ms());
         let Some(section) = sections.section(project_id) else { return Vec::new() };
         rules::decision_threads(&sections.threads_with_parts(section)).into_iter().cloned().collect()
     }
@@ -272,7 +266,7 @@ impl Threadbear {
             return card.clone();
         }
         let threads = &self.threads;
-        self.projects.decision_cards.retain(|id, _| threads.get(id).is_some_and(rules::is_waiting));
+        self.projects.decision_cards.retain(|id, _| threads.get(id).map(|t| &**t).is_some_and(rules::is_waiting));
         let app = cx.entity().downgrade();
         let card = cx.new(|_| DecisionCard::new(app, thread.to_owned()));
         self.projects.decision_cards.insert(thread.to_owned(), card.clone());
@@ -288,7 +282,11 @@ impl Threadbear {
         // waits for a restarting runner (`sendDecision`'s `holding`).
         let remote = self.threads.get(&thread).is_some_and(|t| t.runner_id.is_some());
         let holding = !remote && self.client.restart_under_way();
-        if !matches!(self.status, Status::Connected { .. }) && !holding {
+        // Connected by the client's own word too: it says so a moment before
+        // the app hears it, and the restart it held for is already over then
+        // (Codex's review, 13 Nov).
+        let connected = matches!(self.status, Status::Connected { .. }) || self.client.connected_session().is_some();
+        if !connected && !holding {
             self.show_error("Not connected to the runner, so that wasn't sent.".to_owned(), cx);
             // Once this update is over: the card's own update is what sent
             // it (a pick, Return in its box), and GPUI refuses to update the
@@ -301,7 +299,9 @@ impl Threadbear {
         }
         self.projects.decision_sends.insert(thread.clone(), DecisionSend { asks_seq: seq, answers: words });
         cx.notify();
-        let mut params = json!({ "threadId": thread, "text": text });
+        // The runner it's shown on, as the composer's send says it (thread.rs, Daybreak 113).
+        let runner_id = self.threads.get(&thread).and_then(|t| t.runner_id.clone());
+        let mut params = json!({ "threadId": thread, "text": text, "runnerId": runner_id });
         if !images.is_empty() {
             params["images"] = json!(images.iter().map(crate::composer::image_ref_json).collect::<Vec<_>>());
         }
@@ -335,21 +335,34 @@ impl Threadbear {
 
     /// `DecisionsSection`: at the top of a project's page, with the
     /// projectDecisions experiment on, its threads' open cards of asks.
-    pub(crate) fn render_decisions_section(&mut self, project: &Project, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
-        if !self.project_decisions_on() {
-            return None;
-        }
+    /// The page's Decisions tab (`DecisionsSection` with `tabbed`): the tab
+    /// names it, so a quiet line of how many rather than a heading. When
+    /// they've all been answered it says so where it is, with a way to the
+    /// Project tab, rather than the page jumping away under the pointer.
+    pub(crate) fn render_decisions_tab(&mut self, project: &Project, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let threads = self.decision_threads_for(&project.id);
         if threads.is_empty() {
-            return None;
+            let id = project.id.clone();
+            return h_flex()
+                .gap(px(6.))
+                .pt(px(4.))
+                .text_size(px(style::size::LABEL))
+                .line_height(px(16.))
+                .child(div().text_color(style::faint_text(cx)).child("Nothing waiting."))
+                .child(
+                    crate::highlights::tipped(div().id("decisions-show-project").cursor_pointer().text_color(style::link_text(cx)).hover(|s| s.underline()), "Its goals, state, notes and threads")
+                        .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.pick_project_tab(&id, rules::ProjectTab::Project, cx)))
+                        .child("Show the project"),
+                )
+                .into_any_element();
         }
         let refs: Vec<&ThreadSummary> = threads.iter().collect();
         let detail = rules::decision_heading(rules::decision_count(&refs), threads.len());
-        let mut section = v_flex().w_full().gap(px(12.)).child(crate::project_page::page_heading("Decisions", Some(detail), None, cx));
+        let mut section = v_flex().w_full().gap(px(12.)).child(div().text_size(px(style::size::SMALL)).line_height(px(14.)).text_color(style::faint_text(cx)).child(detail));
         for t in &threads {
             section = section.child(self.render_decision_card(t, window, cx));
         }
-        Some(section.into_any_element())
+        section.into_any_element()
     }
 
     /// `DecisionCard`: the thread's title and how long ago, a line on what
@@ -394,7 +407,7 @@ impl Threadbear {
                             .child(open),
                     )
                     .when_some(rules::status_line(t), |s, line| {
-                        s.child(crate::highlights::tipped(div().id(SharedString::from(format!("decision-line-{}", t.id))).truncate().text_size(px(style::size::DETAIL)).line_height(px(15.)).text_color(secondary), line.clone()).child(line))
+                        s.child(crate::highlights::tipped_as(div().id(SharedString::from(format!("decision-line-{}", t.id))).truncate().text_size(px(style::size::DETAIL)).line_height(px(15.)).text_color(secondary), line.clone(), gpui_kit::Role::GenericContainer).child(line))
                     })
                     .child(div().w_full().pt(px(2.)).child(asks))
                     .into_any_element()
@@ -431,6 +444,25 @@ impl Threadbear {
                 .collect(),
         )
     }
+}
+
+/// `projectTab`, as the Swift command: `tab` ("decisions" or "project") picks
+/// a tab on the open project's page as a click does; `step` 1 or -1 is ⇧⌘]
+/// or ⇧⌘[. Says the tab showing after.
+#[cfg(feature = "automation")]
+pub(crate) fn tab_automation(app: &Entity<Threadbear>, cmd: &Value, cx: &mut App) -> Result<Value, String> {
+    let id = {
+        let t = app.read(cx);
+        t.open_project().filter(|_| t.project_decisions_on()).map(|p| p.id.clone()).ok_or("no project page in tabs open")?
+    };
+    if let Some(raw) = cmd["tab"].as_str() {
+        let tab = rules::ProjectTab::from_name(raw).ok_or("tab is decisions or project")?;
+        app.update(cx, |t, cx| t.pick_project_tab(&id, tab, cx));
+    }
+    if let Some(by) = cmd["step"].as_i64() {
+        app.update(cx, |t, cx| t.step_project_tab(by as i32, cx));
+    }
+    Ok(json!(format!("ok {}", app.read(cx).project_tab(&id).name())))
 }
 
 /// `decision`: a decision on the open project's page, through the card's own

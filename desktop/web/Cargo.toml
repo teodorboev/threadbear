@@ -21,17 +21,17 @@ futures = "=0.3.34"
 [target.'cfg(target_os = "macos")'.dependencies]
 # cef-rs (tauri-apps/cef-rs, MIT or Apache-2.0): Rust bindings to CEF's C API,
 # at the version Ghostex's Mac path and the gpui-web-spike branch run:
-# 156.3.0+156.0.15, made from CEF 156.0.15, which is desktop/core's
-# CEF_VERSION (Cargo ignores the +156.0.15 in a requirement, so it's written
+# 156.4.0+156.0.26, made from CEF 156.0.26, which is desktop/core's
+# CEF_VERSION (Cargo ignores the +156.0.26 in a requirement, so it's written
 # here instead; Cargo.lock has it). No default features: its bundling tool and
 # resource helpers aren't wanted.
-cef = { version = "=156.3.0", default-features = false }
+cef = { version = "=156.4.0", default-features = false }
 # Pinned too, or Cargo takes a newer sys crate and with it another CEF than
 # the bindings above. `dox` turns its build script off: that script downloads
 # CEF and builds a C++ wrapper with cmake and ninja on every machine that
 # builds the app, and src/mac/loader.rs does the wrapper's one job on a Mac
 # instead (scripts/gen-loader.mjs says how).
-cef-dll-sys = { version = "=156.3.0", features = ["dox"] }
+cef-dll-sys = { version = "=156.4.0", features = ["dox"] }
 # dlopen and dlsym for the loader. Already in the build at this version.
 libc = "=0.2.191"
 

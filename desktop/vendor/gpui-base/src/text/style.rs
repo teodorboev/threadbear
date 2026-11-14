@@ -19,6 +19,8 @@ pub struct TextViewStyle {
     code_background: Hsla,
     border: Hsla,
     paragraph_gap: Rems,
+    list_item_gap: Option<Rems>,
+    table_natural_width: bool,
     heading: Arc<dyn Fn(u8) -> StyleRefinement + Send + Sync + 'static>,
     code_block: StyleRefinement,
     table: StyleRefinement,
@@ -45,6 +47,8 @@ pub struct TextViewStyle {
 impl PartialEq for TextViewStyle {
     fn eq(&self, other: &Self) -> bool {
         self.paragraph_gap == other.paragraph_gap
+            && self.list_item_gap == other.list_item_gap
+            && self.table_natural_width == other.table_natural_width
             && self.foreground == other.foreground
             && self.muted_foreground == other.muted_foreground
             && self.link == other.link
@@ -96,6 +100,8 @@ impl TextViewStyle {
             code_background: colors.accent,
             border: colors.border,
             paragraph_gap: rems(0.75),
+            list_item_gap: None,
+            table_natural_width: false,
             heading: Arc::new(|_| StyleRefinement::default()),
             code_block: StyleRefinement::default(),
             table: StyleRefinement::default(),
@@ -113,6 +119,15 @@ impl TextViewStyle {
             link_underline: true,
         }
     }
+
+    /// Space between list items; `None` keeps the kit's quarter-em default.
+    pub fn with_list_item_gap(mut self, gap: Rems) -> Self { self.list_item_gap = Some(gap); self }
+    pub fn list_item_gap(&self) -> Option<Rems> { self.list_item_gap }
+
+    /// Stop a short table at its measured content width, while wide tables
+    /// still shrink or scroll inside the available width.
+    pub fn with_table_natural_width(mut self, natural: bool) -> Self { self.table_natural_width = natural; self }
+    pub fn table_natural_width(&self) -> bool { self.table_natural_width }
 
     /// Sets the default body-text color.
     pub fn with_foreground(mut self, color: Hsla) -> Self {

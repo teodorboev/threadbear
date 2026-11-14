@@ -225,7 +225,7 @@ impl ThreadPane {
             let key = ChangedFiles::expansion_key(&changes.turn_id, &file.path);
             let toggle_key = key.clone();
             let line = h_flex()
-                .id(("change-file", ix * 1000 + i))
+                .id(("change-file", ix * 1000 + i)).role(Role::Button)
                 .w_full()
                 .h(px(CHANGES_FILE))
                 .px(px(CARD_PAD - 2.))

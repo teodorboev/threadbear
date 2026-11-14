@@ -36,17 +36,17 @@ Feature: Getting around the app
   @nav.shortcuts
   Scenario: A key changed in shortcuts.json shows in the menu straight away
     When I open the thread "Morning brief"
-    And shortcuts.json gives "archive" the key "cmd+k"
-    Then the "Thread" menu has "Archive" on "⌘K"
+    And shortcuts.json gives "archive" the key "cmd+y"
+    Then the "Thread" menu has "Archive" on "⌘Y"
 
   # Pressing it is GPUI-only for the same reason as ⌘[ above (Archive's
   # enabled state goes stale in a scripted Swift app).
   @nav.shortcuts @swift-pending
   Scenario: A key changed in shortcuts.json works straight away
     When I open the thread "Morning brief"
-    And shortcuts.json gives "archive" the key "cmd+k"
-    Then the "Thread" menu has "Archive" on "⌘K"
-    When I press "k" with "cmd"
+    And shortcuts.json gives "archive" the key "cmd+y"
+    Then the "Thread" menu has "Archive" on "⌘Y"
+    When I press "y" with "cmd"
     Then the open thread isn't "Morning brief"
 
   @menu.file

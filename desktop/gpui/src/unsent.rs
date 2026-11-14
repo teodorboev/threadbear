@@ -36,6 +36,10 @@ impl Typed for TextareaState {
 
 struct Watched {
     id: EntityId,
+    /// Which field, for the Updates panel and the update log: a hold that
+    /// said only "a field" sat for hours with nobody able to find it
+    /// (13 Nov).
+    label: String,
     /// What it says now, or none once it's gone.
     now: Box<dyn Fn(&App) -> Option<String>>,
     saved: String,
@@ -45,12 +49,13 @@ thread_local! {
     static WATCHED: RefCell<Vec<Watched>> = const { RefCell::new(Vec::new()) };
 }
 
-/// Puts a new field on the list, with what it holds now as saved.
-pub(crate) fn watch<T: Typed>(input: &Entity<T>, cx: &App) {
+/// Puts a new field on the list, with what it holds now as saved. `label`
+/// says where it is, as the end of "what you're typing in ...".
+pub(crate) fn watch<T: Typed>(input: &Entity<T>, label: impl Into<String>, cx: &App) {
     let saved = input.read(cx).typed();
     let weak = input.downgrade();
     let now = Box::new(move |cx: &App| weak.upgrade().map(|i| i.read(cx).typed()));
-    WATCHED.with(|w| w.borrow_mut().push(Watched { id: input.entity_id(), now, saved }));
+    WATCHED.with(|w| w.borrow_mut().push(Watched { id: input.entity_id(), label: label.into(), now, saved }));
 }
 
 /// What the field holds now is saved (or is what's there to begin with):
@@ -64,15 +69,22 @@ pub(crate) fn saved<T: Typed>(input: &Entity<T>, cx: &App) {
     });
 }
 
-/// Whether any field on the list holds words not saved. Fields that have
-/// gone are dropped as it looks.
+/// Whether any field on the list holds words not saved.
 pub(crate) fn any(cx: &App) -> bool {
+    first(cx).is_some()
+}
+
+/// The first field on the list holding words not saved, by its label.
+/// Fields that have gone are dropped as it looks.
+pub(crate) fn first(cx: &App) -> Option<String> {
     WATCHED.with(|w| {
         let mut w = w.borrow_mut();
-        let mut typed = false;
+        let mut typed = None;
         w.retain(|entry| match (entry.now)(cx) {
             Some(now) => {
-                typed |= threadbear_core::app_update::typed_since(&entry.saved, &now);
+                if typed.is_none() && threadbear_core::app_update::typed_since(&entry.saved, &now) {
+                    typed = Some(entry.label.clone());
+                }
                 true
             }
             None => false,

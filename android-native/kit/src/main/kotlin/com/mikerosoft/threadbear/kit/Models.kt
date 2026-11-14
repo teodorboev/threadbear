@@ -166,14 +166,6 @@ data class PhoneWaitingForNetwork(val since: String)
 
 data class PhoneAskLink(val title: String, val url: String)
 
-data class PhoneAskRun(
-    val command: String,
-    val buttonId: String,
-    val cwd: String? = null,
-    val running: Boolean? = null,
-    val failed: String? = null,
-)
-
 data class PhoneThread(
     val threadId: String,
     val runnerId: String = "mac",
@@ -290,7 +282,6 @@ data class PhoneAsk(
     val suggested: Double? = null,
     val links: List<PhoneAskLink>? = null,
     val ticked: Boolean? = null,
-    val run: PhoneAskRun? = null,
 ) {
     /** What to pick from: its options, else the reply it wants ("done"). */
     val choices: List<String>
@@ -333,9 +324,6 @@ data class PhoneAsk(
             suggested = o.num("suggested"),
             links = o.arr("links")?.lossy { val l = it as JsonObject; PhoneAskLink(l.needStr("title"), l.needStr("url")) },
             ticked = o.bool("ticked"),
-            run = o.obj("run")?.let { r ->
-                PhoneAskRun(r.needStr("command"), r.needStr("buttonId"), r.str("cwd"), r.bool("running"), r.str("failed"))
-            },
         )
     }
 }

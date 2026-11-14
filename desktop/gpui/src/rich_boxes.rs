@@ -683,7 +683,7 @@ fn switch(block: &RichBlock, shows_source: bool, store: &Entity<RichStore>, cx: 
     let segment = |title: &'static str, tip: &'static str, selected: bool, source: bool| {
         let (store, block) = (store.clone(), block.clone());
         let el = div()
-            .id(SharedString::from(format!("rich-{}-{}", if source { "source" } else { "drawn" }, block.id)))
+            .id(SharedString::from(format!("rich-{}-{}", if source { "source" } else { "drawn" }, block.id))).role(Role::Button)
             .h(px(18.))
             .px(px(9.))
             .rounded(px(5.))
@@ -714,7 +714,7 @@ fn icon_button(id: String, symbol: &'static str, tip: &'static str, lit: bool, c
     let (hover, secondary, fg) = (style::primary_opacity(cx, 0.08), style::secondary_label(cx), cx.theme().foreground);
     let color = if lit { rgb(if dark(cx) { 0x30d158 } else { 0x34c759 }).into() } else { secondary };
     let button = div()
-        .id(SharedString::from(id))
+        .id(SharedString::from(id)).role(Role::Button)
         .flex_none()
         .size(px(24.))
         .rounded(px(5.))

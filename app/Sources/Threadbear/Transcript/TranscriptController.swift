@@ -984,12 +984,8 @@ final class TranscriptController: NSObject, NSTableViewDataSource, NSTableViewDe
     }
 
     func askPicturesAllowed(_ card: AsksCard) -> Bool {
-        guard let session, let app = session.app, let thread = app.threads[session.threadId], thread.asksSeq == card.seq else { return false }
-        if let why = app.picturesRefusal(for: thread) {
-            app.errorMessage = why
-            return false
-        }
-        return true
+        guard let session, let app = session.app, let thread = app.threads[session.threadId] else { return false }
+        return thread.asksSeq == card.seq
     }
 
     func askImportPicture(_ card: AsksCard, url: URL) async -> ImageRef? {

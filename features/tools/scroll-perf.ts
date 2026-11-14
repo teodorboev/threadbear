@@ -16,6 +16,9 @@ import { fileURLToPath } from 'node:url';
 import { GpuiDriver } from '../support/gpui.ts';
 import { sleep } from '../support/driver.ts';
 import { assertInFront, swiftTool, windowFrame, work } from './real-screen.ts';
+import { ensurePerfLock } from './perf-lock.ts';
+
+await ensurePerfLock();
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 let fixtures = process.argv[2];

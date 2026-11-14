@@ -147,7 +147,9 @@ impl ThreadHighlights {
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
 #[serde(default)]
 pub struct ProjectLink {
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub title: String,
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub url: String,
 }
 
@@ -155,14 +157,20 @@ pub struct ProjectLink {
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct ProjectInfo {
+    #[serde(default, deserialize_with = "crate::wire::id")]
     pub id: String,
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub title: String,
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub archived: bool,
+    #[serde(default, deserialize_with = "crate::wire::list")]
     pub links: Vec<ProjectLink>,
-    /// The Notion board, as it came (`ProjectTasks`); only its open count is
-    /// read here for now (the board itself is `highlights.board`, not ported).
+    /// The Notion board, as it came (`ProjectTasks`). The heading reads its
+    /// open count; the board decodes its columns and cards through projects.
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub tasks: Option<Value>,
     /// A picture or a symbol, as it came (`ProjectIcon`).
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub icon: Option<Value>,
 }
 
@@ -170,7 +178,7 @@ impl ProjectInfo {
     /// `projects.list`'s answer, one project at a time so one that won't read
     /// can't lose the rest.
     pub fn list(value: &Value) -> Vec<ProjectInfo> {
-        value.as_array().into_iter().flatten().filter_map(|p| serde_json::from_value(p.clone()).ok()).collect()
+        value.as_array().into_iter().flatten().filter_map(|p| crate::wire::read(p.clone())).collect()
     }
 
     /// `ProjectTasks.openCount`: cards in a column that isn't a Done one.
@@ -839,38 +847,63 @@ pub fn started_detail<Tz: TimeZone>(row: &StartedRow, now: &DateTime<Tz>) -> Str
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Schedule {
+    #[serde(default, deserialize_with = "crate::wire::id")]
     pub id: String,
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub title: String,
     /// What it sends.
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub text: String,
     /// A one-off: when it runs.
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub at: Option<String>,
     /// Or repeating: a five-field cron or @daily and friends.
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub cron: Option<String>,
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub timezone: Option<String>,
     /// The runner's words for `at` or `cron`: "Weekdays at 9:00".
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub when_text: String,
     /// Sends to this thread; None starts a new thread each time.
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub thread_id: Option<String>,
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub cwd: Option<String>,
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub account_id: Option<String>,
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub pool_id: Option<String>,
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub model: Option<String>,
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub effort: Option<String>,
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub permission_mode: Option<String>,
     /// The thread whose agent made it; None for a person.
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub created_by: Option<String>,
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub paused: bool,
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub finished_at: Option<String>,
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub next_run_at: Option<String>,
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub created_at: Option<String>,
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub runs: i64,
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub last_run: Option<LastRun>,
     /// The runner it runs on, its name and icon (docs/protocol.md, "Schedules").
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub runner_id: Option<String>,
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub runner_name: Option<String>,
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub runner_icon: Option<String>,
     /// A Run now asked of another runner, waiting for it to hear.
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub run_requested_at: Option<String>,
 }
 
@@ -878,18 +911,22 @@ pub struct Schedule {
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", default)]
 pub struct LastRun {
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub at: Option<String>,
     /// "sent", "skipped" or "failed"; anything else reads as sent.
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub outcome: String,
     /// The thread it sent to or started.
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub thread_id: Option<String>,
     /// Why it was skipped or failed.
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub note: Option<String>,
 }
 
 impl Schedule {
     pub fn list(value: &Value) -> Vec<Schedule> {
-        value.as_array().into_iter().flatten().filter_map(|s| serde_json::from_value(s.clone()).ok()).collect()
+        value.as_array().into_iter().flatten().filter_map(|s| crate::wire::read(s.clone())).collect()
     }
     pub fn is_finished(&self) -> bool {
         self.finished_at.is_some()
@@ -989,19 +1026,31 @@ pub fn schedule_rows(thread: &ThreadSummary, schedules: &[Schedule], now_ms: i64
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Panel {
+    #[serde(default, deserialize_with = "crate::wire::id")]
     pub id: String,
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub title: String,
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub kind: String,
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub url: Option<String>,
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub icon: Option<String>,
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub icon_file: Option<String>,
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub patch: String,
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub note: Option<String>,
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub summary: Option<String>,
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub badge: Option<i64>,
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub project_id: Option<String>,
     /// The built-in Convex panel's deployment: shown as Convex's embedded
     /// dashboard rather than `url` (docs/protocol.md, "The Convex panel").
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub convex: Option<crate::convex_panel::Deployment>,
 }
 
@@ -1009,7 +1058,7 @@ impl Panel {
     /// Tolerant of a kind this app doesn't know: shown as a page if it has a
     /// url, the one thing every panel can be.
     pub fn from_value(v: &Value) -> Option<Panel> {
-        let mut panel: Panel = serde_json::from_value(v.clone()).ok()?;
+        let mut panel: Panel = crate::wire::read(v.clone())?;
         if panel.kind != "url" && panel.kind != "image" && panel.kind != "list" {
             panel.kind = "url".into();
         }
@@ -1021,18 +1070,31 @@ impl Panel {
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Action {
+    #[serde(default, deserialize_with = "crate::wire::id")]
     pub id: String,
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub title: String,
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub kind: String,
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub command: Option<String>,
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub prompt: Option<String>,
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub url: Option<String>,
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub patch: String,
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub note: Option<String>,
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub folder: Option<String>,
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub project_id: Option<String>,
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub badge: Option<i64>,
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub icon: Option<String>,
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub icon_file: Option<String>,
 }
 
@@ -1040,30 +1102,59 @@ pub struct Action {
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct PatchInfo {
+    #[serde(default, deserialize_with = "crate::wire::id")]
     pub id: String,
+    #[serde(default)]
     pub source: String,
+    #[serde(default)]
     pub file: Option<String>,
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub error: Option<String>,
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub folder: Option<String>,
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub project_id: Option<String>,
+    #[serde(default, deserialize_with = "crate::wire::optional_list")]
     pub matched: Option<Vec<String>>,
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub live_error: Option<String>,
     /// A home patch runs something Threadbear can't follow, so threads that
     /// ask first ask before every file edit: what, where, and what to change.
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub edits_ask: Option<String>,
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub icon: Option<String>,
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub icon_file: Option<String>,
+    #[serde(default)]
     pub untrusted: Option<String>,
+    #[serde(default)]
     pub hash: Option<String>,
+    // The Trust prompt must show the complete set of helpers and grants.
+    // An unreadable disclosure fails the patch row closed.
+    #[serde(default)]
     pub helpers: Option<Vec<String>>,
+    #[serde(default)]
     pub grants: Option<Vec<String>>,
+}
+
+impl PatchInfo {
+    /// A Trust button needs complete, understood disclosures and an actual
+    /// target. Unknown sources remain readable without offering to run code.
+    pub fn can_trust(&self) -> bool {
+        self.untrusted.is_some() && matches!(self.source.as_str(), "builtin" | "home" | "project" | "claude")
+            && self.file.as_deref().is_some_and(|s| !s.is_empty())
+            && self.hash.as_deref().is_some_and(|s| !s.is_empty())
+    }
 }
 
 /// A hook (`HookInfo`); only its patch and title are shown ("gives").
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct HookInfo {
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub patch: String,
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub title: String,
 }
 
@@ -1071,14 +1162,22 @@ pub struct HookInfo {
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
 #[serde(default)]
 pub struct PanelItem {
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub title: String,
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub detail: Option<String>,
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub url: Option<String>,
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub path: Option<String>,
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub icon: Option<String>,
     /// "attention", "failed" or "done"; anything else is plain.
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub tone: Option<String>,
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub section: Option<String>,
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub trailing: Option<String>,
 }
 
@@ -1127,7 +1226,7 @@ impl PanelRender {
     pub fn decode(v: &Value) -> PanelRender {
         PanelRender {
             image: v.get("image").and_then(crate::reducer::ImageRef::decode),
-            items: v.get("items").and_then(Value::as_array).map(|a| a.iter().filter_map(|i| serde_json::from_value(i.clone()).ok()).collect()),
+            items: v.get("items").and_then(Value::as_array).map(|a| a.iter().filter_map(|i| crate::wire::read(i.clone())).collect()),
             note: v.get("note").and_then(Value::as_str).map(str::to_owned),
         }
     }

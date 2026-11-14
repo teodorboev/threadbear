@@ -204,3 +204,17 @@ test('with no build known at all, either app coming back counts', () => {
   watcher.appHello(D1, 'desktop');
   assert.match(String(h.events(thread.id).findLast((e) => e.type === 'user.message' && e.origin === 'runner')?.text), /GPUI app has restarted onto dddd111/);
 });
+
+// With both apps connected, what the wait says it's waiting to change from
+// names each one's build: it named only the frozen Swift app's (13 Nov).
+test('the wait names each running app with its build', () => {
+  const { watcher, thread } = setUp();
+  watcher.appHello(A, 'mac');
+  watcher.appHello(B, 'desktop');
+  assert.equal(watcher.watch(thread.id).running, 'the GPUI app on bbbb222, the Swift app on aaaa111');
+  const { watcher: w2, thread: t2 } = setUp();
+  w2.appHello(B, 'desktop');
+  assert.equal(w2.watch(t2.id).running, 'the GPUI app on bbbb222');
+  const { watcher: w3, thread: t3 } = setUp();
+  assert.equal(w3.watch(t3.id).running, undefined);
+});

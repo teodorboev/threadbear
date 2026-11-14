@@ -13,6 +13,7 @@ import { checkSummary } from '../helpers/protocol-check.ts';
 import { readRunnerJson, writeRunnerJson } from '../../src/config.ts';
 import type { Account, Pool } from '../../src/protocol.ts';
 import { RpcError } from '../../src/protocol.ts';
+import { CallerGate } from '../../src/rpc-gate.ts';
 import type { UsageReading } from '../../src/usage.ts';
 import { CARRY_ON_BACK, CARRY_ON_MOVED, type UsageSink } from '../../src/runner.ts';
 
@@ -440,6 +441,179 @@ test("the limit box's Continue now on: a login named with carryOn pins the threa
   h.runner.update({ threadId: thread.id, accountId: 'claude-main', carryOn: true });
   await tick();
   assert.equal(h.adapter.sessions.length, sessions);
+});
+
+test('the model menu after a limit: moving to Codex carries on at once, on the model picked (Ian, 13 Nov)', async () => {
+  const h = poolHarness();
+  h.setUsage('claude-main', room(0.2, 200));
+  h.setUsage('claude-3', room(0.2, 90));
+  const { thread } = h.runner.create({ text: 'x', poolId: 'claude' });
+  h.adapter.last.init();
+  h.adapter.last.text('m1:0', 'Half done.');
+  limit(h.adapter.last);
+  await tick();
+  assert.ok(h.runner.get(thread.id).waitingForRoom, 'the whole Claude pool is out');
+  // The Swift picker's two calls: pinned with the model, then into the pool.
+  h.runner.update({ threadId: thread.id, accountId: 'codex-main', model: 'gpt-6-luna' });
+  h.runner.update({ threadId: thread.id, poolId: 'codex' });
+  await tick();
+  const t = h.runner.get(thread.id);
+  assert.equal(t.poolId, 'codex');
+  assert.equal(t.waitingForRoom, undefined);
+  assert.equal(h.codex.sessions.length, 1);
+  assert.equal(h.codex.last.opts.model, 'gpt-6-luna');
+  assert.match(h.codex.last.sent[0].text, /^\[Threadbear handoff\][\s\S]*Half done\.[\s\S]*Carry on from where you left off\.$/);
+  assert.ok(!notes(h, thread.id).some((n) => /takes over from your next message/.test(n)), 'no "next message" note when it carries on now');
+});
+
+test('a move with nothing to carry on, or carrying on turned off, says the new model starts with the next message', async () => {
+  const h = poolHarness();
+  const { thread } = h.runner.create({ text: 'x', poolId: 'claude' });
+  h.adapter.last.init();
+  h.adapter.last.result();
+  await tick();
+  h.runner.update({ threadId: thread.id, poolId: 'codex' });
+  await tick();
+  assert.equal(h.codex.sessions.length, 0, 'nothing runs till Mike writes');
+  assert.match(notes(h, thread.id).at(-1)!, /takes over from your next message\.$/);
+
+  // At a limit with "Carry on by itself: No", the menu doesn't override it.
+  h.setUsage('claude-main', room(0.2, 200));
+  h.setUsage('claude-3', room(0.2, 90));
+  const other = h.runner.create({ text: 'y', poolId: 'claude' }).thread;
+  h.adapter.last.init();
+  limit(h.adapter.last);
+  await tick();
+  h.runner.update({ threadId: other.id, carryOnAtReset: false });
+  h.runner.update({ threadId: other.id, poolId: 'codex' });
+  await tick();
+  assert.equal(h.codex.sessions.length, 0);
+  assert.match(notes(h, other.id).at(-1)!, /takes over from your next message\.$/);
+});
+
+test("an agent's move after a limit never starts a turn by itself: the thread may have more access than the agent", async () => {
+  const h = poolHarness();
+  h.setUsage('claude-main', room(0.2, 200));
+  h.setUsage('claude-3', room(0.2, 90));
+  const { thread } = h.runner.create({ text: 'x', poolId: 'claude' });
+  h.adapter.last.init();
+  limit(h.adapter.last);
+  await tick();
+  h.runner.update({ threadId: thread.id, poolId: 'codex', byAgent: true });
+  await tick();
+  assert.equal(h.codex.sessions.length, 0);
+  assert.match(notes(h, thread.id).at(-1)!, /takes over from your next message\.$/);
+});
+
+test('a pool with both providers: a Codex model picked from the menu goes to its Codex login and carries on there', async () => {
+  const pools: Pool[] = [{ id: 'claude', title: 'Claude', accountIds: ['claude-main'] }, { id: 'mixed', title: 'Mixed', accountIds: ['codex-main', 'claude-3'] }];
+  const h = poolHarness({ pools });
+  h.setUsage('claude-main', room(0.2, 200));
+  h.setUsage('claude-3', room(80, 200));
+  const { thread } = h.runner.create({ text: 'x', poolId: 'claude' });
+  h.adapter.last.init();
+  limit(h.adapter.last);
+  await tick();
+  // GPUI's one call: the pool and the model.
+  h.runner.update({ threadId: thread.id, poolId: 'mixed', model: 'gpt-6-luna' });
+  await tick();
+  const t = h.runner.get(thread.id);
+  assert.equal(t.accountId, 'codex-main');
+  assert.equal(t.model, 'gpt-6-luna');
+  assert.equal(h.codex.sessions.length, 1);
+});
+
+test('a turn the CLI starts after a limit stop ends it: a move later starts nothing', async () => {
+  const h = poolHarness();
+  h.setUsage('claude-main', room(0.2, 200));
+  h.setUsage('claude-3', room(0.2, 90));
+  const { thread } = h.runner.create({ text: 'x', poolId: 'claude' });
+  const s = h.adapter.last;
+  s.init();
+  limit(s);
+  await tick();
+  // A background job finishes and the CLI answers it by itself.
+  s.out({ kind: 'cliTurn', note: 'Background command "sleep 5" completed (exit code 0)' });
+  s.result('completed', 0, undefined, { own: true });
+  await tick();
+  h.runner.update({ threadId: thread.id, poolId: 'codex' });
+  await tick();
+  assert.equal(h.codex.sessions.length, 0);
+});
+
+test("a mixed pool that already has the thread's Claude login: a Codex pick still moves it to Codex", async () => {
+  const pools: Pool[] = [{ id: 'mixed', title: 'Mixed', accountIds: ['claude-3', 'codex-main'] }];
+  const h = poolHarness({ pools });
+  h.setUsage('claude-3', room(80, 200));
+  const { thread } = h.runner.create({ text: 'x', model: 'claude-opus-5-5' });
+  h.adapter.last.init();
+  h.adapter.last.result();
+  await tick();
+  // GPUI's default row: no model, the column's provider.
+  h.runner.update({ threadId: thread.id, poolId: 'mixed', model: null, provider: 'codex' });
+  assert.equal(h.runner.get(thread.id).accountId, 'codex-main');
+  assert.equal(h.runner.get(thread.id).provider, 'codex');
+});
+
+test('a turn the CLI starts after a limit stop also ends the wait for room: its timer starts nothing later', async () => {
+  const h = poolHarness();
+  h.setUsage('claude-main', room(0.2, 200));
+  h.setUsage('claude-3', room(0.2, 90));
+  const { thread } = h.runner.create({ text: 'x', poolId: 'claude' });
+  const s = h.adapter.last;
+  s.init();
+  limit(s);
+  await tick();
+  assert.ok(h.runner.get(thread.id).waitingForRoom);
+  s.out({ kind: 'cliTurn', note: 'Background command "sleep 5" completed (exit code 0)' });
+  assert.equal(h.runner.get(thread.id).waitingForRoom, undefined);
+  s.result('completed', 0, undefined, { own: true });
+  await tick();
+  const sent = s.sent.length;
+  h.setUsage('claude-3', room(100, 400));
+  h.clock.advance(300 * MIN);
+  await tick();
+  assert.equal(h.adapter.sessions.length, 1);
+  assert.equal(s.sent.length, sent, 'no carry-on from the old wait');
+});
+
+test("the caller gate marks any agent's move, Full access's too, so it never carries on by itself", () => {
+  const h = poolHarness();
+  const full = h.runner.create({ text: 'x', permissionMode: 'full' }).thread;
+  const ask = h.runner.create({ text: 'y', permissionMode: 'ask' }).thread;
+  const gate = new CallerGate({ runner: h.runner });
+  assert.equal(gate.check(full.id, 'threads.update', { threadId: ask.id, poolId: 'codex' }).byAgent, true);
+  assert.equal(gate.check(ask.id, 'threads.update', { threadId: ask.id, poolId: 'codex' }).byAgent, true);
+  assert.equal(gate.check(full.id, 'threads.update', { threadId: ask.id, title: 'z' }).byAgent, undefined);
+});
+
+// Daybreak 121 (13 Nov 2026): the full sync question's thread could set it
+// whatever its mode, from words any same-mode thread could send it. Now no
+// thread short of Full may; Mike's pick on its card sets it (full-sync-answer.test.ts).
+test("no thread short of Full sets full sync, the question's own included", () => {
+  const h = poolHarness();
+  const asking = h.runner.create({ text: 'q', permissionMode: 'ask' }).thread;
+  const auto = h.runner.create({ text: 'o', permissionMode: 'auto' }).thread;
+  const gate = new CallerGate({ runner: h.runner });
+  assert.throws(() => gate.check(asking.id, 'settings.update', { fullSync: true }));
+  assert.throws(() => gate.check(auto.id, 'settings.update', { fullSync: true }));
+  assert.throws(() => gate.check(asking.id, 'settings.update', { defaultCwd: '/' }));
+});
+
+test("an agent's move ends the thread's wait for room, so the old timer can't carry it on later either", async () => {
+  const h = poolHarness();
+  h.setUsage('claude-main', room(0.2, 200));
+  h.setUsage('claude-3', room(0.2, 90));
+  const { thread } = h.runner.create({ text: 'x', poolId: 'claude' });
+  h.adapter.last.init();
+  limit(h.adapter.last);
+  await tick();
+  assert.ok(h.runner.get(thread.id).waitingForRoom);
+  h.runner.update({ threadId: thread.id, poolId: 'codex', byAgent: true });
+  assert.equal(h.runner.get(thread.id).waitingForRoom, undefined);
+  h.clock.advance(300 * MIN);
+  await tick();
+  assert.equal(h.codex.sessions.length, 0);
 });
 
 test('after a restart an early carry-on moves to the login with room, never back to the one that ran dry', async () => {

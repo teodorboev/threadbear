@@ -156,7 +156,10 @@ n=$(( $(cat "${count}" 2>/dev/null || echo 0) + 1 )); echo $n >"${count}"
 if [ ${when === 'list' ? 1 : 2} -le $n ]; then sleep 600 & echo $! >>"${w.root}/pids"; echo $$ >>"${w.root}/pids"; wait; fi
 exec git-upload-pack "$@"
 `, { mode: 0o755 });
-  git(w.theirs, 'config', 'remote.upstream.uploadpack', script);
+  // Read by bash rather than run itself: macOS checks a new executable the
+  // first time it runs, which took over 4 s on a busy Mac (artz-cyber's fork,
+  // 12 Nov 2026), so the deadline came before the hang did.
+  git(w.theirs, 'config', 'remote.upstream.uploadpack', `/bin/bash '${script}'`);
   git(w.theirs, 'config', 'protocol.version', '2');
   return () => fs.readFileSync(path.join(w.root, 'pids'), 'utf8').trim().split('\n').map(Number);
 }

@@ -6,6 +6,7 @@
 // Pausing shows at once and goes back if the runner says no; Look at
 // everything spins until the runner has queued the looks; each takes no
 // second click while it's on its way.
+use crate::a11y::A11yRole as _;
 use crate::app::Threadbear;
 use crate::home_page::{home_status_line, home_title, mode_header, Art};
 use crate::sidebar::{icon, palette, tipped, Palette, LEADING, OUTER_INSET, TRAILING};
@@ -13,8 +14,8 @@ use crate::{call, icons, now_ms, style};
 use gpui_kit::base::TestSupportExt as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::menu::{DropdownMenu as _, PopupMenu, PopupMenuItem};
-use gpui_kit::component::spinner::Spinner;
-use gpui_kit::component::switch::Switch;
+use crate::spinner::Spinner;
+use crate::mac_switch::MacSwitch;
 use gpui_kit::component::{h_flex, v_flex, Disableable as _, Sizable as _, StyledExt as _};
 use gpui_kit::prelude::*;
 use gpui_kit::*;
@@ -190,7 +191,7 @@ impl Threadbear {
             .gap(px(8.))
             .pt(px(4.))
             .child(
-                div().id("librarian-pause").test_support().aria_label(pause_tip.to_owned()).child(
+                div().id("librarian-pause").test_support().a11y_role(Role::GenericContainer).aria_label(pause_tip.to_owned()).child(
                     // Small and filled, as the Swift view's `.controlSize(.small)`.
                     Button::new("librarian-pause-button")
                         .label(if paused { "Resume" } else { "Pause" })
@@ -202,7 +203,7 @@ impl Threadbear {
                 ),
             )
             .child(
-                div().id("librarian-run").test_support().aria_label("Queue a look at every thread it hasn't looked at yet, newest first".to_owned()).child(
+                div().id("librarian-run").test_support().a11y_role(Role::GenericContainer).aria_label("Queue a look at every thread it hasn't looked at yet, newest first".to_owned()).child(
                     Button::new("librarian-run-button")
                         .label("Look at everything")
                         .xsmall()
@@ -230,7 +231,7 @@ impl Threadbear {
                     .child(div().text_size(px(style::size::SIDEBAR_TITLE)).line_height(px(17.)).text_color(fg).line_clamp(2).child(rules::state_text(status))),
             )
             .when_some(working, |s, line| s.child(div().text_size(px(style::size::SIDEBAR_PREVIEW)).line_height(px(16.)).text_color(secondary).line_clamp(2).child(line)))
-            .child(tipped!(div().text_size(px(style::size::SIDEBAR_META)).line_height(px(14.)).text_color(faint), "librarian-today", today_tip).child(rules::today(status)))
+            .child(tipped!(div().text_size(px(style::size::SIDEBAR_META)).line_height(px(14.)).text_color(faint), "librarian-today", today_tip, gpui_kit::Role::GenericContainer).child(rules::today(status)))
             .child(buttons)
             .into_any_element()
     }
@@ -301,9 +302,8 @@ impl Threadbear {
         let mut tip = rules::filing_reasons(entry, |id| titles.iter().find(|(pid, _)| pid == id).map(|(_, t)| t.clone()));
         tip.push(rules::entry_help(entry));
         let tip = tip.join("\n");
-        // The thread, then the projects it touched. Tidying a project's
-        // notes has no thread, just the project. A project's page isn't in
-        // this app yet, so its name is plain words.
+        // The thread, then links to the projects it touched. Tidying a
+        // project's notes has no thread, just the project.
         let mut place = h_flex().min_w_0().items_center().gap(px(4.)).text_size(px(style::size::SIDEBAR_PREVIEW)).line_height(px(16.)).text_color(p.secondary);
         // The thread stays whole before the projects are cut short
         // (`layoutPriority(1)` in the Swift row), up to most of the line.
@@ -311,13 +311,18 @@ impl Threadbear {
             let link = self.thread_link(format!("librarian-entry-{}", entry.id), &entry.thread_id, &entry.thread_title, p, cx);
             place = place.child(div().flex_none().max_w(relative(0.8)).child(link));
         }
-        for (n, (_, title)) in titles.iter().enumerate() {
+        for (n, (project_id, title)) in titles.iter().enumerate() {
             if n > 0 || !entry.thread_id.is_empty() {
                 place = place.child(div().flex_none().text_color(p.faint).child("·"));
             }
-            place = place.child(div().min_w_0().truncate().child(title.clone()));
+            let project_id = project_id.clone();
+            place = place.child(
+                tipped!(div().min_w_0().truncate().cursor_pointer().hover(|s| s.underline()), ElementId::Name(format!("librarian-project-{}-{n}", entry.id).into()), "Open the project")
+                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.open_project_page(&project_id, cx)))
+                    .child(title.clone()),
+            );
         }
-        tipped!(v_flex().gap(px(3.)).pt(px(7.)).pb(px(7.)).pl(px(LEADING)).pr(px(TRAILING)), ElementId::Name(format!("librarian-entry-row-{}", entry.id).into()), tip)
+        tipped!(v_flex().gap(px(3.)).pt(px(7.)).pb(px(7.)).pl(px(LEADING)).pr(px(TRAILING)), ElementId::Name(format!("librarian-entry-row-{}", entry.id).into()), tip, gpui_kit::Role::ListItem)
             .child(
                 h_flex()
                     .items_start()
@@ -347,7 +352,7 @@ impl Threadbear {
     /// it's doing, its numbers, then its settings.
     pub(crate) fn render_librarian_home(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let status = self.librarian.status.clone();
-        let threads: Vec<&threadbear_core::inbox::ThreadSummary> = self.threads.values().collect();
+        let threads: Vec<&threadbear_core::inbox::ThreadSummary> = self.threads.values().map(|t| &**t).collect();
         let stats = status.as_ref().map(|s| rules::stats(s, self.librarian.projects_made, &threads)).unwrap_or_default();
         let mut about = v_flex().gap(px(12.)).child(home_title("Librarian", "Keeps your projects tidy as your threads go.", MORE, cx));
         if let Some(status) = &status {
@@ -366,12 +371,14 @@ impl Threadbear {
         let paused = status.paused;
         let label = |text: &'static str| div().w(px(110.)).flex_none().text_size(px(style::size::LABEL)).line_height(px(16.)).text_color(secondary).child(text);
         let switch_tip = if paused { "Paused: what's queued waits. Turn it on to carry on" } else { "Turn it off to pause; what's queued waits" };
-        let switch = div().id("librarian-switch").test_support().aria_label(switch_tip.to_owned()).tip(switch_tip).child(
-            Switch::new("librarian-look")
-                .checked(!paused)
+        let switch = div().id("librarian-switch").test_support().a11y_role(Role::GenericContainer).aria_label(switch_tip.to_owned()).tip(switch_tip).child(
+            MacSwitch::new("librarian-look", !paused)
+                .outside_form()
                 .disabled(pausing)
-                .small()
-                .on_click(cx.listener(move |this, on: &bool, _, cx| this.set_librarian_paused(!*on, cx))),
+                .on_change({
+                    let me = cx.entity().downgrade();
+                    move |on, _, cx| { me.update(cx, |this, cx| this.set_librarian_paused(!on, cx)).ok(); }
+                }),
         );
         let mut grid = v_flex().gap(px(12.)).child(h_flex().items_center().gap(px(16.)).child(label("Look at threads")).child(switch));
         if let Some(picker) = self.render_small_jobs_pool(cx) {
@@ -383,7 +390,7 @@ impl Threadbear {
             .child(div().text_size(px(17.)).line_height(px(21.)).font_semibold().child("Settings"))
             .child(grid)
             .child(
-                div().id("librarian-more-settings").test_support().aria_label("Private folders, whose threads are never sent anywhere".to_owned()).child(
+                div().id("librarian-more-settings").test_support().a11y_role(Role::GenericContainer).aria_label("Private folders, whose threads are never sent anywhere".to_owned()).child(
                     Button::new("librarian-more-settings-button")
                         .label("More in Settings…")
                         .small()
@@ -424,7 +431,7 @@ impl Threadbear {
             div()
                 .id("librarian-pool")
                 .test_support()
-                .aria_label(tip.to_owned())
+                .a11y_role(Role::GenericContainer).aria_label(tip.to_owned())
                 .child(Button::new("librarian-pool-button").label(current).small().outline().dropdown_caret(true).tooltip(tip).dropdown_menu(move |menu: PopupMenu, _, _| {
                     let mut menu = menu;
                     for (id, title, symbol) in &choices {
@@ -448,7 +455,7 @@ impl Threadbear {
     /// The page in the main panel, for the dump (`homePage`).
     #[cfg(feature = "automation")]
     pub(crate) fn librarian_home_dump(&self) -> Value {
-        let threads: Vec<&threadbear_core::inbox::ThreadSummary> = self.threads.values().collect();
+        let threads: Vec<&threadbear_core::inbox::ThreadSummary> = self.threads.values().map(|t| &**t).collect();
         let status = self.librarian.status.as_ref();
         let stats = status.map(|s| rules::stats(s, self.librarian.projects_made, &threads)).unwrap_or_default();
         json!({

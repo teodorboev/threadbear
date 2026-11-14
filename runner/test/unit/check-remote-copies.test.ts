@@ -99,7 +99,8 @@ test("a host whose reported folder isn't a plain absolute path is passed over", 
     fs.writeFileSync(path.join(s.fake, 'h1', 'base'), base);
     fs.rmSync(path.join(s.fake, 'copies.log'), { force: true });
     const r = s.run('h1', 3600);
-    assert.equal(r.status, 255, `${base}: ${r.stdout}${r.stderr}`);
+    // It answered, oddly: never a reason to run the check on this Mac.
+    assert.equal(r.status, 1, `${base}: ${r.stdout}${r.stderr}`);
     assert.match(r.stderr, /Unexpected folder on h1/, base);
     assert.deepEqual(r.copies, [], base);
   }

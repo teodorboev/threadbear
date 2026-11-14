@@ -23,6 +23,16 @@ use super::state::{TextInputState, sync_focused_input_registry};
 use super::{InputContentType, InputState, sync_native_content_type};
 use crate::ThemeStyled as _;
 
+/// An application's additions to the standard field menu. Custom per-input
+/// builders keep full ownership of their menus. The kit installs none itself.
+#[derive(Clone, Copy)]
+struct DefaultContextMenuExtension(fn(NativeMenu, &mut Window, &mut App) -> NativeMenu);
+impl Global for DefaultContextMenuExtension {}
+
+pub fn set_default_context_menu_extension(extend: fn(NativeMenu, &mut Window, &mut App) -> NativeMenu, cx: &mut App) {
+    cx.set_global(DefaultContextMenuExtension(extend));
+}
+
 /// Set when the platform draws the touch selection UI of a focused input.
 #[derive(Default)]
 struct NativeTouchSelection(bool);
@@ -663,6 +673,10 @@ impl RenderOnce for Input {
                         Box::new(gpui_base::input::SelectAll),
                     )
                 };
+                let menu = if custom.is_none() {
+                    let extend = cx.try_global::<DefaultContextMenuExtension>().map(|extension| extension.0);
+                    match extend { Some(extend) => extend(menu, window, cx), None => menu }
+                } else { menu };
                 menu.show(position, window, cx);
             }),
             cx,

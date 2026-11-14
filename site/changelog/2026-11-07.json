@@ -158,13 +158,25 @@
   ],
   "added": [
     "Plan first in the mode menu on the message box: the agent looks around and writes a plan without changing anything, as a card with Go ahead and Send back, and ticks off its steps on the same card once you let it start",
-    "Pick Light, Dark or Same as the Mac for Threadbear alone in Settings > General > Appearance",
-    "A soft ding when a thread finishes, waits for you or fails: choose Chime, Bell or Droplet in Settings > General > Notifications (off until you turn it on)",
-    "⌥⌘↓ (Go > Next Inbox Thread) opens the next thread in your Inbox, so you can work through it without the mouse",
+    {
+      "text": "Pick Light, Dark or Same as the Mac for Threadbear alone in Settings > General > Appearance",
+      "credit": "Wayne Sutton"
+    },
+    {
+      "text": "A soft ding when a thread finishes, waits for you or fails: choose Chime, Bell or Droplet in Settings > General > Notifications (off until you turn it on)",
+      "credit": "Wayne Sutton"
+    },
+    {
+      "text": "⌥⌘↓ (Go > Next Inbox Thread) opens the next thread in your Inbox, so you can work through it without the mouse",
+      "credit": "Tyler Lusk"
+    },
     "Drag a thread from the sidebar onto the open thread to mention it in your message",
     "Investigate on the error bar starts a thread that looks for the error's cause and fixes it",
     "When Claude refuses a message, Continue with Codex Sol carries the thread on in Codex",
-    "Files on a thread's right-hand rail shows the thread's folder in the folder browser",
+    {
+      "text": "Files on a thread's right-hand rail shows the thread's folder in the folder browser",
+      "credit": "Wayne Sutton"
+    },
     "A thread's Highlights lists the threads it started, with where each is up to, and a click opens one",
     "A page in the side pane that needs its scripts says so, and Run them turns them on for that version of the file, still with no internet",
     "Options an agent asks you to compare can be videos and small pages as well as pictures, and the one it would pick is marked \"my pick\"",
@@ -176,17 +188,29 @@
     "iPhone: Copy Thread ID in a thread's ... menu, and a pasted thread id goes in as a link to that thread",
     "Run Threadbear on your own Convex backend instead of Convex's cloud with `./threadbear setup --self-hosted`",
     "Your own copy of Threadbear starts a thread every five days to bring in the newest releases, and straight away for an important one: Settings > General > Updates from Mike sets how often",
-    "New experiments you can switch on (the guide's Experiments page says how): keep the Mac awake while threads work, have Codex review Claude's changes and Claude review Codex's, skip a scheduled run when its check finds nothing new, a done card that lists loose ends, buttons in replies, instructions for every agent in Settings, and talking with a thread out loud"
+    {
+      "text": "New experiments you can switch on (the guide's Experiments page says how): keep the Mac awake while threads work, have Codex review Claude's changes and Claude review Codex's, skip a scheduled run when its check finds nothing new, a done card that lists loose ends, buttons in replies, instructions for every agent in Settings, and talking with a thread out loud",
+      "credit": "Wayne Sutton, for instructions and talking out loud"
+    }
   ],
   "changed": [
-    "Editing a file in the side pane shows line numbers, ⌘S saves it straight away, and a save never writes over a change an agent has just made to the file",
+    {
+      "text": "Editing a file in the side pane shows line numbers, ⌘S saves it straight away, and a save never writes over a change an agent has just made to the file",
+      "credit": "Wayne Sutton"
+    },
     "Slash commands work in Codex threads too, and `/model` and `/effort` stay set for the thread",
     "Copy thread id is on a thread's right-click menu in the sidebar as well as its ... menu",
     "Usage on the left-hand rail is a honey pot, filled to how much is left on the login your next thread would use",
     "Every button shows a spinner or the change straight away, and can't be pressed twice while it waits, on the Mac and the iPhone",
-    "Drop a file anywhere over the thread to attach it, not just on the message box",
+    {
+      "text": "Drop a file anywhere over the thread to attach it, not just on the message box",
+      "credit": "Jamie Turner"
+    },
     "A link's right-click menu has Open in Chrome for each Chrome profile you have open, so a page can go to the window with the right sign-in",
-    "Web addresses inside code in a reply are links",
+    {
+      "text": "Web addresses inside code in a reply are links",
+      "credit": "Wayne Sutton"
+    },
     "Archive on the done card archives straight away again, without asking whether it worked",
     "A failed update starts a thread in the background that fixes the cause and archives itself; the banner is only for when no thread can start",
     "Checks, worktree setup and updates that Threadbear runs itself go at background priority, so the Mac stays responsive",
@@ -196,7 +220,10 @@
     "iPhone: while you dictate, the reply box is a waveform with the time so far and a small stop button"
   ],
   "fixed": [
-    "Screenshots dragged from their floating thumbnail and photos copied from Photos now attach",
+    {
+      "text": "Screenshots dragged from their floating thumbnail and photos copied from Photos now attach",
+      "credit": "Tyler Lusk"
+    },
     "A link in a reply to a file in the thread's folder opens that file",
     "A link to a thread the sidebar doesn't have says why, rather than only beeping",
     "Return in a question's Something else box moves on to the next question, and an empty box no longer counts as an answer",
@@ -207,8 +234,14 @@
     "Cards on a thread that runs on another Mac can be answered, and its archived threads can be reopened from Archived",
     "iPhone: tapping a notification no longer crashes the app, and opens its thread even when the app wasn't running",
     "A mockup page saved without a character set no longer shows ✓ as garbled letters",
-    "Granting Full Disk Access after Threadbear first asked for it clears the notice",
-    "Your own copy no longer shows Mike's Sentry and App Store Connect chips",
+    {
+      "text": "Granting Full Disk Access after Threadbear first asked for it clears the notice",
+      "credit": "Josh Gantt"
+    },
+    {
+      "text": "Your own copy no longer shows Mike's Sentry and App Store Connect chips",
+      "credit": "Wayne Sutton"
+    },
     "Closed several ways a cloned repo's settings, a stopped share link or a tampered release could get past Threadbear's checks"
   ]
 }

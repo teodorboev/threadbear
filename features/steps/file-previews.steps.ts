@@ -1,8 +1,36 @@
-import { Then, When } from '@cucumber/cucumber';
+import { After, Then, When } from '@cucumber/cucumber';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { sampleOffice } from '../support/office-document.ts';
 import assert from 'node:assert/strict';
 import type { ThreadbearWorld } from '../support/world.ts';
 import { pane, previewLine } from '../support/pane.ts';
 import { okValue } from '../support/driver.ts';
+
+const officeFolders = new WeakMap<ThreadbearWorld, string>();
+When('I open a sample Office document in the pane', async function (this: ThreadbearWorld) {
+  const folder = fs.mkdtempSync(path.join(os.tmpdir(), 'tb-office-preview-'));
+  officeFolders.set(this, folder);
+  const document = sampleOffice(folder);
+  await this.app.do({ cmd: 'opened' });
+  await this.app.do({ cmd: 'preview', path: document });
+});
+
+After(function (this: ThreadbearWorld) {
+  const folder = officeFolders.get(this);
+  if (folder) fs.rmSync(folder, { recursive: true, force: true });
+});
+
+Then('the pane shows a Quick Look thumbnail', async function (this: ThreadbearWorld) {
+  await this.until('a Quick Look document thumbnail', (d) => pane(d)?.previewKind === 'quickLook' && Boolean(pane(d)?.previewText), 30_000);
+});
+
+Then('the document has not opened another app', async function (this: ThreadbearWorld) {
+  const opened = await this.app.do({ cmd: 'opened' });
+  const text = typeof opened === 'string' ? opened.replace(/^ok /, '') : JSON.stringify(opened);
+  assert.deepEqual(JSON.parse(text), []);
+});
 
 When('I click the highlight {string}', async function (this: ThreadbearWorld, title: string) {
   await this.until(`a highlight called "${title}"`, (d) => pane(d)?.sections?.some((s) => s.rows.some((r) => r.title === title)));
@@ -124,4 +152,29 @@ When('I copy the picture in the pane', async function (this: ThreadbearWorld) {
 
 Then('it was copied as a picture', function (this: ThreadbearWorld) {
   assert.match(this.lastAnswer ?? '', /copied (png|public\.png)/);
+});
+
+// A local page in the pane (file.htmlpreview, file.runthem): the bar's words
+// are the dump's `previewNote`, and the page's own title, which the mock's
+// page sets from what its script could fetch, is in `webPanels.pages`.
+Then("the pane's page says {string}", async function (this: ThreadbearWorld, words: string) {
+  await this.until(`the bar over the page to say "${words}"`, (d) => pane(d)?.previewNote === words);
+});
+
+type LocalPage = { key: string; title: string; hidden: boolean; loading: boolean };
+const localPages = (d: unknown) => ((d as { webPanels?: { pages?: LocalPage[] } }).webPanels?.pages ?? []).filter((p) => p.key.startsWith('preview:'));
+
+Then('the local page in the pane is titled {string}', { timeout: 120_000 }, async function (this: ThreadbearWorld, title: string) {
+  try {
+    await this.until(`a local page on show titled "${title}"`, (d) => localPages(d).some((p) => !p.hidden && !p.loading && p.title === title), 90_000);
+  } catch (e) {
+    // What the pool and the pane had, to say why.
+    const d = await this.app.dump();
+    throw new Error(`${(e as Error).message}\nwebRuntime: ${JSON.stringify((d as { webRuntime?: unknown }).webRuntime)}\nwebPanels: ${JSON.stringify((d as { webPanels?: unknown }).webPanels)}\npane: ${JSON.stringify(pane(d))}`);
+  }
+});
+
+When('I press Run them over the page in the pane', async function (this: ThreadbearWorld) {
+  await this.until('the bar asking to run its scripts', (d) => pane(d)?.previewNote === 'This page has scripts');
+  await this.app.do({ cmd: 'preview', runScripts: true });
 });

@@ -11,8 +11,10 @@ use gpui::{
     Global, GlobalElementId, Half, Hitbox, HitboxBehavior, Hsla, InputEvent as _,
     InspectorElementId, IntoElement, LayoutId, LongPressEvent, MouseButton, MouseDownEvent,
     MouseMoveEvent, MouseUpEvent, Pixels, Point, ScrollDelta, ScrollEvent, SharedString, Style,
-    Subscription, TextLayout, TouchDragEvent, TouchPhase, WeakEntity, Window, point, px,
+    Subscription, TextLayout, TouchDragEvent, TouchPhase, WeakEntity, Window, WrappedLineLayout,
+    point, px,
 };
+use std::sync::Arc;
 
 use crate::text_boundary::{line_range_at, word_range_at};
 use crate::touch_selection::{
@@ -514,12 +516,14 @@ fn selection_range_for_run(
         return Some(0..run.text.len());
     }
 
+    let row_starts = wrapped_row_starts(&run.layout.line_layouts(), run.layout.bounds().origin, line_height);
     let mut range = None;
     for (offset, character) in run.text.char_indices() {
         let next_offset = offset + character.len_utf8();
         let Some(position) = run.layout.position_for_index(offset) else {
             continue;
         };
+        let position = drawn_position(position, offset, &row_starts);
 
         let char_width = run
             .layout
@@ -560,6 +564,65 @@ pub(crate) fn text_rows_extent(text_layout: &TextLayout, line_height: Pixels) ->
         last_line_top + line.wrap_boundaries.len() as f32 * layout_line_height
     });
     (top, last_row_top + line_height)
+}
+
+/// Where each soft-wrapped row starts: the byte offset of its first
+/// character and where that character is drawn, ordered by offset. Every row
+/// but a line's first. The position is worked out as GPUI places rows
+/// (`TextLayout::position_for_index`: the line's origin, moved down by each
+/// line before it, plus `row * line_height`), so it compares equal to
+/// GPUI's own positions for the rest of the row at any display scale.
+pub(crate) fn wrapped_row_starts(
+    lines: &[Arc<WrappedLineLayout>],
+    origin: Point<Pixels>,
+    line_height: Pixels,
+) -> Vec<(usize, Point<Pixels>)> {
+    let mut starts = Vec::new();
+    let mut line_origin = origin;
+    let mut line_start = 0;
+    for line in lines {
+        let layout = &line.unwrapped_layout;
+        for (row, boundary) in line.wrap_boundaries.iter().enumerate() {
+            let index = layout.runs[boundary.run_ix].glyphs[boundary.glyph_ix].index;
+            starts.push((
+                line_start + index,
+                line_origin + point(px(0.), (row + 1) as f32 * line_height),
+            ));
+        }
+        line_origin.y += line.size(line_height).height;
+        line_start += line.len() + 1;
+    }
+    // In visual order, which right-to-left text doesn't keep in byte order.
+    starts.sort_by_key(|(offset, _)| *offset);
+    starts
+}
+
+/// Where the character at `offset` is drawn, from GPUI's position for that
+/// offset (`upstream`). At a soft wrap GPUI gives the end of the row before,
+/// where a caret after that row's last character goes, but the character
+/// itself starts the next row. Without this the first character of every
+/// wrapped row was tested as part of the row above, so a drag along the row
+/// into the margin never took it in (Mike, 13 Nov: "can't select all the
+/// way to the start of the line").
+pub(crate) fn drawn_position(
+    upstream: Point<Pixels>,
+    offset: usize,
+    row_starts: &[(usize, Point<Pixels>)],
+) -> Point<Pixels> {
+    row_starts
+        .binary_search_by_key(&offset, |(start, _)| *start)
+        .map_or(upstream, |found| row_starts[found].1)
+}
+
+/// Where a selection starting at `index` starts on screen: the next row's
+/// start at a soft wrap (see [`drawn_position`]), else
+/// [`TextLayout::position_for_index`]. For painting a selection's first
+/// row, so one starting a wrapped row isn't drawn from the end of the row
+/// above.
+pub fn selection_start_position(layout: &TextLayout, index: usize) -> Option<Point<Pixels>> {
+    let upstream = layout.position_for_index(index)?;
+    let starts = wrapped_row_starts(&layout.line_layouts(), layout.bounds().origin, layout.line_height());
+    Some(drawn_position(upstream, index, &starts))
 }
 
 /// The carets at the two ends of what `click_count` clicks at `position`
@@ -603,7 +666,7 @@ fn unit_carets(
     }
     let line_height = run.layout.line_height();
     Some((
-        caret_line_box(run.layout.position_for_index(range.start)?, line_height),
+        caret_line_box(selection_start_position(&run.layout, range.start)?, line_height),
         caret_line_box(run.layout.position_for_index(range.end)?, line_height),
     ))
 }
@@ -2894,6 +2957,32 @@ fn with_text_selection_scope<T>(
 pub struct TextSelection;
 
 impl TextSelection {
+    /// The word actually drawn under this point in the active selection
+    /// scope. It neither changes selection nor reads clipped or hidden text.
+    pub fn word_at(position: Point<Pixels>, window: &Window, cx: &mut App) -> Option<String> {
+        let state = live_text_selection_state(window, cx)?;
+        state.update(cx, |state, cx| {
+            let endpoint = state.endpoint(position, Some(window), cx);
+            if !endpoint.inside_text { return None }
+            let participant = endpoint.participant?.upgrade()?;
+            let participant = participant.read(cx);
+            let runs = participant.runs.borrow();
+            let run = runs.iter().find(|run| run.bounds.contains(&position))?;
+            if run.text.len() != run.layout.len() { return None }
+            let offset = run.layout.index_for_position(position).ok()?;
+            let range = word_range_at(&run.text, offset)?;
+            let word = run.text.get(range)?;
+            (!word.trim().is_empty()).then(|| word.to_owned())
+        })
+    }
+
+    /// The visible end of the current geometry selection, for a system
+    /// definition popover. Participant-local select-all can have no endpoint.
+    pub fn selection_cursor(window: &Window, cx: &mut App) -> Option<Point<Pixels>> {
+        let state = live_text_selection_state(window, cx)?;
+        state.read(cx).snapshot()?.window_points().map(|points| points.cursor())
+    }
+
     /// Returns whether `position` hits selectable text in the active scope.
     ///
     /// Uses the current frame's registered text geometry and hitboxes without
@@ -3752,6 +3841,20 @@ mod tests {
         }
     }
 
+    /// One text in a column narrow enough to wrap it.
+    struct WrappedRunLayoutView {
+        text: SharedString,
+        layout: Option<TextLayout>,
+    }
+
+    impl Render for WrappedRunLayoutView {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let text = StyledText::new(self.text.clone());
+            self.layout = Some(text.layout().clone());
+            div().w(px(120.)).child(text)
+        }
+    }
+
     impl FakeParticipant {
         fn new(text: &str, cx: &mut gpui::App) -> Self {
             let selection = TextSelectionHandle::new(text, cx);
@@ -3988,6 +4091,44 @@ mod tests {
         };
         assert_eq!(projection.ranges(), &[Some(1..3)]);
         assert!(projection.is_active());
+    }
+
+    /// A drag along a wrapped row from past its end out into the margin
+    /// takes in the row's first character, which GPUI's position_for_index
+    /// puts at the end of the row above (Mike, 13 Nov: a draft's link
+    /// starting a wrapped row lost its "h").
+    #[gpui::test]
+    fn a_drag_into_the_margin_selects_a_wrapped_rows_first_character(cx: &mut TestAppContext) {
+        let text = SharedString::from("alpha beta gamma delta epsilon zeta eta theta iota kappa");
+        let view = cx.add_window({
+            let text = text.clone();
+            move |_, _| WrappedRunLayoutView { text, layout: None }
+        });
+        cx.update_window(*view, |_, window, cx| {
+            let _ = window.draw(cx);
+        })
+        .unwrap();
+        let layout = cx.update(|cx| view.read(cx).unwrap().layout.clone()).unwrap();
+        let starts: Vec<usize> = wrapped_row_starts(&layout.line_layouts(), layout.bounds().origin, layout.line_height())
+            .into_iter()
+            .map(|(offset, _)| offset)
+            .collect();
+        assert!(!starts.is_empty(), "the text should wrap");
+        let second = starts[0];
+        let bounds = layout.bounds();
+        let line_height = layout.line_height();
+        let row = bounds.top() + line_height + line_height.half();
+        let run = TextSelectionRun::new(text.clone(), layout.clone(), bounds);
+        let range = selection_range_for_run(&run, point(bounds.right() + px(50.), row), point(bounds.left() - px(30.), row))
+            .expect("a selection");
+        assert_eq!(range.start, second, "{:?} of {text:?}", range);
+        let third = starts.get(1).copied().unwrap_or(text.len());
+        assert_eq!(text[range].trim_end(), text[second..third].trim_end());
+        // Drawn on the same row, to the bit, as GPUI places the rest of it,
+        // so a selection within that row paints as one row.
+        let start = selection_start_position(&layout, second).unwrap();
+        assert_eq!(start.x, bounds.left());
+        assert_eq!(Some(start.y), layout.position_for_index(second + 1).map(|p| p.y));
     }
 
     #[gpui::test]

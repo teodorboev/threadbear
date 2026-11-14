@@ -19,9 +19,14 @@ repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 work="$(mktemp -d "${TMPDIR:-/tmp}/remote-freshness.XXXXXX")"
 trap 'rm -rf "$work"' EXIT
 
-mkdir -p "$work/desktop/scripts" "$work/runner/scripts" "$work/desktop/src"
+mkdir -p "$work/desktop/scripts" "$work/runner/scripts" "$work/desktop/src" "$work/scripts"
 cp "$repo/desktop/scripts/remote.sh" "$repo/desktop/scripts/trim-remote-cache.sh" "$work/desktop/scripts/"
+cp "$repo/scripts/remote-guard-lib.sh" "$repo/scripts/hangup-guard.sh" "$work/scripts/"
+cp -R "$repo/desktop/scripts/shared-cargo" "$work/desktop/scripts/"
 cp "$repo/runner/scripts/find-node.sh" "$work/runner/scripts/"
+for helper in perf-lock.pl perf-children.pl hangup-guard.sh remote-guard-lib.sh build-priority.sh perf-build.sh; do
+  cp "$repo/scripts/$helper" "$work/scripts/"
+done
 cat >"$work/desktop/Cargo.toml" <<'EOF'
 [package]
 name = "freshness"
@@ -29,19 +34,23 @@ version = "0.1.0"
 edition = "2021"
 EOF
 answer() { printf 'fn main() { println!("answer {}", %s); }\n' "$1" >"$work/desktop/src/main.rs"; }
-run() { "$work/desktop/scripts/remote.sh" "$host" -- bash -c "cd desktop && $1"; }
+# Its builds take turns in shared targets of their own (shared-cargo/cargo), so
+# a tiny crate never replaces the real checkouts' copy in the host's slots.
+shared='$HOME/.cache/threadbear-check/gpui/freshness-shared'
+run() { "$work/desktop/scripts/remote.sh" "$host" -- bash -c "export THREADBEAR_SHARED_CARGO_BASE=$shared && cd desktop && $1"; }
 # The copy's folder on the host, as remote.sh names it.
 key="$(printf '%s' "$(cd "$work" && pwd)" | shasum | cut -c1-10)"
 remote_src=".cache/threadbear-check/gpui/src-$key"
-trap 'rm -rf "$work"; ssh "$host" "rm -rf .cache/threadbear-check/gpui/src-$key .cache/threadbear-check/gpui/target-$key"' EXIT
+trap 'rm -rf "$work"; ssh "$host" "rm -rf .cache/threadbear-check/gpui/src-$key .cache/threadbear-check/gpui/target-$key .cache/threadbear-check/gpui/freshness-shared"' EXIT
 
 answer 1
 run 'cargo run -q' | grep -qx 'answer 1' || { echo "FAIL: the first run didn't build"; exit 1; }
 
 answer 2
 sleep 2
-# Runs a command in the copy on the host, with its cargo and target.
-on_host() { ssh "$host" "cd $remote_src/desktop && export PATH=\"\$HOME/.cache/threadbear-check/gpui/cargo/bin:\$HOME/.cargo/bin:\$PATH\" CARGO_TARGET_DIR=\"\$HOME/.cache/threadbear-check/gpui/target-$key\" && $1"; }
+# Runs a command in the copy on the host, with its cargo and target, as a run
+# there would (through the shared targets).
+on_host() { ssh "$host" "cd $remote_src/desktop && export PATH=\"\$HOME/$remote_src/desktop/scripts/shared-cargo:\$HOME/.cache/threadbear-check/gpui/cargo/bin:\$HOME/.cargo/bin:\$PATH\" CARGO_TARGET_DIR=\"\$HOME/.cache/threadbear-check/gpui/target-$key\" THREADBEAR_SHARED_CARGO_BASE=$shared THREADBEAR_SHARED_CARGO_SRC=\"\$HOME/$remote_src\" && $1"; }
 # A build on the host after the change was made here, of the copy it still has.
 on_host 'touch src/main.rs && cargo build -q'
 
@@ -53,7 +62,8 @@ again="$(run 'cargo build 2>&1')"
 # matches this Mac's but its build is of something else, with a later time.
 # Copying by content changes nothing there, so remote.sh rebuilds such a
 # target's crates once (.synced-by-content).
-on_host 'cp -p src/main.rs /tmp/freshness-$$ && sed -i.x s/2/9/ src/main.rs && cargo build -q && cp -p /tmp/freshness-$$ src/main.rs && rm -f /tmp/freshness-$$ src/main.rs.x && rm -f "$CARGO_TARGET_DIR/.synced-by-content"'
+# The copy goes in a folder mktemp makes, not a /tmp name another account could make first.
+on_host 'keep="$(mktemp -d)" && cp -p src/main.rs "$keep/" && sed -i.x s/2/9/ src/main.rs && cargo build -q && cp -p "$keep/main.rs" src/main.rs && rm -rf "$keep" src/main.rs.x && rm -f "$CARGO_TARGET_DIR/.synced-by-content"'
 old="$(run 'cargo run -q')"
 
 if [ "$got" != "answer 2" ]; then

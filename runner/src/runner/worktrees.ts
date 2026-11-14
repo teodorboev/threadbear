@@ -7,7 +7,7 @@ import type { RunnerPart } from './part.ts';
 import type { Action, EventBody } from '../protocol.ts';
 import type { ThreadRecord } from '../store.ts';
 import { BIN_DIR, threadEnv } from '../restart.ts';
-import { cleanUpWorktree, makeWorktree, readPlainFile, sameSubfolder, stillCheckedOut, worktreeFolderNow, worktreeGone, type WorktreeRecord } from '../worktrees.ts';
+import { cleanUpWorktree, clearBuildCaches, makeWorktree, readPlainFile, sameSubfolder, stillCheckedOut, worktreeFolderNow, worktreeGone, type WorktreeRecord } from '../worktrees.ts';
 import { isDirectory } from '../fsutil.ts';
 import { automaticTrust, findWorktreePatch, isInside, readWorktreePatch, runCommand, type PatchSet, type WorktreePatch, worktreePatchFiles } from '../patches.ts';
 import fs from 'node:fs';
@@ -34,6 +34,22 @@ export const worktreesPart = {
   // where it was asked to.
   async prepareWorktree(this: Runner, st: ThreadState, turnId: string): Promise<void> {
     const { rec, rt } = st;
+    try {
+      await this.prepareWorktreeNow(st, turnId);
+    } finally {
+      // Deleted meanwhile: delete() left the worktree to this (it would
+      // have removed it from under the setup, or never known of it), so
+      // it goes now rather than be left with no thread. Not one let go to
+      // another runner, which has the worktree now (a handover keeps a
+      // thread being set up, but a crash or a move may not).
+      if (rt.trashed && rec.worktree && !rec.worktree.removedAt) {
+        await this.cleanUpWorktree(st, true).catch((e: unknown) => this.log.error('worktree cleanup failed', { threadId: rec.id, error: String(e) }));
+      }
+    }
+  },
+
+  async prepareWorktreeNow(this: Runner, st: ThreadState, turnId: string): Promise<void> {
+    const { rec, rt } = st;
     delete rec.worktreePending;
     this.markDirty(st);
     // A session already ran in the folder (a turn that failed later, say):
@@ -49,7 +65,10 @@ export const worktreesPart = {
     if (!patch || rt.deleted) return;
     const asked = rec.cwd;
     const made = await makeWorktree({ cwd: asked, threadId: rec.id, patch });
-    if (rt.deleted) return;
+    if (rt.deleted) {
+      if (made.ok) rec.worktree = made.worktree;
+      return;
+    }
     if (!made.ok) {
       this.log.warn('could not make a worktree', { threadId: rec.id, reason: made.reason });
       this.emit(st, { type: 'system.note', text: `Couldn't make a worktree for this thread: ${made.reason}. It starts in ${asked} instead.` }, turnId);
@@ -64,6 +83,13 @@ export const worktreesPart = {
     this.markDirty(st);
     this.log.info('made a worktree', { threadId: rec.id, path: made.worktree.path, branch: made.worktree.branch });
     this.emit(st, { type: 'system.note', text: `Working in a worktree of its own at ${made.worktree.path}, on the branch ${made.worktree.branch}. tb land puts it on main.` }, turnId);
+    // Archived while it was being made: the archive didn't know of it, so
+    // its cleanup is owed (archiveWhenGone runs it once this is done), and
+    // there's no point setting it up.
+    if (rec.archivedAt) {
+      rec.worktree.cleanupOwed = true;
+      return;
+    }
     await this.setUpWorktree(st, made, patch, turnId);
   },
 
@@ -421,11 +447,23 @@ export const worktreesPart = {
     const how =
       `To land it, run tb land in ${w.path}${deleted ? '' : ' (or bring the thread back and press Land)'}. ` +
       `To drop it, git -C ${w.mainCheckout} worktree remove --force ${w.path} && git -C ${w.mainCheckout} branch -D ${w.branch}.`;
+    // Staying, it can't be a spare, so no other thread will use its build
+    // caches: they go to free the space (clearBuildCaches says why).
+    let cleared: string[] = [];
+    if (stillOurs()) {
+      try {
+        cleared = await clearBuildCaches(w);
+      } catch (e) {
+        this.log.warn("couldn't clear a kept worktree's build caches", { threadId: rec.id, path: w.path, error: String(e) });
+      }
+      if (cleared.length) this.log.info("cleared a kept worktree's build caches", { threadId: rec.id, path: w.path, cleared });
+    }
+    const freed = cleared.length ? ` Its build caches (${cleared.join(', ')}) were cleared to save space, and get built again if it carries on.` : '';
     if (deleted) {
-      this.notice('info', `"${rec.title}" was deleted, but its worktree at ${w.path} and branch ${w.branch} stay: ${result.reason}. ${how}`);
+      this.notice('info', `"${rec.title}" was deleted, but its worktree at ${w.path} and branch ${w.branch} stay: ${result.reason}. ${how}${freed}`);
       return;
     }
-    this.emit(st, { type: 'system.note', text: `This thread's worktree at ${w.path} and its branch ${w.branch} stay: ${result.reason}. ${how}` });
+    this.emit(st, { type: 'system.note', text: `This thread's worktree at ${w.path} and its branch ${w.branch} stay: ${result.reason}. ${how}${freed}` });
     this.markDirty(st);
   },
 };

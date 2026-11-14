@@ -44,6 +44,10 @@ impl DockModel {
         self.update_controller(cx, |c| c.close(panel));
     }
 
+    pub fn rename(&mut self, from: &str, to: &str, cx: &mut Context<Self>) {
+        self.update_controller(cx, |c| c.rename(from, to));
+    }
+
     pub fn select(&mut self, panel: &str, cx: &mut Context<Self>) {
         self.update_controller(cx, |c| c.select(panel));
     }

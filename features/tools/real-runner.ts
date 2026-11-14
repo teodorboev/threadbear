@@ -5,6 +5,9 @@
 //   TB_RUNNER_HOME=<dev runner home> node features/tools/real-runner.ts <thread id>
 import { GpuiDriver } from '../support/gpui.ts';
 import { sleep } from '../support/driver.ts';
+import { ensurePerfLock } from './perf-lock.ts';
+
+await ensurePerfLock();
 
 const id = process.argv[2];
 const app = new GpuiDriver();

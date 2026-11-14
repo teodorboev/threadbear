@@ -10,6 +10,7 @@
 // agents edit runner.json and the rest, so the window shows what's set with
 // few controls (Mike, 5 Nov). A change shows at once; the runner's answer, or
 // its error under the form, has the last word.
+use crate::a11y::A11yRole as _;
 use crate::app::Threadbear;
 use crate::home_page::info_tip;
 use crate::{call, icons, style};
@@ -18,7 +19,7 @@ use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::{InputEvent, Textarea, TextareaState};
 use gpui_kit::component::menu::{DropdownMenu as _, PopupMenu, PopupMenuItem};
 use gpui_kit::component::slider::{Slider, SliderEvent, SliderState};
-use gpui_kit::component::spinner::Spinner;
+use crate::spinner::Spinner;
 use gpui_kit::component::{h_flex, v_flex, ActiveTheme as _, Disableable as _, Icon, Sizable as _, StyledExt as _};
 use gpui_kit::prelude::*;
 use gpui_kit::*;
@@ -519,7 +520,7 @@ impl SettingsWindow {
 
     fn render_general(&mut self, settings: Option<&RunnerSettings>, window: &mut Window, cx: &mut Context<Self>) -> Vec<AnyElement> {
         // This Mac's own, so they're here while the runner's away too.
-        let mut sections = vec![self.appearance_section(cx), self.quitting_section(cx), self.notifications_section(cx)];
+        let mut sections = vec![self.appearance_section(cx), self.panels_section(cx), self.quitting_section(cx), self.notifications_section(cx)];
         // The web runtime is this Mac's too (web_runtime.rs), last, so it
         // moves nothing the Swift app's General has.
         let web_runtime = section("settings-web-runtime", "Web runtime", crate::web_runtime::SETTINGS_ABOUT, "check whether it's installed and working, or why a diagram or panel isn't showing.", vec![row("Web runtime", crate::web_runtime::settings_control(cx), cx)], cx);
@@ -553,7 +554,7 @@ impl SettingsWindow {
             sections.push(section(
                 "settings-code-review",
                 "Code review",
-                "When a thread changes code and is done, Threadbear has your other provider (Codex for a Claude thread, Claude for a Codex one) try to break the change in a review thread of its own.",
+                "When a thread changes code and is done, Threadbear has your other provider (Codex for a Claude thread, Claude for a Codex one) try to break the change in a review thread of its own. Your thread waits for what it finds, fixes what holds up, and tells you in its reply. With only one provider, a fresh session of the same one reviews instead.",
                 "explain what a review found, or turn reviews on or off for you.",
                 vec![row("Review code changes before a thread is done", switch, cx)],
                 cx,
@@ -585,6 +586,10 @@ impl SettingsWindow {
                 cx,
             ));
         }
+        if let Some(on) = settings.full_sync {
+            let switch = self.switch("settings-full-sync", on, "Send tool output and diffs to your Convex deployment", cx, |this, on, cx| this.update(json!({ "fullSync": on }), cx));
+            sections.push(section("settings-full-sync", "Full sync", FULL_SYNC_ABOUT, FULL_SYNC_ASK, vec![row("Send tool output to Convex", switch, cx)], cx));
+        }
         if settings.bring_in_supported && self.app.upgrade().is_some_and(|a| a.read(cx).upstream_on) {
             let current = settings.bring_in;
             let choices: Vec<(String, bool, Value)> = BringIn::choices(current).into_iter().map(|b| (b.title(), b == current, json!({ "bringIn": b.json() }))).collect();
@@ -593,7 +598,7 @@ impl SettingsWindow {
             sections.push(section(
                 "settings-updates",
                 "Updates from Mike",
-                "When Mike has a release your copy doesn't have, Threadbear starts a thread that merges it in and runs the checks, then asks you before it lands. Never more than one at a time.",
+                "When Mike has a release your copy doesn't have, Threadbear starts a thread that merges it in and runs the checks, then asks you before it lands. Never more than one at a time. A release Mike marks important doesn't wait.",
                 "bring in Mike's latest release now, or change how often this happens.",
                 vec![row("Bring them in", menu, cx)],
                 cx,
@@ -618,7 +623,7 @@ impl SettingsWindow {
             sections.push(section(
                 "settings-experiments",
                 "Experiments",
-                "New features still being tried out. Each starts off; turn one on to try it, and off again whenever you like. Once one has proved itself it becomes a standard part of Threadbear and its switch goes.",
+                "New features still being tried out. Each starts off; turn one on to try it, and off again whenever you like. Once one has proved itself it becomes a standard part of Threadbear and its switch goes. The ⓘ beside each says what it does.",
                 "explain an experiment, or turn one on or off for you.",
                 rows,
                 cx,
@@ -658,7 +663,24 @@ impl SettingsWindow {
             "Appearance",
             "Light or dark for Threadbear only. Same as the Mac follows System Settings > Appearance.",
             "change it for you.",
-            vec![row("Appearance", div().id("settings-appearance-holder").test_support().aria_label("Light or dark for Threadbear, whatever the Mac is set to").child(menu), cx)],
+            vec![row("Appearance", div().id("settings-appearance-holder").test_support().a11y_role(Role::GenericContainer).aria_label("Light or dark for Threadbear, whatever the Mac is set to").child(menu), cx)],
+            cx,
+        )
+    }
+
+    /// Whether a press held on a panel's background picks it up, or only one
+    /// on its title or tab (`panelBackgroundDrag`, off to begin with).
+    fn panels_section(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        let on = self.app.upgrade().is_some_and(|a| a.read(cx).settings.panel_background_drag());
+        let switch = self.switch("settings-panel-background-drag", on, "Press and hold anywhere on a panel to move it, not just on its title or tab", cx, |this, on, cx| {
+            this.app.update(cx, |app, cx| app.set_panel_background_drag(on, cx)).ok();
+        });
+        section(
+            "settings-panels",
+            "Panels",
+            "To move a panel, drag its title or tab. With this on, pressing and holding anywhere on a panel picks it up too. A panel with its title hidden can always be moved that way, as it has nothing else to drag it by.",
+            "change it for you.",
+            vec![row("Move panels by their background", switch, cx)],
             cx,
         )
     }
@@ -721,7 +743,7 @@ impl SettingsWindow {
         let volume = h_flex()
             .gap(px(8.))
             .items_center()
-            .child(div().id("settings-ding-volume").test_support().aria_label("How loud the ding is").w(px(180.)).tip("How loud the ding is").child(Slider::new(&self.volume).horizontal()))
+            .child(div().id("settings-ding-volume").test_support().a11y_role(Role::GenericContainer).aria_label("How loud the ding is").w(px(180.)).tip("How loud the ding is").child(Slider::new(&self.volume).horizontal()))
             .child(self.button("settings-ding-play", "Play", "Hear the ding", cx, |this, _, cx| {
                 if let Some(app) = this.app.upgrade() {
                     let s = &app.read(cx).settings;
@@ -735,7 +757,7 @@ impl SettingsWindow {
             "change when the ding plays.",
             vec![
                 row("Play a sound when a thread finishes", switch, cx),
-                row("Sound", div().id("settings-ding-sound-holder").test_support().aria_label("Which ding plays").child(picker), cx),
+                row("Sound", div().id("settings-ding-sound-holder").test_support().a11y_role(Role::GenericContainer).aria_label("Which ding plays").child(picker), cx),
                 row("Volume", volume, cx),
             ],
             cx,
@@ -767,7 +789,7 @@ impl SettingsWindow {
                 .child(div().flex_1())
                 .child(self.button("settings-instructions-clear", "Clear", "Delete these, so agents are given no standing instructions", cx, |this, _, cx| this.resolve_outside(String::new(), cx)))
                 .child(
-                    div().id("settings-instructions-use").test_support().aria_label("Give every agent exactly the text shown here").child(
+                    div().id("settings-instructions-use").test_support().a11y_role(Role::GenericContainer).aria_label("Give every agent exactly the text shown here").child(
                         Button::new("settings-instructions-use-button")
                             .label("Use These")
                             .small()
@@ -798,7 +820,7 @@ impl SettingsWindow {
             v_flex()
                 .gap(px(6.))
                 .p(px(12.))
-                .child(div().id("settings-instructions").test_support().aria_label("What every thread's agent should always keep in mind").child(Textarea::new(&self.instructions).h(px(120.)).appearance(false)))
+                .child(div().id("settings-instructions").test_support().a11y_role(Role::GenericContainer).aria_label("What every thread's agent should always keep in mind").child(Textarea::new(&self.instructions).h(px(120.)).appearance(false)))
                 .when_some(self.instructions_status.clone(), |s, status| s.child(div().text_size(px(11.)).text_color(secondary).child(status)))
                 .into_any_element()
         };
@@ -882,7 +904,7 @@ impl SettingsWindow {
         div()
             .id(SharedString::from(format!("{id}-holder")))
             .test_support()
-            .aria_label(tip)
+            .a11y_role(Role::GenericContainer).aria_label(tip)
             .flex_none()
             .child(Button::new(id).label(label).small().secondary().tooltip(tip).on_click(cx.listener(move |this, _, window, cx| action(this, window, cx))))
             .into_any_element()
@@ -892,7 +914,7 @@ impl SettingsWindow {
         div()
             .id(SharedString::from(format!("{id}-holder")))
             .test_support()
-            .aria_label(tip.clone())
+            .a11y_role(Role::GenericContainer).aria_label(tip.clone())
             .flex_none()
             .child(Button::new(id).label(label).small().secondary().tooltip(tip).on_click(cx.listener(move |this, _, window, cx| action(this, window, cx))))
             .into_any_element()
@@ -925,7 +947,7 @@ impl SettingsWindow {
         div()
             .id(SharedString::from(format!("{id}-holder")))
             .test_support()
-            .aria_label(tip)
+            .a11y_role(Role::GenericContainer).aria_label(tip)
             .tip(shown.clone())
             .flex_none()
             .child(crate::mac_switch::MacSwitch::new(SharedString::from(id), on).on_change(move |on, _, cx| {
@@ -946,7 +968,7 @@ impl SettingsWindow {
         div()
             .id(SharedString::from(format!("{id}-holder")))
             .test_support()
-            .aria_label(tip)
+            .a11y_role(Role::GenericContainer).aria_label(tip)
             .flex_none()
             .child(button.dropdown_menu(move |menu: PopupMenu, _, _| {
                 let mut menu = menu;
@@ -978,6 +1000,12 @@ fn waiting_text(app: &WeakEntity<Threadbear>, cx: &App) -> String {
 
 /// `SettingsSection`: its title, with what it is and what to ask your agent
 /// behind the ⓘ, over its rows in a rounded group.
+// Full sync's ⓘ, kept here in one place so its wording is easy to change.
+// The benefit first, then what goes up and what doesn't (docs/full-convex.md).
+// The runner reads sync.full when it starts, hence the last sentence.
+const FULL_SYNC_ABOUT: &str = "Lets your phone, the website and your other machines show a thread's tool output and diffs, even when the machine that ran it is off.\n\nTool output, inputs and diffs go to your own Convex deployment, with secrets scrubbed out first, and are kept for 30 days. Screenshots, and tools reading things like .env files and keys, stay on this Mac. Scrubbing isn't a guarantee. A change takes effect when the runner next starts.";
+const FULL_SYNC_ASK: &str = "explain what goes up, or turn it on or off for you.";
+
 fn section(id: &'static str, title: &str, about: &str, ask: &str, rows: Vec<AnyElement>, cx: &App) -> AnyElement {
     section_with_body(id, title, about, ask, rows_with_dividers(rows, cx), cx)
 }
@@ -1115,6 +1143,7 @@ impl SettingsWindow {
             "appearance": style::appearance().name(),
             "defaultFolder": settings.as_ref().map(|s| s.default_cwd.clone()),
             "keepAwake": settings.as_ref().and_then(|s| s.keep_awake),
+            "fullSync": settings.as_ref().and_then(|s| s.full_sync),
             "labReview": settings.as_ref().map(|s| s.lab_review),
             "privateFolders": settings.as_ref().map(|s| s.private_folders.clone()),
             "smallJobsPool": settings.as_ref().and_then(|s| s.pool.clone()),

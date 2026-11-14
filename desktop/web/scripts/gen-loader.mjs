@@ -11,7 +11,7 @@
 // exactly the ones the `cef` crate calls them with.
 //
 //   node desktop/web/scripts/gen-loader.mjs \
-//     <cargo registry>/cef-dll-sys-156.3.0+156.0.15/src/bindings/aarch64_apple_darwin.rs \
+//     <cargo registry>/cef-dll-sys-156.4.0+156.0.26/src/bindings/aarch64_apple_darwin.rs \
 //     > desktop/web/src/mac/loader.rs
 //
 // Run it again when the cef pin in desktop/web/Cargo.toml moves (the two Mac

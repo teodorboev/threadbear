@@ -9,6 +9,35 @@ use super::{InputBaseState, TextareaMode};
 /// this type — those methods live on [`super::EditorState`].
 pub type TextareaState = InputBaseState<TextareaMode>;
 
+impl TextareaState {
+    /// This app's: replace the marks drawn under the text (a misspelled
+    /// word's wavy line). Ranges are UTF-8 byte offsets into the text as it
+    /// is now; one past the end or reversed is dropped, and each is clipped
+    /// to whole characters.
+    pub fn set_text_marks(&mut self, marks: Vec<super::TextDecoration>, cx: &mut gpui::Context<Self>) {
+        let len = self.text.len();
+        let mut marks: Vec<super::TextDecoration> = marks
+            .into_iter()
+            .filter(|m| m.range.start < m.range.end && m.range.end <= len)
+            .map(|mut m| {
+                use super::RopeExt as _;
+                m.range = self.text.clip_offset(m.range.start, sum_tree::Bias::Left)..self.text.clip_offset(m.range.end, sum_tree::Bias::Right);
+                m
+            })
+            .collect();
+        marks.sort_by_key(|m| m.range.start);
+        if marks != self.extras.marks {
+            self.extras.marks = marks;
+            cx.notify();
+        }
+    }
+
+    /// This app's: the marks [`Self::set_text_marks`] last set.
+    pub fn text_marks(&self) -> &[super::TextDecoration] {
+        &self.extras.marks
+    }
+}
+
 /// An unstyled ordinary multi-line text input.
 #[derive(IntoElement)]
 pub struct Textarea {

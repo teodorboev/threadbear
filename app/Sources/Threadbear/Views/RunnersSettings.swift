@@ -4,7 +4,7 @@ import ThreadbearCore
 /// Settings > Runners: the machines Threadbear runs threads on, and which
 /// one new threads start on. Deliberately thin: a runner is set up on its
 /// own machine (its runner.json, INSTALL.md section 6 for a Linux server),
-/// so naming, adding or pairing one is a job for an agent, which the ⓘ
+/// so naming or adding one is a job for an agent, which the ⓘ
 /// says. The controls are the default, which is this Mac's own choice, and
 /// the runners' order, which is everyone's: it's the one the phone sets,
 /// and its new threads start on the first one online in it (backend API 58).
@@ -33,7 +33,7 @@ struct RunnersSettings: View {
                             about: canOrder
                                 ? "The machines your threads can run on, in your order. New threads from your phone start on the first one that's online. Drag a runner to change the order. Each runner is set up on its own machine."
                                 : "The machines your threads can run on. Each runner is set up on its own machine.",
-                            ask: "add one, rename one, pair it with this Mac or change how it runs. It knows how, and a Linux server's steps are in INSTALL.md.") {
+                            ask: "add one, rename one or change how it runs. It knows how, and a Linux server's steps are in INSTALL.md.") {
                 if canOrder {
                     ReorderList(ids: app.orderedRunnerIds, style: .formRows, preview: app.runnerDragPreview, commit: { app.setRunnerOrder($0) }) { id in
                         row(for: id, movable: true)
@@ -48,14 +48,6 @@ struct RunnersSettings: View {
                         RunnerRow(icon: RunnerIcon.symbol(runner.icon), name: runner.name, status: status(runner), isDefault: app.defaultRunnerId == runner.id)
                     }
                 }
-            }
-
-            SettingsSection("Other machines' threads",
-                            about: "Threads on other machines open through this Mac's runner and Convex, with no network link between the machines. Tool output stays on the machine that ran it for now. Connecting directly reaches the other machine over Tailscale instead, and needs it paired with this Mac.",
-                            ask: "explain how other machines' threads reach this Mac, or pair one for a direct connection.") {
-                @Bindable var app = app
-                Toggle("Connect to other machines directly", isOn: $app.directRemoteLink)
-                    .tip("Open other machines' threads over Tailscale instead of through Convex")
             }
         }
         .formStyle(.grouped)
@@ -82,8 +74,7 @@ struct RunnersSettings: View {
     private var selfName: String { app.runners.first(where: \.isSelf)?.name ?? "This Mac" }
 
     private func status(_ runner: RemoteRunner) -> String {
-        if app.directRemoteLink, runner.tokenFile == nil { return "Not paired with this Mac" }
-        return runner.online ? "Online" : "Offline"
+        runner.online ? "Online" : "Offline"
     }
 }
 

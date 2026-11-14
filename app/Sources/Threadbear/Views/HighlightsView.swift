@@ -667,16 +667,6 @@ struct PreviewBody: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .tip("Getting it from \(preview.away ?? "that Mac")")
             }
-        case .file(let path) where preview.cut:
-            // Over the size cap: what came, with a word that it's cut.
-            VStack(spacing: 0) {
-                Text("Only the start of this file came from \(preview.away ?? "that Mac").")
-                    .font(.system(size: TypeScale.small))
-                    .foregroundStyle(.secondary)
-                    .padding(.vertical, zoomed(6))
-                    .frame(maxWidth: .infinity)
-                fileBody(path)
-            }
         case .file(let path):
             fileBody(path)
         case .folder(let path):
@@ -776,8 +766,7 @@ struct PreviewButtons: View {
             app.previewBack(in: thread.id)
         }
         if preview.folderPath != nil { FolderModeButton() }
-        // A copy of another Mac's file: not edited here (only the copy
-        // would change), and its folder is just the cache.
+        // Another Mac's file or folder isn't edited or revealed here.
         if let file = preview.fileURL, preview.away == nil {
             if PreviewRules.isMarkdown(file.path), TextFileView.shows(file.path), TextFileView.canEdit(file.path) {
                 MarkdownViewMenu(showing: preview.editing ? .markdown : .preview) { view in
@@ -793,8 +782,7 @@ struct PreviewButtons: View {
         }
         if let url = preview.externalURL {
             PaneHeaderButton(symbol: "arrow.up.right", help: preview.folderPath != nil ? "Open in Finder" : preview.fileURL == nil ? "Open in browser" : "Open in its app") {
-                // Another Mac's copy is never opened as a program.
-                app.openExternally(url, from: preview.away == nil ? .thisMac : app.copyOrigin(of: thread))
+                app.openExternally(url)
             }
         }
     }

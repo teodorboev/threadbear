@@ -19,6 +19,9 @@ import { GpuiDriver } from '../support/gpui.ts';
 import { SwiftDriver } from '../support/swift.ts';
 import { sleep, type Driver } from '../support/driver.ts';
 import { windowAt, windowFrame, work } from './real-screen.ts';
+import { ensurePerfLock } from './perf-lock.ts';
+
+await ensurePerfLock();
 
 const [outArg, label = 'shot', ...only] = process.argv.slice(2);
 if (!outArg) throw new Error('usage: heading-hover-shot.ts <out folder> <label> [swift|gpui]');

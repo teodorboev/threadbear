@@ -16,7 +16,9 @@ pub(crate) fn enabled() -> bool {
 /// Posts one for `thread` (`Notifier.post`). gpui asks macOS for permission
 /// the first time, and posts nothing outside an app bundle (a `cargo run`).
 pub(crate) fn post(thread: &ThreadSummary, cx: &App) {
-    if !enabled() {
+    // A handover's incoming app leaves them to the one that's showing, so
+    // nothing comes twice while both are running.
+    if !enabled() || crate::handover::waiting() {
         return;
     }
     let (title, body) = inbox::notification_words(thread);

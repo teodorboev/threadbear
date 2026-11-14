@@ -12,6 +12,7 @@ import { RunnerClient } from '../../src/client.ts';
 import { readToken } from '../../src/config.ts';
 import { nullLogger } from '../../src/log.ts';
 import { PatchTrust } from '../../src/patch-trust.ts';
+import { Restarter } from '../../src/restart.ts';
 import { PATCH, commit, harness, makeRepo, sh, until, write } from '../helpers/worktrees-harness.ts';
 
 // --------------------------------------------------------------- patches
@@ -313,4 +314,94 @@ test('threads.create takes worktree: false over RPC, and refuses a worktree that
     c.close();
     await server.close();
   }
+});
+
+// A setup that waits for `go` in a folder of the test's, so the test can act
+// while it runs. From the implicit state machines scan (13 Nov 2026): the
+// first turn's start went on after the worktree was made and set up without
+// asking whether the thread was still there, or the turn still the same one.
+function gatedSetup() {
+  const gate = fs.realpathSync(tmpDir('tb-wt-gate-'));
+  const patch = PATCH(`{ setup: "touch ${gate}/started; while [ ! -f ${gate}/go ]; do sleep 0.05; done; touch .setup-ran" }`);
+  return { gate, patch, started: () => fs.existsSync(path.join(gate, 'started')), go: () => fs.writeFileSync(path.join(gate, 'go'), '') };
+}
+
+test('a thread deleted while its worktree is being set up starts no CLI, and its worktree goes once the setup ends', async () => {
+  const g = gatedSetup();
+  const { root, main } = makeRepo(g.patch);
+  const h = harness();
+  const { thread } = h.runner.create({ text: 'Go', accountId: 'claude-3', cwd: main });
+  const wt = path.join(root, 'proj-threads', thread.id.slice(0, 8));
+  await until(g.started, 'the setup to start');
+  h.runner.delete(thread.id);
+  await new Promise((r) => setTimeout(r, 100));
+  assert.ok(fs.existsSync(wt), 'not removed from under the setup');
+  g.go();
+  await until(() => !fs.existsSync(wt), 'the worktree to go');
+  await new Promise((r) => setTimeout(r, 100));
+  assert.equal(h.adapter.sessions.length, 0, 'no CLI for a deleted thread');
+});
+
+test('Stop during the worktree setup, then a new message: the CLI waits for the setup and starts in the worktree', async () => {
+  const g = gatedSetup();
+  const { root, main } = makeRepo(g.patch);
+  const h = harness();
+  const { thread } = h.runner.create({ text: 'Go', accountId: 'claude-3', cwd: main });
+  const wt = path.join(root, 'proj-threads', thread.id.slice(0, 8));
+  await until(g.started, 'the setup to start');
+  h.runner.interrupt(thread.id, { byMike: true });
+  h.runner.send(thread.id, 'Go again');
+  await new Promise((r) => setTimeout(r, 200));
+  assert.equal(h.adapter.sessions.length, 0, 'not before the setup ends');
+  g.go();
+  await until(() => h.adapter.sessions.length === 1, 'the CLI to start');
+  assert.equal(h.adapter.last.opts.cwd, wt);
+  assert.ok(fs.existsSync(path.join(wt, '.setup-ran')));
+  await new Promise((r) => setTimeout(r, 100));
+  assert.equal(h.adapter.sessions.length, 1, 'one CLI');
+});
+
+// From Codex's review of the fix above: a handover lets a stopped thread go
+// at once, and letting go marks it deleted too, so the setup's end took it
+// for a delete and removed a worktree the next runner now had. A thread
+// being set up is kept until the setup ends, and a let-go one's worktree
+// is never removed by it.
+test('a handover while a stopped thread is being set up keeps it until the setup ends, and its worktree stays', async () => {
+  const g = gatedSetup();
+  const { root, main } = makeRepo(g.patch);
+  const h = harness();
+  const { thread } = h.runner.create({ text: 'Go', accountId: 'claude-3', cwd: main });
+  const wt = path.join(root, 'proj-threads', thread.id.slice(0, 8));
+  await until(g.started, 'the setup to start');
+  h.runner.interrupt(thread.id, { byMike: true });
+  const handedOver: string[] = [];
+  const drain = h.runner.beginDrain([], { onHandedOver: (id) => handedOver.push(id) });
+  await new Promise((r) => setTimeout(r, 100));
+  assert.ok(h.runner.threads.has(thread.id), 'kept while its setup runs');
+  g.go();
+  await drain;
+  await until(() => handedOver.includes(thread.id), 'handed over once the setup ends');
+  await new Promise((r) => setTimeout(r, 200));
+  assert.ok(fs.existsSync(path.join(wt, '.setup-ran')), 'the worktree stays, set up, for the next runner');
+  assert.equal(h.adapter.sessions.length, 0);
+});
+
+// From Codex's second review: a restart with nothing else busy doesn't
+// hand over, it stops the runner, and nothing waited for a stopped thread's
+// setup: the next runner started its CLI in the worktree before the setup
+// was done. The restart now waits for it.
+test('an idle restart while a stopped thread is being set up waits for the setup', async () => {
+  const g = gatedSetup();
+  const { main } = makeRepo(g.patch);
+  const h = harness();
+  const state = { restarts: 0 };
+  const r = new Restarter({ runner: h.runner, home: h.home, clock: h.clock, log: nullLogger, version: '0.1.0+old', release: 'old', restart: () => state.restarts++ });
+  const { thread } = h.runner.create({ text: 'Go', accountId: 'claude-3', cwd: main });
+  await until(g.started, 'the setup to start');
+  h.runner.interrupt(thread.id, { byMike: true });
+  assert.deepEqual(r.request({ when: 'idle' }).waitingFor, [thread.id]);
+  await new Promise((res) => setTimeout(res, 100));
+  assert.equal(state.restarts, 0, 'not while the setup runs');
+  g.go();
+  await until(() => state.restarts === 1, 'the restart once the setup ends');
 });

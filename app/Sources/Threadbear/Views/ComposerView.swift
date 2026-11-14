@@ -111,7 +111,7 @@ struct ComposerView: View {
                 placeholder: placeholder(picks, followUps: followUps, needsYou: needsYou),
                 onSend: { send() },
                 onReturnWhenEmpty: { command in returnWhenEmpty(draft.wrappedValue, command: command) },
-                pictures: ComposerTextView.Pictures(allowed: { !moving && picturesAllowed() }, importOne: { await importPicture($0) }),
+                pictures: ComposerTextView.Pictures(allowed: { !moving }, importOne: { await importPicture($0) }),
                 handle: handle,
                 onEscape: { cancelEdit() },
                 onPaletteKey: { paletteKey($0, text: draft.wrappedValue.text) },
@@ -408,16 +408,6 @@ struct ComposerView: View {
         return true
     }
 
-    /// Whether pictures can go in this box, saying why not when they can't
-    /// (only over the direct link to another runner: `picturesRefusal`).
-    private func picturesAllowed() -> Bool {
-        if let why = app.picturesRefusal(for: thread) {
-            app.errorMessage = why
-            return false
-        }
-        return true
-    }
-
     /// Paste, drop and the "+" button put a chip in the words, and each
     /// picture goes through the runner's `media.import` (here) meanwhile.
     private func importPicture(_ url: URL) async -> ImageRef? {
@@ -429,7 +419,7 @@ struct ComposerView: View {
 
     /// With no text view to put them in, pictures go at the end.
     private func attach(_ urls: [URL], to draft: Binding<Draft>) {
-        guard !urls.isEmpty, picturesAllowed() else { return }
+        guard !urls.isEmpty else { return }
         importing += urls.count
         Task {
             let refs = await app.importImages(urls)

@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tmpDir } from '../helpers/fakes.ts';
-import { filesThatRunIt, holdingWorkflows, landHold, lastVerdict, pushPaths, type Gh } from '../../src/land-gate.ts';
+import { FRESH_MS, filesThatRunIt, holdingWorkflows, landHold, lastVerdict, pushPaths, STALE_MS, type Gh } from '../../src/land-gate.ts';
 import { land } from '../../src/worktrees.ts';
 import { capture, commit, makeBranch, makeRepo, sh } from '../helpers/worktrees-harness.ts';
 
@@ -137,6 +137,33 @@ test('a landing touching what a red workflow checks is held, with what failed an
   assert.equal(await landHold(root, ['desktop/a'], () => {}, fakeGh([run(8, 'success', 'a')])), undefined);
   assert.equal(await landHold(root, ['desktop/a'], (l) => notes.push(l), fakeGh('offline')), undefined);
   assert.match(notes.join('\n'), /Couldn't ask GitHub whether Desktop app \(desktop\.yml\) is green on main \(error connecting to api\.github\.com\), so this lands without that check/);
+});
+
+test("GitHub's answer is shared for a minute, and an old red one still holds when GitHub won't answer", async () => {
+  const root = workflows({ 'desktop.yml': WORKFLOW });
+  let now = 1_000_000;
+  const cache = { dir: path.join(tmpDir(), 'gate'), now: () => now };
+  const red = fakeGh([run(7, 'failure', 'a')], { 7: [{ name: 'Linux', conclusion: 'failure' }] });
+  assert.ok(await landHold(root, ['desktop/a'], () => {}, red, cache));
+  // Within the minute another landing doesn't ask again.
+  now += FRESH_MS - 1;
+  const quiet = fakeGh([run(8, 'success', 'b')]);
+  assert.ok(await landHold(root, ['desktop/a'], () => {}, quiet, cache));
+  assert.deepEqual(quiet.calls, []);
+  // After it, GitHub out of reach (a 403 for the rate limit): still held, saying why.
+  now += 2;
+  const notes: string[] = [];
+  assert.ok(await landHold(root, ['desktop/a'], (l) => notes.push(l), fakeGh('offline'), cache));
+  assert.match(notes.join('\n'), /GitHub didn't answer \(error connecting to api\.github\.com\), so this goes by what it said 1 min ago/);
+  // A green answer replaces it.
+  assert.equal(await landHold(root, ['desktop/a'], () => {}, fakeGh([run(9, 'success', 'c')]), cache), undefined);
+  // Older than half an hour, it's no answer at all, and the landing goes ahead as before.
+  now += FRESH_MS;
+  assert.ok(await landHold(root, ['desktop/a'], () => {}, red, cache));
+  now += STALE_MS;
+  const late: string[] = [];
+  assert.equal(await landHold(root, ['desktop/a'], (l) => late.push(l), fakeGh('offline'), cache), undefined);
+  assert.match(late.join('\n'), /so this lands without that check/);
 });
 
 test('tb land asks after the rebase, about what the branch changes, and a hold leaves main as it was before any check', async () => {

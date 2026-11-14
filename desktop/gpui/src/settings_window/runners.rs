@@ -5,9 +5,10 @@
 // machine, which the ⓘs say. The words and the order are
 // threadbear_core::runners; the order is saved as the Runners panel saves it
 // (`set_runner_order`), here at once.
+use crate::a11y::A11yRole as _;
 use super::{plain_note, row_with, section, SettingsWindow};
 use crate::app::Threadbear;
-use crate::highlights::tipped;
+use crate::highlights::tipped_as;
 use crate::{icons, style};
 use gpui_kit::base::TestSupportExt as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
@@ -91,9 +92,7 @@ impl SettingsWindow {
         let order = t.runners_panel.order.clone();
         let default = t.new_thread.prefs.remembered.default_runner.clone();
         let orderable = rules::can_order(order.is_some(), &others, &t.remote.all_runners);
-        // The direct link isn't in this app: other machines' threads come
-        // through Convex, so nothing waits on a token being copied in.
-        let rows = rules::settings_rows(this_mac.as_ref(), &others, order.as_deref(), default.as_deref(), orderable, false);
+        let rows = rules::settings_rows(this_mac.as_ref(), &others, order.as_deref(), default.as_deref(), orderable);
         let mut choices = vec![(None, "This Mac".to_owned(), t.self_runner_symbol())];
         choices.extend(others.iter().map(|r| (Some(r.id.clone()), r.name.clone(), icons::runner_symbol(r.icon.as_deref()))));
         Some(Shown { rows, orderable, default, choices })
@@ -119,16 +118,6 @@ impl SettingsWindow {
             sections.push(section("settings-runners", "Runners", rules::runners_about(false), rules::RUNNERS_ASK, rows, cx));
         }
 
-        // How other machines' threads get here.
-        let tip = "This app opens other machines' threads through Convex for now. Connecting directly is in the Swift app.";
-        let switch = div()
-            .id("settings-direct-link-holder")
-            .test_support()
-            .aria_label(tip)
-            .tip(tip)
-            .flex_none()
-            .child(crate::mac_switch::MacSwitch::new("settings-direct-link", false).disabled(true));
-        sections.push(section("settings-other-machines", "Other machines' threads", rules::OTHERS_ABOUT, rules::OTHERS_ASK, vec![row("Connect to other machines directly", switch, cx)], cx));
         sections
     }
 
@@ -155,7 +144,7 @@ impl SettingsWindow {
             }
             menu
         });
-        div().id("settings-default-runner-holder").test_support().aria_label(rules::DEFAULT_TIP).flex_none().child(button).into_any_element()
+        div().id("settings-default-runner-holder").test_support().a11y_role(Role::GenericContainer).aria_label(rules::DEFAULT_TIP).flex_none().child(button).into_any_element()
     }
 
     /// `RunnerRow`: a handle to drag it by when the order can change, its
@@ -165,12 +154,12 @@ impl SettingsWindow {
         let symbol = icons::runner_symbol(r.icon.as_deref());
         let mut line = h_flex().w_full().gap(px(8.)).items_center();
         if movable {
-            line = line.child(tipped(div().id(SharedString::from(format!("settings-runner-handle-{}", r.id))).flex_none().cursor_grab(), "Drag to change the order").child(handle_icon(tertiary)));
+            line = line.child(tipped_as(div().id(SharedString::from(format!("settings-runner-handle-{}", r.id))).flex_none().cursor_grab(), "Drag to change the order", gpui_kit::Role::GenericContainer).child(handle_icon(tertiary)));
         }
         line = line.child(runner_icon(symbol, secondary)).child(div().flex_none().child(r.name.clone()));
         if r.is_default {
             // SF's star.fill at 9 points, on the name's line.
-            line = line.child(tipped(div().id(SharedString::from(format!("settings-runner-star-{}", r.id))).flex_none(), "New threads start here").child(icons::symbol("star.fill").with_size(px(11.)).text_color(tertiary)));
+            line = line.child(tipped_as(div().id(SharedString::from(format!("settings-runner-star-{}", r.id))).flex_none(), "New threads start here", gpui_kit::Role::Image).child(icons::symbol("star.fill").with_size(px(11.)).text_color(tertiary)));
         }
         line = line.child(div().flex_1().min_w(px(8.))).child(div().flex_none().text_color(secondary).child(r.status.clone()));
         if !movable {
@@ -255,7 +244,7 @@ pub(crate) fn automation(app: &Entity<Threadbear>, cmd: &Value, cx: &mut App) ->
     handle
         .update(cx, |_, window, cx| -> Result<(), String> {
             window.render_frame(cx);
-            let center = |id: &str, window: &Window| window.try_find(SharedString::from(format!("settings-runner-{id}"))).map(|e| e.bounds().center()).ok_or_else(|| format!("no row for {id} on screen"));
+            let center = |id: &str, window: &Window| window.try_find(SharedString::from(format!("settings-runner-{id}"))).and_then(|e| e.click_point()).ok_or_else(|| format!("no row for {id} on screen"));
             let (p, q) = (center(&a, window)?, center(&b, window)?);
             window.pointer_move(p, None, cx);
             window.pointer_down(p, MouseButton::Left, cx);

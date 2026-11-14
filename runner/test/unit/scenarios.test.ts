@@ -14,7 +14,7 @@ import { threeWays, type View } from '../helpers/routes.ts';
 import { SCENARIOS } from '../helpers/scenario-list.ts';
 
 type Route = 'relay' | 'phone';
-type Field = 'needs' | 'asks' | 'next' | 'looseEnds' | 'review' | 'plans' | 'messages' | 'pictures';
+type Field = 'needs' | 'asks' | 'next' | 'looseEnds' | 'review' | 'plans' | 'messages' | 'notes' | 'pictures' | 'failed' | 'origins';
 
 // Differences that are meant, each with why. A test below fails once one
 // of these stops being a difference, so the list can't outlive its reason.
@@ -31,11 +31,13 @@ function pick(v: View, field: Field): unknown {
       return v.messages.map(({ role, text }) => ({ role, text }));
     case 'pictures':
       return v.messages.map((m) => m.pictures);
+    case 'origins':
+      return v.messages.map((m) => m.origin ?? null);
     default:
       return field === 'needs' || field === 'review' ? (v[field] ?? null) : v[field];
   }
 }
-const FIELDS: Field[] = ['needs', 'asks', 'next', 'looseEnds', 'review', 'plans', 'messages', 'pictures'];
+const FIELDS: Field[] = ['needs', 'asks', 'next', 'looseEnds', 'review', 'plans', 'messages', 'notes', 'pictures', 'failed', 'origins'];
 const known = (route: Route, field: Field) => KNOWN.find((k) => k.route === route && k.field === field);
 
 for (const s of SCENARIOS) {
@@ -58,4 +60,29 @@ test('each known difference is still a difference, and says why', async () => {
     const differs = all.some(({ views }) => JSON.stringify(pick(views[k.route], k.field)) !== JSON.stringify(pick(views.here, k.field)));
     assert.ok(differs, `${k.field} on ${k.route} is the same as here now: take it out of KNOWN`);
   }
+});
+
+// The same real backend as the route scenarios: a second pane already has
+// every row except an older reply. Reopening it must restore that reply
+// without replaying all the synthetic markers it already showed.
+test('another Mac reopens a thread with only the reply its pane missed', async () => {
+  const { relay, relayEvents, threadId, refused } = await threeWays((p) => {
+    p.say('The earlier reply.');
+    p.endTurn({ needs: 'nothing' });
+    p.send('Carry on.');
+    p.say('The latest reply.');
+    p.endTurn({ needs: 'nothing' });
+  });
+  assert.deepEqual(refused, []);
+  const missing = relayEvents.find((e) => e.type === 'assistant.text' && e.text === 'The earlier reply.');
+  assert.ok(missing);
+  const seen: [number, number][] = [];
+  for (const seq of relayEvents.map((e) => Number(e.seq)).filter((seq) => seq !== missing.seq).sort((a, b) => a - b)) {
+    const last = seen.at(-1);
+    if (last && seq <= last[1] + 1) last[1] = Math.max(seq, last[1]);
+    else seen.push([seq, seq]);
+  }
+  const reply = await relay.call(threadId, 'threads.subscribe', { afterSeq: Math.max(...relayEvents.map((e) => Number(e.seq))), relaySeen: seen }) as { events: Record<string, unknown>[] };
+  assert.deepEqual(reply.events.map((e) => e.seq), [missing.seq]);
+  assert.equal(reply.events[0]?.text, 'The earlier reply.');
 });

@@ -33,7 +33,7 @@ use crate::{
     text::selection::word_range_at,
     text::state::LineSpan,
     text::text_view::{LinkClickHandlerFn, handle_link_click},
-    text_selection::text_rows_extent,
+    text_selection::{drawn_position, selection_start_position, text_rows_extent, wrapped_row_starts},
 };
 
 /// The style applied to one range of inline text.
@@ -1002,7 +1002,7 @@ impl Inline {
         let line_height = text_layout.line_height();
         Some((
             crate::touch_selection::caret_line_box(
-                text_layout.position_for_index(start)?,
+                selection_start_position(text_layout, start)?,
                 line_height,
             ),
             crate::touch_selection::caret_line_box(
@@ -1025,7 +1025,7 @@ impl Inline {
         if end < start {
             std::mem::swap(&mut start, &mut end);
         }
-        let Some(start_position) = text_layout.position_for_index(start) else {
+        let Some(start_position) = selection_start_position(text_layout, start) else {
             return;
         };
         let Some(end_position) = text_layout.position_for_index(end) else {
@@ -1626,8 +1626,12 @@ fn range_carets(
     range: &Range<usize>,
     row: Option<Bounds<Pixels>>,
 ) -> Option<(Bounds<Pixels>, Bounds<Pixels>)> {
-    let caret = |index| {
-        let position = text_layout.position_for_index(index)?;
+    let caret = |index, start: bool| {
+        let position = if start {
+            selection_start_position(text_layout, index)?
+        } else {
+            text_layout.position_for_index(index)?
+        };
         Some(match row {
             Some(row) => crate::touch_selection::caret_line_box(
                 point(position.x, row.top()),
@@ -1636,7 +1640,7 @@ fn range_carets(
             None => crate::touch_selection::caret_line_box(position, text_layout.line_height()),
         })
     };
-    Some((caret(range.start)?, caret(range.end)?))
+    Some((caret(range.start, true)?, caret(range.end, false)?))
 }
 
 trait SelectionGeometry {
@@ -1644,6 +1648,9 @@ trait SelectionGeometry {
     fn line_height(&self) -> Pixels;
     fn rows_extent(&self) -> (Pixels, Pixels);
     fn position_for_index(&self, index: usize) -> Option<Point<Pixels>>;
+    /// Where soft-wrapped rows start, and where their first characters are
+    /// drawn (`wrapped_row_starts`).
+    fn row_starts(&self) -> Vec<(usize, Point<Pixels>)>;
 }
 
 impl SelectionGeometry for TextLayout {
@@ -1659,6 +1666,9 @@ impl SelectionGeometry for TextLayout {
     fn position_for_index(&self, index: usize) -> Option<Point<Pixels>> {
         TextLayout::position_for_index(self, index)
     }
+    fn row_starts(&self) -> Vec<(usize, Point<Pixels>)> {
+        wrapped_row_starts(&self.line_layouts(), self.bounds().origin, TextLayout::line_height(self))
+    }
 }
 
 impl SelectionGeometry for PaintedSelectionLayout {
@@ -1673,6 +1683,9 @@ impl SelectionGeometry for PaintedSelectionLayout {
     }
     fn position_for_index(&self, index: usize) -> Option<Point<Pixels>> {
         self.position_for_index(index)
+    }
+    fn row_starts(&self) -> Vec<(usize, Point<Pixels>)> {
+        wrapped_row_starts(&self.lines, self.bounds.origin, self.line_height)
     }
 }
 
@@ -1702,11 +1715,14 @@ fn project_selection(
         return Some((0..text.len()).into());
     }
 
+    let row_starts = text_layout.row_starts();
     let mut selection: Option<Selection> = None;
     for (offset, c) in text.char_indices() {
         let Some(pos) = text_layout.position_for_index(offset) else {
             continue;
         };
+        // A wrapped row's first character is drawn at that row's start.
+        let pos = drawn_position(pos, offset, &row_starts);
         let next_offset = offset + c.len_utf8();
         let mut char_width = line_height.half();
         if let Some(next_pos) = text_layout.position_for_index(next_offset)
@@ -2116,6 +2132,48 @@ mod range_highlight_tests {
                     assert!(rows_bottom >= bottom, "bottom of {context}");
                 }
             }
+        });
+    }
+
+    /// A drag along a wrapped row from its end out past its start takes in
+    /// the row's first character, which GPUI places at the end of the row
+    /// above (Mike, 13 Nov: a link starting a wrapped row lost its "h"). The
+    /// selection's painted start and caret are at that row's start too.
+    #[test]
+    fn a_drag_into_the_margin_selects_a_wrapped_rows_first_character() {
+        let mut app = TestApp::with_text_system(Arc::new(WideMonoTextSystem));
+        in_prepaint(&mut app, |window, cx| {
+            let style = TextStyle {
+                font_family: BODY.into(),
+                font_size: px(16.).into(),
+                ..Default::default()
+            };
+            // Three rows of "aaaa ", "bbbb ", "cccc".
+            let text = "aaaa bbbb cccc";
+            let styled = StyledText::new(SharedString::from(text)).with_runs(text_runs(text.len(), &style, &[]));
+            let layout = styled.layout().clone();
+            let mut element = styled.into_any_element();
+            element.layout_as_root(size(AvailableSpace::Definite(px(45.)), AvailableSpace::MinContent), window, cx);
+            // A fractional origin, as at a 125% display scale, where adding a
+            // line height to a row's y needn't give GPUI's own y for the next.
+            let origin = point(px(7.), px(11.2));
+            element.prepaint_at(origin, window, cx);
+            let line_height = layout.line_height();
+            let bbbb = text.find("bbbb").unwrap();
+            let row = origin.y + line_height + line_height.half();
+            let from = point(origin.x + px(200.), row);
+            for margin in [origin.x - px(30.), origin.x] {
+                let selection = project_selection(text, &layout, None, from, point(margin, row)).expect("a selection");
+                assert_eq!(selection.start.min(selection.end), bbbb, "dragged to x {margin:?}");
+                assert_eq!(&text[bbbb..selection.start.max(selection.end)], "bbbb ");
+            }
+            // Painted and carets from the row's start, not the row above's
+            // end, on the row exactly as GPUI places the rest of it.
+            let start = selection_start_position(&layout, bbbb).unwrap();
+            assert_eq!(start.x, origin.x);
+            assert_eq!(Some(start.y), layout.position_for_index(bbbb + 2).map(|p| p.y));
+            // An end there is still the end of the row above.
+            assert_eq!(layout.position_for_index(bbbb).map(|p| p.y), Some(layout.bounds().top()));
         });
     }
 

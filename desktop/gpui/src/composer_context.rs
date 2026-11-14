@@ -10,7 +10,7 @@
 use crate::style;
 use gpui_kit::component::popover::PopoverState;
 use gpui_kit::component::progress::Progress;
-use gpui_kit::component::spinner::Spinner;
+use crate::spinner::Spinner;
 use gpui_kit::component::{h_flex, v_flex, Sizable as _};
 use gpui_kit::prelude::*;
 use gpui_kit::*;
@@ -82,6 +82,7 @@ pub(crate) fn load(facts: &ContextFacts, cx: &mut App) {
 pub(crate) struct ContextFacts {
     pub(crate) thread: String,
     pub(crate) provider: String,
+    pub(crate) provider_name: String,
     /// The thread's on this Mac's runner, which can ask its CLI.
     pub(crate) asks: bool,
     pub(crate) meter: ContextMeter,
@@ -115,7 +116,7 @@ pub(crate) fn popover(facts: &Rc<ContextFacts>, cx: &mut Context<PopoverState>) 
             .child(h_flex().justify_between().text_size(px(12.)).line_height(px(style::natural_line(12.))).child(facts.meter.amount()).child(div().text_color(secondary).child(format!("{}%", facts.meter.percent())))),
     };
     column
-        .child(div().text_size(px(11.)).line_height(px(style::natural_line(11.))).text_color(secondary).child(format!("{} compacts it by itself when it's nearly full.", if facts.provider == "codex" { "Codex" } else { "Claude" })))
+        .child(div().text_size(px(11.)).line_height(px(style::natural_line(11.))).text_color(secondary).child(format!("{} compacts it by itself when it's nearly full.", facts.provider_name)))
         .child(div().my(px(2.)).h(gpui_kit::px(1.)).bg(style::hairline(cx)))
         .child(row("Model", facts.model.clone(), cx))
         .child(row("Login", facts.login.clone(), cx))

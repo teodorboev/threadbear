@@ -184,6 +184,26 @@ pub fn side_files(defaults: &BTreeMap<String, Plist>) -> Vec<(&'static str, Valu
     out
 }
 
+/// The tour's, the pages' intros' and Finish setting up's state, from the
+/// Swift app's defaults, under this app's names: whether the tour's been
+/// seen (`tourSeen`), whether the list was hidden (`setupHidden`), and the
+/// intros seen (`tourIntro.<name>`, one list here). Only what the Swift app
+/// has: a Mac that never ran it gives none, and gets the tour.
+pub fn tour_state(defaults: &BTreeMap<String, Plist>) -> Map<String, Value> {
+    let mut out = Map::new();
+    let on = |key: &str| defaults.get(key).and_then(Plist::as_bool).or_else(|| defaults.get(key).and_then(Plist::as_f64).map(|n| n != 0.));
+    for key in ["tourSeen", "setupHidden"] {
+        if let Some(v) = on(key) {
+            out.insert(key.to_owned(), Value::from(v));
+        }
+    }
+    let intros: Vec<Value> = defaults.keys().filter_map(|k| k.strip_prefix("tourIntro.")).filter(|name| on(&format!("tourIntro.{name}")) == Some(true)).map(Value::from).collect();
+    if !intros.is_empty() {
+        out.insert("tourIntrosSeen".to_owned(), Value::Array(intros));
+    }
+    out
+}
+
 /// The note's names, in the order it says them: the same order whichever
 /// order the keys came in (serde_json's maps keep insertion order in the app,
 /// where GPUI turns that on, and sort their keys in core's own tests).
@@ -322,6 +342,19 @@ mod tests {
             Some(Plist::Dict(d)) => d,
             other => panic!("not a dict: {other:?}"),
         }
+    }
+
+    #[test]
+    fn the_tour_comes_across_as_it_was_left() {
+        let mut d = BTreeMap::new();
+        d.insert("tourSeen".to_owned(), Plist::Bool(true));
+        d.insert("tourIntro.projects".to_owned(), Plist::Bool(true));
+        d.insert("tourIntro.usage".to_owned(), Plist::Integer(1));
+        d.insert("tourIntro.pools".to_owned(), Plist::Bool(false));
+        let got = tour_state(&d);
+        assert_eq!(Value::Object(got), json!({ "tourSeen": true, "tourIntrosSeen": ["projects", "usage"] }));
+        // A Mac that never ran the Swift app: nothing, so it gets the tour.
+        assert!(tour_state(&BTreeMap::new()).is_empty());
     }
 
     #[test]

@@ -12,7 +12,8 @@ Feature: Chips in my messages
     And I type "compare " in the composer
     And I paste the picture into the composer
     And I type "with the old one" in the composer
-    And I press Return
+    Then the composer holds 1 picture
+    When I press Return
     Then my message "compare" shows the chips "picture: Picture 1"
     And resting on the chip "Picture 1" in my message shows its card
     And pressing the chip "Picture 1" in my message opens picture 1 of 1

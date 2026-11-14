@@ -10,30 +10,49 @@ use std::collections::HashMap;
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", default)]
 pub struct ModelChoice {
+    #[serde(default, deserialize_with = "crate::wire::id")]
     pub id: String,
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub model: String,
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub title: String,
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub description: Option<String>,
+    #[serde(default, deserialize_with = "crate::wire::list")]
     pub effort_levels: Vec<String>,
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub default_effort: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Account {
+    #[serde(default, deserialize_with = "crate::wire::id")]
     pub id: String,
+    // The provider selects the CLI and credential folder. A wrong type must
+    // not turn a Codex account into Claude through provider_id's old fallback.
+    #[serde(default)]
     pub provider: String,
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub title: String,
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub default_model: Option<String>,
+    #[serde(default, deserialize_with = "crate::wire::list")]
     pub models: Vec<ModelChoice>,
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub default_effort: Option<String>,
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub email: Option<String>,
     /// "Max", "Team", "Pro Lite": the Usage panel's tip on a login.
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub plan: Option<String>,
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub note: Option<String>,
     /// Kept as it came (AccountUsage), for the badge a later slice draws.
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub usage: Option<Value>,
     /// Where the login's CLI keeps its sign-in, for Sign in… (sign_in.rs).
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub config_dir: String,
 }
 
@@ -67,23 +86,35 @@ impl Account {
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Pool {
+    #[serde(default, deserialize_with = "crate::wire::id")]
     pub id: String,
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub title: String,
+    #[serde(default, deserialize_with = "crate::wire::list")]
     pub account_ids: Vec<String>,
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub icon: Option<String>,
     /// Folders whose threads start in this pool (`Pools.forFolder`).
+    #[serde(default, deserialize_with = "crate::wire::list")]
     pub folders: Vec<String>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", default)]
 pub struct RunnerDefaults {
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub cwd: String,
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub account_id: String,
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub pool_id: Option<String>,
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub model: Option<String>,
+    #[serde(default, deserialize_with = "crate::wire::map")]
     pub models: HashMap<String, String>,
+    #[serde(default, deserialize_with = "crate::wire::map")]
     pub efforts: HashMap<String, String>,
+    #[serde(default, deserialize_with = "crate::wire::field")]
     pub permission_mode: Option<String>,
 }
 
@@ -94,17 +125,89 @@ impl RunnerDefaults {
     }
 }
 
+/// Fields the runner reports about a provider. Options preserve the older
+/// runner fallback independently for each missing or unreadable field.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ProviderInfo {
+    #[serde(deserialize_with = "crate::wire::id")]
+    pub id: String,
+    #[serde(deserialize_with = "crate::wire::field")]
+    pub name: Option<String>,
+    #[serde(deserialize_with = "crate::wire::field")]
+    pub cli_name: Option<String>,
+    #[serde(deserialize_with = "crate::wire::field")]
+    pub effort: Option<String>,
+    #[serde(deserialize_with = "crate::wire::field")]
+    pub auto_mode: Option<String>,
+    #[serde(deserialize_with = "crate::wire::field")]
+    pub rewind: Option<bool>,
+}
+
 /// A runner's logins (RunnerLogins), filled from its `hello`.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct RunnerLogins {
     pub accounts: Vec<Account>,
+    pub providers: Vec<ProviderInfo>,
     pub pools: Vec<Pool>,
     pub defaults: RunnerDefaults,
+    /// Sign-in commands declared by this runner, replaced on every hello.
+    pub login_commands: HashMap<String, String>,
 }
 
 impl RunnerLogins {
+    pub fn login_command(&self, provider: &str) -> &str {
+        self.login_commands.get(provider).map(String::as_str).unwrap_or_else(|| crate::sign_in::login_command(provider))
+    }
     pub fn from_hello(hello: &Value) -> RunnerLogins {
-        RunnerLogins { accounts: accounts_from(&hello["accounts"]), pools: pools_from(&hello["pools"]), defaults: serde_json::from_value(hello["defaults"].clone()).unwrap_or_default() }
+        let login_commands = hello["providers"].as_array().into_iter().flatten().filter_map(|p| {
+            let id = p["id"].as_str().filter(|s| !s.is_empty())?;
+            let command = p["loginCommand"].as_str()?;
+            Some((id.to_owned(), command.trim().to_owned()))
+        }).collect();
+        RunnerLogins { accounts: accounts_from(&hello["accounts"]), providers: lossy(&hello["providers"]), pools: pools_from(&hello["pools"]), defaults: hello.get("defaults").cloned().and_then(crate::wire::read).unwrap_or_default(), login_commands }
+    }
+
+    pub fn provider(&self, id: &str) -> Option<&ProviderInfo> {
+        let id = if id.is_empty() { "claude" } else { id };
+        self.providers.iter().find(|p| p.id == id)
+    }
+
+    pub fn provider_title(&self, id: &str) -> String {
+        self.provider(id).and_then(|p| p.name.as_deref()).filter(|n| !n.trim().is_empty()).map_or_else(|| provider_title(id), str::to_owned)
+    }
+
+    pub fn cli_name(&self, id: &str) -> String {
+        self.provider(id).and_then(|p| p.cli_name.as_deref()).filter(|n| !n.trim().is_empty()).map_or_else(|| crate::slash::cli_name(id), str::to_owned)
+    }
+
+    pub fn has_auto_mode(&self, id: &str) -> bool {
+        match self.provider(id).and_then(|p| p.auto_mode.as_deref()) {
+            Some("classifier") => true,
+            Some("asks") => false,
+            _ => has_auto_mode(id),
+        }
+    }
+
+    pub fn can_rewind(&self, id: &str) -> bool {
+        self.provider(id).and_then(|p| p.rewind).unwrap_or_else(|| crate::composer::can_rewind(id))
+    }
+
+    pub fn effort_levels(&self, model: Option<&str>, choices: &[ModelChoice], provider: &str) -> Vec<String> {
+        // No effort support is authoritative, even if a cached model still
+        // lists levels. Otherwise the model can narrow the provider's list.
+        if self.provider(provider).and_then(|p| p.effort.as_deref()) == Some("none") {
+            return Vec::new();
+        }
+        if let Some(choice) = model.and_then(|m| choice_for(m, choices)).filter(|c| !c.effort_levels.is_empty()) {
+            return choice.effort_levels.clone();
+        }
+        match self.provider(provider).and_then(|p| p.effort.as_deref()) {
+            Some("none") => Vec::new(),
+            Some("claude") => EFFORT_LEVELS.iter().map(|s| s.to_string()).collect(),
+            Some("codex") => CODEX_EFFORT_LEVELS.iter().map(|s| s.to_string()).collect(),
+            _ => effort_levels(model, choices, provider),
+        }
     }
 
     /// `accounts.updated`: the logins, which replace the ones from `hello`.
@@ -159,7 +262,7 @@ fn pools_from(v: &Value) -> Vec<Pool> {
 }
 
 fn lossy<T: serde::de::DeserializeOwned>(v: &Value) -> Vec<T> {
-    v.as_array().map(|items| items.iter().filter_map(|item| serde_json::from_value(item.clone()).ok()).collect()).unwrap_or_default()
+    v.as_array().map(|items| items.iter().filter_map(|item| crate::wire::read(item.clone())).collect()).unwrap_or_default()
 }
 
 /// How a provider id reads (Providers.info).
@@ -427,7 +530,7 @@ impl<'a> ChipSettings<'a> {
     /// The modes the permission menu offers: Auto needs a provider with its
     /// own judge of each action, or a thread already on it.
     pub fn permission_modes(&self) -> Vec<&'static str> {
-        if has_auto_mode(&self.provider) || self.permission_mode == "auto" {
+        if self.logins.has_auto_mode(&self.provider) || self.permission_mode == "auto" {
             vec!["full", "auto", "ask", "plan"]
         } else {
             vec!["full", "ask", "plan"]
@@ -446,7 +549,7 @@ impl<'a> ChipSettings<'a> {
     }
 
     pub fn effort_levels(&self) -> Vec<String> {
-        effort_levels(self.effective_model().as_deref(), self.choices(), &self.provider)
+        self.logins.effort_levels(self.effective_model().as_deref(), self.choices(), &self.provider)
     }
 }
 

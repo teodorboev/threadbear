@@ -49,6 +49,13 @@ Then('the {string} menu has {string}', async function (this: ThreadbearWorld, me
   assert.ok(out.find((m) => m.title === menu)?.items.some((i) => i.title === title), `${title} isn't in the ${menu} menu: ${JSON.stringify(out.find((m) => m.title === menu)?.items.map((i) => i.title))}`);
 });
 
+Then("the {string} menu hasn't {string}", async function (this: ThreadbearWorld, menu: string, title: string) {
+  const out = JSON.parse(okValue(await this.app.do({ cmd: 'menus' }))) as { title: string; items: { title: string }[] }[];
+  const items = out.find((m) => m.title === menu)?.items.map((i) => i.title);
+  assert.ok(items, `no ${menu} menu`);
+  assert.ok(!items.includes(title), `${title} is in the ${menu} menu: ${JSON.stringify(items)}`);
+});
+
 // The app menu is the first one, whatever it's called (the dev build's is
 // named for its instance).
 async function appMenuKey(world: ThreadbearWorld, title: string, key: string) {

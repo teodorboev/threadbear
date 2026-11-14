@@ -22,7 +22,30 @@ Feature: An agent shows Mike a panel
     Given the agent of "Morning brief" pinned a file of its own and showed it
     When I open the thread "Morning brief"
     And I'm looking at the app
+    And the agent continues replying while the pinned file loads
+    Then the runner still has the request waiting
+    And the pane is showing the pinned file
+    And the runner heard the panel was shown
+
+  @panel.requests @highlights.pinned
+  Scenario: A shown pin removed before I look opens Highlights
+    Given the agent of "Morning brief" pinned a file of its own and showed it
+    And the agent unpins that file before I look
+    And the agent keeps working while I open the file
+    When I open the thread "Morning brief"
+    And I'm looking at the app
+    Then the runner heard the panel was shown
+    And the dock has the "highlights" panel
+    And the pane has no file preview
+
+  @panel.requests @highlights.pinned
+  Scenario: A shown pin retries failed highlights fetches while the thread is quiet
+    Given the agent of "Morning brief" pinned a file of its own and showed it
+    And the next two highlights fetches will fail
+    When I open the thread "Morning brief"
+    And I'm looking at the app
     Then the pane is showing the pinned file
+    And the runner heard the panel was shown
 
   @panel.requests
   Scenario: A panel the thread hasn't got is left waiting
@@ -31,3 +54,15 @@ Feature: An agent shows Mike a panel
     And the agent asks to show the "nonesuch" panel
     And I wait a moment
     Then the runner still has the request waiting
+
+  @panel.requests @highlights.pinned
+  Scenario: A shown pin retries when I return after a failed fetch
+    Given the agent of "Morning brief" pinned a file of its own and showed it
+    And the next two highlights fetches will fail
+    When I open the thread "Morning brief"
+    And I'm looking at the app
+    And I look away until the failed highlights fetch stops
+    Then the runner still has the request waiting
+    When I'm looking at the app
+    Then the pane is showing the pinned file
+    And the runner heard the panel was shown

@@ -3,8 +3,7 @@ import XCTest
 @testable import ThreadbearCore
 
 /// Other runners' threads (docs/protocol.md, "Other runners' threads"): the
-/// list, its rows as sidebar summaries, and which runner a thread's
-/// requests go to.
+/// list and its rows as sidebar summaries.
 final class RemoteThreadsTests: XCTestCase {
     private func decode(_ object: [String: Any]) throws -> RemoteThreads {
         try JSONDecoder().decode(RemoteThreads.self, from: Data(E.json(object).utf8))
@@ -29,10 +28,12 @@ final class RemoteThreadsTests: XCTestCase {
     func testDecodesTolerantly() throws {
         let list = try decode([
             "runners": [
+                // An older runner still sends the direct link's rpcUrl and
+                // tokenFile: ignored like any other key this app doesn't know.
                 ["id": "r_bruce", "name": "bruce", "icon": "macmini", "online": true, "lastSeenAt": "2026-10-29T10:00:00Z",
                  "rpcUrl": "wss://bruce.example.ts.net/rpc", "tokenFile": "/tmp/tb/secrets/runners/r_bruce.token", "extra": 1],
-                // Nothing but an id: named by it, offline, can't be opened.
-                ["id": "r_studio", "name": "", "rpcUrl": ""],
+                // Nothing but an id: named by it, offline.
+                ["id": "r_studio", "name": ""],
                 // No id: dropped, not the whole list.
                 ["name": "nobody"],
             ],
@@ -49,14 +50,10 @@ final class RemoteThreadsTests: XCTestCase {
         XCTAssertEqual(bruce.name, "bruce")
         XCTAssertEqual(bruce.icon, "macmini")
         XCTAssertTrue(bruce.online)
-        XCTAssertEqual(bruce.rpcUrl?.absoluteString, "wss://bruce.example.ts.net/rpc")
-        XCTAssertEqual(bruce.tokenFile, "/tmp/tb/secrets/runners/r_bruce.token")
         XCTAssertNotNil(bruce.lastSeenAt)
         let studio = try XCTUnwrap(list.runner("r_studio"))
         XCTAssertEqual(studio.name, "r_studio")
         XCTAssertFalse(studio.online)
-        XCTAssertNil(studio.rpcUrl)
-        XCTAssertNil(studio.tokenFile)
 
         XCTAssertEqual(list.threads.map(\.threadId), ["t1", "t2"])
         XCTAssertEqual(list.threads[0].status, .running)
@@ -144,170 +141,10 @@ final class RemoteThreadsTests: XCTestCase {
         XCTAssertEqual(updated, list)
     }
 
-    func testRouteFollowsTheThreadsRunner() {
-        let bruce = RemoteRunner(id: "r_bruce", name: "bruce")
-        var remote = ThreadSummary(id: "t1", title: "")
-        remote.runnerId = "r_bruce"
-        var orphan = ThreadSummary(id: "t2", title: "")
-        orphan.runnerId = "r_gone"
-        XCTAssertEqual(ThreadRoute.of(ThreadSummary(id: "t0", title: ""), runners: [bruce]), .local)
-        XCTAssertEqual(ThreadRoute.of(nil, runners: [bruce]), .local, "no thread (a new one) is this Mac's")
-        XCTAssertEqual(ThreadRoute.of(remote, runners: [bruce]), .remote(bruce))
-        XCTAssertEqual(ThreadRoute.of(orphan, runners: [bruce]), .unknownRunner("r_gone"))
-    }
-
     func testUnreachableSaysWhy() {
-        let bruce = RemoteRunner(id: "r_bruce", name: "bruce", online: false)
-        XCTAssertEqual(RemoteUnreachable(bruce, .noToken).headline, "Can't reach bruce from this Mac.")
-        XCTAssertTrue(RemoteUnreachable(bruce, .noToken).detail.contains("secrets/runners/r_bruce.token"))
-        XCTAssertEqual(RemoteUnreachable.from(RPCError.unauthorized, runner: bruce).reason, .refused)
-        let offline = RemoteUnreachable.from(RPCError.connectFailed("timed out"), runner: bruce)
-        XCTAssertEqual(offline.localizedDescription, "It's offline, or Tailscale is off on one of the Macs.")
-        var online = bruce
-        online.online = true
-        XCTAssertEqual(RemoteUnreachable.from(RPCError.connectFailed("timed out"), runner: online).detail, "It didn't answer (timed out).")
-        XCTAssertFalse(offline.detail.contains("—"), "no em dashes in UI copy")
-    }
-}
-
-/// The connections to other runners, over fake transports.
-@MainActor
-final class RemoteClientsTests: XCTestCase {
-    private let url = URL(string: "wss://bruce.example.ts.net/rpc")!
-
-    /// A transport that answers hello and remembers what it was made with.
-    private final class Made: @unchecked Sendable {
-        var transports: [(url: URL, token: String, transport: FakeTransport)] = []
-    }
-
-    private func clients(_ made: Made, tokens: [String: String] = ["/tokens/bruce": "secret"]) -> RemoteClients {
-        RemoteClients(version: "test", makeTransport: { url, token in
-            let transport = FakeTransport()
-            transport.onSend = { request in
-                guard request["method"] as? String == "hello" else { return [E.json(["jsonrpc": "2.0", "id": request["id"]!, "result": [:]])] }
-                return [E.json(["jsonrpc": "2.0", "id": request["id"]!, "result": [
-                    "runnerVersion": "0.1.0", "protocol": 1, "accounts": [], "defaults": ["cwd": "/Users/bruce", "accountId": "claude-main"],
-                ]])]
-            }
-            made.transports.append((url, token, transport))
-            return transport
-        }, readToken: { tokens[$0] }, pins: .memory(["/tokens/bruce": "bruce.example.ts.net"]))
-    }
-
-    func testNoTokenOrAddressCantBeOpened() async {
-        let made = Made()
-        let remote = clients(made)
-        for (runner, reason) in [
-            (RemoteRunner(id: "r_bruce", name: "bruce", rpcUrl: url), RemoteUnreachable.Reason.noToken),
-            (RemoteRunner(id: "r_bruce", name: "bruce", rpcUrl: url, tokenFile: "/tokens/missing"), .noToken),
-            (RemoteRunner(id: "r_bruce", name: "bruce", tokenFile: "/tokens/bruce"), .noAddress),
-        ] {
-            do {
-                _ = try await remote.client(for: runner)
-                XCTFail("expected \(reason)")
-            } catch let error as RemoteUnreachable {
-                XCTAssertEqual(error.reason, reason)
-                XCTAssertEqual(error.runnerName, "bruce")
-            } catch {
-                XCTFail("unexpected \(error)")
-            }
-        }
-        XCTAssertTrue(made.transports.isEmpty, "nothing is dialled without both")
-    }
-
-    func testConnectsWithTheTokenOnceAndRoutesToIt() async throws {
-        let made = Made()
-        let remote = clients(made)
-        var connected: [String] = []
-        remote.onConnected = { id, _ in connected.append(id) }
-        let bruce = RemoteRunner(id: "r_bruce", name: "bruce", rpcUrl: url, tokenFile: "/tokens/bruce")
-        let local = RPCClient(transport: FakeTransport())
-
-        XCTAssertNil(remote.client(for: .remote(bruce), local: local), "not before it's connected")
-        let client = try await remote.client(for: bruce)
-        XCTAssertEqual(made.transports.count, 1)
-        XCTAssertEqual(made.transports[0].url, url)
-        XCTAssertEqual(made.transports[0].token, "secret")
-        XCTAssertEqual(made.transports[0].transport.sent.first?["method"] as? String, "hello")
-        XCTAssertEqual(connected, ["r_bruce"])
-
-        let again = try await remote.client(for: bruce)
-        XCTAssertTrue(again === client, "one connection per runner")
-        XCTAssertEqual(made.transports.count, 1)
-
-        XCTAssertTrue(remote.client(for: .remote(bruce), local: local) === client)
-        XCTAssertTrue(remote.client(for: .local, local: local) === local)
-        XCTAssertNil(remote.client(for: .unknownRunner("r_gone"), local: local))
-        XCTAssertEqual(remote.connectedRunners, ["r_bruce"])
-    }
-
-    func testTwoOpensAtOnceShareOneConnection() async throws {
-        let made = Made()
-        let remote = clients(made)
-        let bruce = RemoteRunner(id: "r_bruce", name: "bruce", rpcUrl: url, tokenFile: "/tokens/bruce")
-        async let first = remote.client(for: bruce)
-        async let second = remote.client(for: bruce)
-        let (a, b) = try await (first, second)
-        XCTAssertTrue(a === b)
-        XCTAssertEqual(made.transports.count, 1)
-    }
-
-    func testNotificationsComeWithTheRunnerAndADropIsSaid() async throws {
-        let made = Made()
-        let remote = clients(made)
-        var heard: [(String, String)] = []
-        var closed: [String] = []
-        remote.onNotification = { id, notification in
-            if case .threadUpdated(let thread) = notification { heard.append((id, thread.id)) }
-        }
-        remote.onClosed = { closed.append($0) }
-        let bruce = RemoteRunner(id: "r_bruce", name: "bruce", rpcUrl: url, tokenFile: "/tokens/bruce")
-        _ = try await remote.client(for: bruce)
-        let transport = made.transports[0].transport
-        transport.push(E.json(["jsonrpc": "2.0", "method": "thread.updated", "params": ["thread": ["id": "t1", "title": "Backup"]]]))
-        for _ in 0..<200 where heard.isEmpty { try await Task.sleep(for: .milliseconds(5)) }
-        XCTAssertEqual(heard.first?.0, "r_bruce")
-        XCTAssertEqual(heard.first?.1, "t1")
-
-        transport.close(with: .disconnected("gone"))
-        for _ in 0..<200 where closed.isEmpty { try await Task.sleep(for: .milliseconds(5)) }
-        XCTAssertEqual(closed, ["r_bruce"])
-        XCTAssertNil(remote.connected("r_bruce"))
-        XCTAssertNil(remote.client(for: .remote(bruce), local: nil))
-    }
-
-    func testCloseLetsItGo() async throws {
-        let made = Made()
-        let remote = clients(made)
-        var closed: [String] = []
-        remote.onClosed = { closed.append($0) }
-        let bruce = RemoteRunner(id: "r_bruce", name: "bruce", rpcUrl: url, tokenFile: "/tokens/bruce")
-        let client = try await remote.client(for: bruce)
-        remote.close("r_bruce")
-        XCTAssertTrue(client.isClosed)
-        XCTAssertEqual(closed, ["r_bruce"])
-        try await Task.sleep(for: .milliseconds(30))
-        XCTAssertEqual(closed, ["r_bruce"], "said once, not again when its stream ends")
-        _ = try await remote.client(for: bruce)
-        XCTAssertEqual(made.transports.count, 2, "opened afresh next time")
-    }
-
-    func testRefusedTokenSaysSo() async {
-        let remote = RemoteClients(version: "test", makeTransport: { _, _ in
-            let transport = FakeTransport()
-            transport.openError = .unauthorized
-            return transport
-        }, readToken: { _ in "wrong" }, pins: .memory(["/tokens/bruce": "bruce.example.ts.net"]))
-        let bruce = RemoteRunner(id: "r_bruce", name: "bruce", online: true, rpcUrl: url, tokenFile: "/tokens/bruce")
-        do {
-            _ = try await remote.client(for: bruce)
-            XCTFail("expected a refusal")
-        } catch let error as RemoteUnreachable {
-            XCTAssertEqual(error.reason, .refused)
-        } catch {
-            XCTFail("unexpected \(error)")
-        }
-        XCTAssertNil(remote.connected("r_bruce"))
+        let gone = RemoteUnreachable(runnerId: "r_bruce", runnerName: "bruce", online: false, reason: .unknownRunner)
+        XCTAssertEqual(gone.headline, "Can't reach bruce from this Mac.")
+        XCTAssertEqual(gone.localizedDescription, "Its runner isn't listed any more.")
     }
 
     func testAnotherRunnersThreadCarriesItsBylineToTheRow() throws {

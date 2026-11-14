@@ -7,41 +7,47 @@
 // a real GPU (Tinker Desk), or the frame times are software rendering's.
 import { GpuiDriver } from '../support/gpui.ts';
 import { sleep } from '../support/driver.ts';
+import { ensurePerfLock } from './perf-lock.ts';
+
+await ensurePerfLock();
 
 process.env.TB_MOCK_FIXTURES = process.argv[2];
 const app = new GpuiDriver();
-await app.start();
-const started = Date.now();
-for (;;) {
-  const d = await app.dump();
-  if (d.connection === 'connected' && d.sidebar.sections.some((s) => s.threads.length)) break;
-  await sleep(50);
-}
-console.log(`connected and listed in ${Date.now() - started} ms`);
+try {
+  await app.start();
+  const started = Date.now();
+  for (;;) {
+    const d = await app.dump();
+    if (d.connection === 'connected' && d.sidebar.sections.some((s) => s.threads.length)) break;
+    await sleep(50);
+  }
+  console.log(`connected and listed in ${Date.now() - started} ms`);
 
-const id = 'long_thread';
-let t = Date.now();
-await app.do({ cmd: 'open', id });
-for (;;) {
-  const d = await app.dump();
-  if (d.transcript.state === 'loaded') {
-    console.log(`first page open in ${Date.now() - t} ms, ${d.transcript.rows.length} rows`);
-    break;
+  const id = 'long_thread';
+  let t = Date.now();
+  await app.do({ cmd: 'open', id });
+  for (;;) {
+    const d = await app.dump();
+    if (d.transcript.state === 'loaded') {
+      console.log(`first page open in ${Date.now() - t} ms, ${d.transcript.rows.length} rows`);
+      break;
+    }
+    await sleep(20);
   }
-  await sleep(20);
-}
-t = Date.now();
-const firstCount = (await app.dump()).transcript.rows.length;
-await app.do({ cmd: 'load-all' });
-for (;;) {
-  const d = await app.dump();
-  if (d.transcript.rows.length > firstCount) {
-    console.log(`everything loaded and folded in ${Date.now() - t} ms, ${d.transcript.rows.length} rows`);
-    break;
+  t = Date.now();
+  const firstCount = (await app.dump()).transcript.rows.length;
+  await app.do({ cmd: 'load-all' });
+  for (;;) {
+    const d = await app.dump();
+    if (d.transcript.rows.length > firstCount) {
+      console.log(`everything loaded and folded in ${Date.now() - t} ms, ${d.transcript.rows.length} rows`);
+      break;
+    }
+    await sleep(50);
   }
-  await sleep(50);
+  await sleep(500);
+  console.log('scrolling, one frame per step:', await app.do({ cmd: 'page-scroll', steps: 240, dy: 40 }, 120));
+  console.log('faster scrolling:', await app.do({ cmd: 'page-scroll', steps: 240, dy: 400 }, 120));
+} finally {
+  await app.stop();
 }
-await sleep(500);
-console.log('scrolling, one frame per step:', await app.do({ cmd: 'page-scroll', steps: 240, dy: 40 }, 120));
-console.log('faster scrolling:', await app.do({ cmd: 'page-scroll', steps: 240, dy: 400 }, 120));
-await app.stop();

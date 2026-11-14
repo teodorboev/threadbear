@@ -16,11 +16,11 @@ import { pathToFileURL } from 'node:url';
 
 const RUNNER = path.join(import.meta.dirname, '..', '..');
 const FAKE_LAUNCHCTL = path.join(import.meta.dirname, 'fake-launchctl.mjs');
-// install-runner.sh pins a Homebrew Cellar node as its opt/ link, so the
-// plist names that one.
+// install-runner.sh pins a Homebrew Cellar Node as its opt/ link, so on a
+// Mac whose Node is Homebrew's the plist names that one.
 function stableNode(p: string): string {
   const m = /^(.*)\/Cellar\/([^/]+)\/[^/]+\/bin\/node$/.exec(p);
-  const opt = m && path.join(m[1]!, 'opt', m[2]!, 'bin', 'node');
+  const opt = m ? path.join(m[1]!, 'opt', m[2]!, 'bin', 'node') : undefined;
   return opt && fs.existsSync(opt) ? opt : p;
 }
 const NODE = stableNode(process.execPath);
@@ -1048,6 +1048,42 @@ test('no deploy to a LaunchAgent that runs a checkout, or to none', () => {
   }
 });
 
+// Homebrew deletes Cellar/<formula>/<version> on the next `brew upgrade`, and
+// a runner pinned to it can't start Node again: no restart, no deploy. Its
+// opt/<formula> link moves to each new version (teodorboev's fork, 9 Nov).
+test('install-runner.sh pins a Homebrew Cellar Node as its opt/ link, which outlives brew upgrade', () => {
+  const brew = fs.mkdtempSync(path.join(os.tmpdir(), 'tb-brew-'));
+  try {
+    const cellarBin = path.join(brew, 'Cellar', 'node', '26.1.0', 'bin');
+    fs.mkdirSync(cellarBin, { recursive: true });
+    fs.symlinkSync(process.execPath, path.join(cellarBin, 'node'));
+    fs.mkdirSync(path.join(brew, 'opt'));
+    fs.symlinkSync(path.join('..', 'Cellar', 'node', '26.1.0'), path.join(brew, 'opt', 'node'));
+    const optBin = path.join(brew, 'opt', 'node', 'bin');
+    const r = sh('install-runner.sh', ['--home', home, '--label', LABEL, '--port', '0', '--path', '/usr/bin:/bin', '--print'], { THREADBEAR_NODE: path.join(cellarBin, 'node') });
+    assert.equal(r.status, 0, out(r));
+    assert.ok(r.stdout.includes(`<string>${path.join(optBin, 'node')}</string>`), out(r));
+    assert.ok(r.stdout.includes(`<string>${optBin}:`), out(r));
+    assert.ok(!r.stdout.includes('Cellar'), out(r));
+    // An opt/ link to another version isn't this Node, so it stays as given.
+    const newer = path.join(brew, 'Cellar', 'node', '27.0.0', 'bin');
+    fs.mkdirSync(newer, { recursive: true });
+    fs.symlinkSync(process.execPath, path.join(newer, 'node'));
+    fs.rmSync(path.join(brew, 'opt', 'node'));
+    fs.symlinkSync(path.join('..', 'Cellar', 'node', '27.0.0'), path.join(brew, 'opt', 'node'));
+    const other = sh('install-runner.sh', ['--home', home, '--label', LABEL, '--port', '0', '--path', '/usr/bin:/bin', '--print'], { THREADBEAR_NODE: path.join(cellarBin, 'node') });
+    assert.equal(other.status, 0, out(other));
+    assert.ok(other.stdout.includes(`<string>${path.join(cellarBin, 'node')}</string>`), out(other));
+    // Without an opt/ link (not Homebrew's layout after all), as given.
+    fs.rmSync(path.join(brew, 'opt'), { recursive: true });
+    const plain = sh('install-runner.sh', ['--home', home, '--label', LABEL, '--port', '0', '--path', '/usr/bin:/bin', '--print'], { THREADBEAR_NODE: path.join(cellarBin, 'node') });
+    assert.equal(plain.status, 0, out(plain));
+    assert.ok(plain.stdout.includes(`<string>${path.join(cellarBin, 'node')}</string>`), out(plain));
+  } finally {
+    fs.rmSync(brew, { recursive: true, force: true });
+  }
+});
+
 test('install-runner.sh guards: sandbox labels, and not from inside its own thread', () => {
   let r = sh('install-runner.sh', ['--home', home, '--print']);
   assert.equal(r.status, 1);
@@ -1067,32 +1103,13 @@ test('install-runner.sh guards: sandbox labels, and not from inside its own thre
   // A busy runner isn't replaced (or removed) without --force.
   setBusy(['t-9']);
   r = sh('install-runner.sh', ['--home', home, '--label', LABEL, '--port', '0', '--path', '/usr/bin:/bin']);
-  assert.equal(r.status, 1, out(r));
+  assert.equal(r.status, 75, out(r));
   assert.match(r.stderr, /1 thread would be cut short/);
   assert.match(r.stderr, /while threads are busy/);
   r = sh('install-runner.sh', ['--uninstall', '--home', home, '--label', LABEL]);
   assert.equal(r.status, 1, out(r));
   setBusy([]);
   assert.equal(launchctl('print', TARGET), 0, 'still installed');
-});
-
-test('install-runner.sh pins a Homebrew Cellar node as its opt/ link, which outlives brew upgrade', () => {
-  const brew = fs.mkdtempSync(path.join(os.tmpdir(), 'tb-brew-'));
-  try {
-    const cellarBin = path.join(brew, 'Cellar', 'node', '26.12.1', 'bin');
-    fs.mkdirSync(cellarBin, { recursive: true });
-    fs.symlinkSync(process.execPath, path.join(cellarBin, 'node'));
-    fs.mkdirSync(path.join(brew, 'opt'));
-    fs.symlinkSync(path.join('..', 'Cellar', 'node', '26.12.1'), path.join(brew, 'opt', 'node'));
-    const r = sh('install-runner.sh', ['--home', home, '--label', LABEL, '--port', '0', '--path', '/usr/bin:/bin', '--print'], { THREADBEAR_NODE: path.join(cellarBin, 'node') });
-    assert.equal(r.status, 0, out(r));
-    const opt = path.join(brew, 'opt', 'node', 'bin', 'node');
-    assert.ok(r.stdout.includes(`<string>${opt}</string>`), out(r));
-    assert.ok(r.stdout.includes(`<string>${path.join(brew, 'opt', 'node', 'bin')}:`), out(r));
-    assert.ok(!r.stdout.includes('Cellar'), out(r));
-  } finally {
-    fs.rmSync(brew, { recursive: true, force: true });
-  }
 });
 
 test('reinstalling checks everything first, builds from HEAD, and puts the old setup back if the new one fails', { timeout: 240_000 }, async () => {
@@ -1112,7 +1129,7 @@ test('reinstalling checks everything first, builds from HEAD, and puts the old s
   commit({ v: 'launch change', goodAfterMs: 1500 }, 'launch.mjs change');
   setBusy(['t-9']);
   let r = install();
-  assert.equal(r.status, 1, out(r));
+  assert.equal(r.status, 75, out(r));
   assert.match(r.stderr, /while threads are busy/);
   assert.equal(fs.readFileSync(installed, 'utf8'), oldLaunch, 'launch.mjs untouched');
   assert.equal(current(), before, 'no release built');

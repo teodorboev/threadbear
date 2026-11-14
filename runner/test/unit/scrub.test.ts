@@ -541,3 +541,37 @@ test('a known passphrase cut off in a preview, with its whitespace closed up', (
   known.add('alpha12  beta34gamma56');
   assert.equal(known.mask('said alpha12 beta34gamma…'), 'said [REDACTED]…');
 });
+
+// Codex's reviews of the Daybreak 115 fix (13 Nov 2026): a value cut off at
+// the end is looked for in the text as it came as well as once whole values
+// are out, and both are masked, so overlapping values never mask less.
+test('known values: overlapping whole and cut-off values are all masked', () => {
+  const s = new Scrubber({ env: {}, folders: false });
+  const leaks = (out: string, v: string) => {
+    for (let i = 0; i + 8 <= v.length; i++) if (out.includes(v.slice(i, i + 8))) return true;
+    return false;
+  };
+  // A short value that starts a longer one, the longer cut off at the end.
+  const long = 'kP3vN8qR2xL7mT4wZ9bH6cJ1fD5gS0aYkP3vN8qR2xL7mT4wZ9bH6cJ1fD5gS0aY';
+  s.known.add(long);
+  s.known.add(long.slice(0, 20));
+  let out = s.known.mask(`job ${long.slice(0, 59)}…`);
+  assert.ok(!leaks(out, long), out);
+  // A whole key whose end repeats its start.
+  const rep = 'a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f9';
+  s.known.add(rep);
+  out = s.known.mask(`x ${rep}`);
+  assert.equal(out, 'x [REDACTED]');
+  // A value with a space, matched across a tab, whose end starts another.
+  s.known.add('ABCDEFGHIJKLMNOP qrstuvwxyz012345');
+  s.known.add('qrstuvwxyz012345EXTRA');
+  assert.equal(s.known.mask('ABCDEFGHIJKLMNOP\tqrstuvwxyz012345'), '[REDACTED]');
+  // A whole value followed by the cut-off start of another that overlaps it.
+  s.known.add('ABCDEFGHIJKLMNOPqrstuvwxyz012345');
+  s.known.add('qrstuvwxyz012345MORE_SECRET');
+  out = s.known.mask('ABCDEFGHIJKLMNOPqrstuvwxyz012345MORE');
+  assert.ok(!out.includes('ABCDEFGH') && !out.includes('MORE'), out);
+  // Plain text and lone whole values come out as before.
+  assert.equal(s.known.mask(`a ${rep} b ${long} c`), 'a [REDACTED] b [REDACTED] c');
+  assert.equal(s.known.mask('nothing here'), 'nothing here');
+});

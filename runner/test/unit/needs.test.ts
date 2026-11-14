@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { PersistedEvent } from '../../src/protocol.ts';
-import { runCommandProblem, offersToTakeItBack, TRY_IT_FIRST, archiveFromTool, snoozeFromTool, bylineFromTool, endedThisTurn, CODEX_END_TURN_DESCRIPTION, CODEX_ONE_REPLY_DESCRIPTION, END_TURN_DESCRIPTION, END_TURN_FULL_NAME, endTurnDescription, needsFromText, needsFromTool, ONE_REPLY_DESCRIPTION, replyWithoutRepeat, splitReplySection, summaryFromTool, summaryMarkdown, turnReply } from '../../src/needs.ts';
+import { offersToTakeItBack, TRY_IT_FIRST, archiveFromTool, snoozeFromTool, bylineFromTool, endedThisTurn, CODEX_END_TURN_DESCRIPTION, CODEX_ONE_REPLY_DESCRIPTION, END_TURN_DESCRIPTION, END_TURN_FULL_NAME, endTurnDescription, needsFromText, needsFromTool, ONE_REPLY_DESCRIPTION, replyAsks, replyAsksNudge, replyWithoutRepeat, splitReplySection, summaryFromTool, summaryMarkdown, turnReply } from '../../src/needs.ts';
 import { END_TURN_TOOL } from '../../src/needs.ts';
 import { SERVER_NAME } from '../../src/threadbear-mcp.ts';
 import { ClaudeNormalizer, fileContext } from '../../src/adapters/claude/normalize.ts';
@@ -453,14 +453,11 @@ test('offersToTakeItBack knows the answers real cards used, and leaves others al
   assert.ok(!offersToTakeItBack([{ action: 'Can you do it?' }]));
 });
 
-test('a command on an ask has to be what it looks like', () => {
-  const asks = (run: string) => needsFromTool({ needs: 'you', asks: [{ question: 'Run it?', run }] })?.asks;
-  assert.equal(asks('npm test\n')?.[0].run?.command, 'npm test');
-  assert.equal(asks('a\n\tb')?.[0].run?.command, 'a\n\tb');
-  for (const bad of ['echo\u001b[201~', 'rm​ x', 'echo ‮oc', 'a b', ' ', 'x'.repeat(8001)]) {
-    assert.ok(runCommandProblem(bad), JSON.stringify(bad));
-    assert.equal(asks(bad)?.[0].run, undefined);
-  }
+// Run on the card was taken out (14 Nov 2026): a session that loaded
+// end_turn while it was on can still pass asks[].run, which is ignored.
+test("an ask's old run argument is dropped", () => {
+  const asks = needsFromTool({ needs: 'you', asks: [{ question: 'Run it?', run: 'npm test' }] })?.asks;
+  assert.deepEqual(asks, [{ action: 'Run it?' }]);
 });
 
 // Thread dcdc60a3 (11 Nov 2026), and Codex's review of the fix: a notice
@@ -505,4 +502,39 @@ test('WakeRead: a notice handed over with "Now write your reply" opens the turn 
   v.see(note);
   v.see(other);
   assert.equal(v.see({ type: 'assistant.text', itemId: 'm2' }), true);
+});
+
+// The two real ones from the week to 13 Nov 2026 (threads 0222c475, 7a98a6fd),
+// and what the check must leave alone: over 2,935 done replies it found only
+// those two, once a quoted question stopped counting.
+test("replyAsks: a reply's closing question or go-ahead, and nothing softer", () => {
+  const go = "Yes, I think it's ready to go live:\n- **Approved:** Mike Wheaton approved it.\n- **Cost:** about $9 a day.\n\nSay go and I'll merge main into prod, then check on convex.dev that /examples loads.";
+  assert.equal(replyAsks(go), "Say go and I'll merge main into prod, then check on convex.dev that /examples loads.");
+  assert.equal(replyAsks('Four fork fixes are in. Plan and Ask (#8) overlaps the mode you already have. Which do you want to start with?'), 'Which do you want to start with?');
+  // Put to the user mid-paragraph, with a line after it.
+  assert.equal(replyAsks('The fix is on main.\n\nWant me to deploy it now? It takes about two minutes.'), 'Want me to deploy it now?');
+  assert.equal(replyAsks("It's built and tested. I'll release it once you say **go**."), "I'll release it once you say **go**.");
+  assert.equal(replyAsks('Both are ready:\n1. The quick one\n2. The thorough one\n\n**Which should I run?**'), 'Which should I run?');
+  // The agent's own view, an optional offer, a "tell me if it's off" line.
+  assert.equal(replyAsks("It keeps what you'd already got right. I'd say yes, and mention the trust change."), undefined);
+  assert.equal(replyAsks("With 2 failures in 4 days, neither is urgent. Tell me if you want the Cloudflare rule and I'll set it up."), undefined);
+  assert.equal(replyAsks("If the bars are too jumpy, tell me and I'll tune them."), undefined);
+  assert.equal(replyAsks("I won't post anything until you say so."), undefined);
+  // The agent talking, and words it quotes.
+  assert.equal(replyAsks('Why does this matter? Because the deploy sends everything on main. It is all there now.'), undefined);
+  assert.equal(replyAsks('Worth a quick look before someone asks "how is this different?"'), undefined);
+  // A draft for someone else isn't the agent asking.
+  assert.equal(replyAsks("Here's the reply for Keith:\n\n```draft\nDoes Thursday work for you?\n```"), undefined);
+  assert.equal(replyAsks('He wrote:\n\n> Can you ship it today?'), undefined);
+  assert.equal(replyAsks('Done. It is on convex.dev now.'), undefined);
+  assert.equal(replyAsks(''), undefined);
+  // The dot in a name isn't a sentence's end.
+  assert.equal(replyAsks('Release it to convex.dev now, or after v1.2 is out?'), 'Release it to convex.dev now, or after v1.2 is out?');
+});
+
+test('replyAsksNudge quotes the sentence, clipped, and says the reply stands', () => {
+  const n = replyAsksNudge('Which do you want to start with?');
+  assert.match(n, /^Your reply closes by asking the user something \("Which do you want to start with\?"\)/);
+  assert.match(n, /Your message above is the reply: don't write it again/);
+  assert.ok(replyAsksNudge(`Should I ${'really '.repeat(60)}do it?`).length < 800);
 });

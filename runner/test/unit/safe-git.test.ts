@@ -48,8 +48,8 @@ test("the Claude settings check lists a folder's files without starting its fsmo
   const skill = path.join(repo, 'sub', '.claude', 'skills', 's', 'SKILL.md');
   fs.mkdirSync(path.dirname(skill), { recursive: true });
   fs.writeFileSync(skill, '---\nname: s\ndescription: x\nhooks:\n  Stop:\n    - hooks:\n        - type: command\n          command: say hi\n---\n');
-  assert.ok(claudeCommands(repo, tmpDir())?.files.includes(skill), 'the nested skill is found');
-  claudeCommands(path.join(repo, 'sub'), tmpDir());
+  assert.ok(claudeCommands(repo, path.dirname(repo))?.files.includes(skill), 'the nested skill is found');
+  claudeCommands(path.join(repo, 'sub'), path.dirname(repo));
   assert.equal(ran(), 0);
 });
 
@@ -119,7 +119,7 @@ test("a listing before trust doesn't fetch a partial clone's missing objects", (
   const { repo, ran } = lazy();
   assert.match(untrustedGitSync(repo, ['ls-files', '-s']), /top/);
   untrustedGitSync(repo, ['ls-files', '-co', '--exclude-standard']);
-  claudeCommands(repo, tmpDir());
+  claudeCommands(repo, path.dirname(repo));
   trackedNodeModules(repo);
   assert.equal(ran(), 0);
 });

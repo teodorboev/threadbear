@@ -4,14 +4,13 @@ import XCTest
 @testable import ThreadbearCore
 
 /// A new thread on another runner (the composer's "Runs on"): its pickers
-/// and folders are that runner's, and it's made over that runner's
-/// connection and listed as its. A new thread on this Mac never is.
+/// and folders are that runner's, and it's made through this Mac's runner
+/// and Convex and listed as that runner's. A new thread on this Mac never is.
 @MainActor
 final class RemoteDraftTests: XCTestCase {
     /// A login an earlier test left as the last one used would be this
     /// Mac's pick instead of claude-here (saved defaults outlive a run).
-    private let keys = [AppModel.lastAccountKey, "lastAccountId.byProvider", "lastAccountId.codex.byProvider", AppModel.defaultRunnerKey,
-                        AppModel.directRemoteLinkKey]
+    private let keys = [AppModel.lastAccountKey, "lastAccountId.byProvider", "lastAccountId.codex.byProvider", AppModel.defaultRunnerKey]
 
     override func setUp() {
         super.setUp()
@@ -24,38 +23,32 @@ final class RemoteDraftTests: XCTestCase {
         super.tearDown()
     }
 
-    private let bruce = RemoteRunner(id: "r-bruce", name: "bruce", icon: "macmini", online: true,
-                                     rpcUrl: URL(string: "ws://127.0.0.1:1/bruce/rpc"), tokenFile: "/tmp/not-read")
+    private let bruce = RemoteRunner(id: "r-bruce", name: "bruce", icon: "macmini", online: true)
     private let bruceLogins: [String: Any] = [
-        "runnerVersion": "test", "protocol": 1,
         "accounts": [["id": "claude-bruce", "provider": "claude", "title": "bruce@example.com"]],
         "defaults": ["cwd": "/Users/bruce/dev", "accountId": "claude-bruce"],
         "pools": [],
     ]
 
-    /// This Mac's runner and bruce's, each on a transport that answers
-    /// as told and records what it was asked.
-    private func app() async throws -> (AppModel, RecordingTransport, RecordingTransport) {
+    /// This Mac's runner on a transport that answers as told and records
+    /// what it was asked: a new thread with a `runnerId` is made on that
+    /// runner, through Convex.
+    private func app() async throws -> (AppModel, RecordingTransport) {
         let app = AppModel()
         let local = RecordingTransport()
-        local.answers["threads.create"] = { params in ["thread": ["id": "th_here", "title": "Here", "cwd": params["cwd"] ?? ""]] }
+        local.answers["threads.create"] = { params in
+            params["runnerId"] == nil
+                ? ["thread": ["id": "th_here", "title": "Here", "cwd": params["cwd"] ?? ""]]
+                : ["thread": ["id": "th_bruce", "title": "On bruce", "cwd": params["cwd"] ?? "", "accountId": params["accountId"] ?? ""]]
+        }
+        local.answers["remoteThreads.logins"] = { [bruceLogins] _ in bruceLogins }
         let client = RPCClient(transport: local)
         try await client.start()
         app.useClientForTesting(client)
         app.accounts = [Account(id: "claude-here", provider: "claude", title: "me@example.com")]
         app.defaults = RunnerDefaults(cwd: "/Users/me/misc", accountId: "claude-here")
-
-        let away = RecordingTransport()
-        away.answers["hello"] = { [bruceLogins] _ in bruceLogins }
-        away.answers["threads.list"] = { _ in ["threads": []] }
-        away.answers["threads.create"] = { params in ["thread": ["id": "th_bruce", "title": "On bruce", "cwd": params["cwd"] ?? "", "accountId": params["accountId"] ?? ""]] }
-        // These are the direct link's tests (bruce's own connection, its
-        // token and host pin); since 5 Nov the default goes through this
-        // Mac's runner and Convex instead, which never touches RemoteClients.
-        app.directRemoteLink = true
-        app.useRemoteClientsForTesting(RemoteClients(version: "test", makeTransport: { _, _ in away }, readToken: { _ in "token" }, pins: .memory(["/tmp/not-read": "127.0.0.1"])))
         app.remoteRunners = [bruce]
-        return (app, local, away)
+        return (app, local)
     }
 
     /// runners.list failed with no network, more than once, and nothing
@@ -90,7 +83,7 @@ final class RemoteDraftTests: XCTestCase {
     }
 
     func testADraftForAnotherRunnerUsesItsLoginsAndGoesThere() async throws {
-        let (app, local, away) = try await app()
+        let (app, local) = try await app()
         app.newThreadCwd = "/Users/me/somewhere-here"
         app.chooseNewThreadRunner(bruce.id)
         XCTAssertNil(app.newThreadCwd, "this Mac's folder means nothing on bruce")
@@ -114,13 +107,12 @@ final class RemoteDraftTests: XCTestCase {
         app.drafts["new"] = Draft(text: "Check the drive")
         app.send(threadId: nil)
         try await until { app.selection == "th_bruce" }
-        let create = try XCTUnwrap(away.params("threads.create").first)
+        let create = try XCTUnwrap(local.params("threads.create").first)
+        XCTAssertEqual(create["runnerId"] as? String, bruce.id, "this Mac's runner sends it on to bruce")
         XCTAssertEqual(create["cwd"] as? String, "/Volumes/CannMedia")
         XCTAssertEqual(create["accountId"] as? String, "claude-bruce")
         XCTAssertEqual(create["text"] as? String, "Check the drive")
-        XCTAssertTrue(local.params("threads.create").isEmpty, "never this Mac's runner")
-        XCTAssertEqual(app.threads["th_bruce"]?.runnerId, bruce.id, "listed as bruce's, so its calls go there")
-        XCTAssertEqual(app.route("th_bruce"), .remote(bruce))
+        XCTAssertEqual(app.threads["th_bruce"]?.runnerId, bruce.id, "listed as bruce's")
         XCTAssertNil(app.drafts["new"])
         XCTAssertNil(app.newThreadRunnerId, "the next one starts on this Mac again")
     }
@@ -129,7 +121,7 @@ final class RemoteDraftTests: XCTestCase {
     /// new drafts start there, a pick for one draft sticks until it's sent,
     /// and the next draft is back on the default.
     func testNewThreadsStartOnTheDefaultRunner() async throws {
-        let (app, local, _) = try await app()
+        let (app, local) = try await app()
         XCTAssertNil(app.newThreadRunnerId, "this Mac until a default is set")
 
         app.setDefaultRunner(bruce.id)
@@ -151,13 +143,13 @@ final class RemoteDraftTests: XCTestCase {
 
         // An offline default can't take a thread: this Mac instead.
         app.setDefaultRunner(nil)
-        app.remoteRunners = [RemoteRunner(id: bruce.id, name: "bruce", online: false, rpcUrl: bruce.rpcUrl, tokenFile: bruce.tokenFile)]
+        app.remoteRunners = [RemoteRunner(id: bruce.id, name: "bruce", online: false)]
         app.setDefaultRunner(bruce.id)
         XCTAssertNil(app.newThreadRunnerId)
     }
 
     func testAThisMacDraftNeverGetsARunner() async throws {
-        let (app, local, away) = try await app()
+        let (app, local) = try await app()
         // Chosen and then put back: it's this Mac's again.
         app.chooseNewThreadRunner(bruce.id)
         app.chooseNewThreadRunner(nil)
@@ -167,16 +159,18 @@ final class RemoteDraftTests: XCTestCase {
         app.drafts["new"] = Draft(text: "Tidy my notes")
         app.send(threadId: nil)
         try await until { app.selection == "th_here" }
-        XCTAssertEqual(local.params("threads.create").first?["accountId"] as? String, "claude-here")
-        XCTAssertTrue(away.params("threads.create").isEmpty)
+        let create = try XCTUnwrap(local.params("threads.create").first)
+        XCTAssertEqual(create["accountId"] as? String, "claude-here")
+        XCTAssertNil(create["runnerId"], "for this Mac's runner itself")
         XCTAssertNil(app.threads["th_here"]?.runnerId)
-        XCTAssertEqual(app.route("th_here"), .local)
     }
 
     func testARunnerThatCantBeReachedKeepsTheDraft() async throws {
-        let (app, _, _) = try await app()
+        let (app, local) = try await app()
         let unreachable = RemoteRunner(id: "r-studio", name: "studio", online: false)
         app.remoteRunners.append(unreachable)
+        local.failing["remoteThreads.logins"] = 1
+        local.failing["threads.create"] = 1
         app.chooseNewThreadRunner(unreachable.id)
         try await until { app.newThreadRunnerProblem != nil }
         app.drafts["new"] = Draft(text: "Render it")
@@ -189,44 +183,29 @@ final class RemoteDraftTests: XCTestCase {
 }
 
 /// A thread on another runner can be archived or put away from its sidebar
-/// row while nothing of that runner's is open, so there's no connection to it
-/// yet. That connects, rather than failing as if this Mac's runner had gone.
+/// row, through this Mac's runner and Convex like everything else about it.
 @MainActor
 final class RemoteRowActionTests: XCTestCase {
     override func setUp() {
         super.setUp()
         _ = NSApplication.shared
-        UserDefaults.standard.removeObject(forKey: AppModel.directRemoteLinkKey)
     }
 
-    override func tearDown() {
-        UserDefaults.standard.removeObject(forKey: AppModel.directRemoteLinkKey)
-        super.tearDown()
-    }
+    private let bruce = RemoteRunner(id: "r-bruce", name: "bruce", icon: "macmini", online: true)
 
-    private let bruce = RemoteRunner(id: "r-bruce", name: "bruce", icon: "macmini", online: true,
-                                     rpcUrl: URL(string: "ws://127.0.0.1:1/bruce/rpc"), tokenFile: "/tmp/not-read")
-
-    private func app(token: String? = "token") async throws -> (AppModel, RecordingTransport, RecordingTransport) {
+    private func app() async throws -> (AppModel, RecordingTransport) {
         let app = AppModel()
         let local = RecordingTransport()
+        local.answers["threads.update"] = { params in ["thread": ["id": params["threadId"] ?? "", "title": "On bruce", "archivedAt": "2026-10-31T00:00:00Z"]] }
+        local.answers["threads.hibernateWhen"] = { params in ["thread": ["id": params["threadId"] ?? "", "title": "On bruce", "snoozedUntil": "2026-11-01T00:00:00Z"]] }
         let client = RPCClient(transport: local)
         try await client.start()
         app.useClientForTesting(client)
-
-        let away = RecordingTransport()
-        away.answers["hello"] = { _ in ["runnerVersion": "test", "protocol": 1, "accounts": [], "defaults": ["cwd": "/Users/bruce/dev", "accountId": "claude-bruce"], "pools": []] }
-        away.answers["threads.list"] = { _ in ["threads": []] }
-        away.answers["threads.update"] = { params in ["thread": ["id": params["threadId"] ?? "", "title": "On bruce", "archivedAt": "2026-10-31T00:00:00Z"]] }
-        away.answers["threads.hibernateWhen"] = { params in ["thread": ["id": params["threadId"] ?? "", "title": "On bruce", "snoozedUntil": "2026-11-01T00:00:00Z"]] }
-        // The direct link's own connection, as in RemoteDraftTests.
-        app.directRemoteLink = true
-        app.useRemoteClientsForTesting(RemoteClients(version: "test", makeTransport: { _, _ in away }, readToken: { _ in token }, pins: .memory(["/tmp/not-read": "127.0.0.1"])))
         app.remoteRunners = [bruce]
         var thread = ThreadSummary(id: "th_bruce", title: "On bruce", status: .idle)
         thread.runnerId = bruce.id
         app.threads[thread.id] = thread
-        return (app, local, away)
+        return (app, local)
     }
 
     private func until(_ condition: () -> Bool) async throws {
@@ -235,38 +214,37 @@ final class RemoteRowActionTests: XCTestCase {
         }
     }
 
-    func testArchivingARowConnectsToItsRunner() async throws {
-        let (app, local, away) = try await app()
-        XCTAssertNil(app.client(for: "th_bruce"), "nothing of bruce's is open")
+    func testArchivingARowGoesThroughThisMacsRunner() async throws {
+        let (app, local) = try await app()
         app.archive("th_bruce")
         // The row archives at once (a guess the runner confirms), so wait
         // for the call to reach bruce too, not just for the row.
         try await until { app.threads["th_bruce"]?.isArchived == true && !away.params("threads.update").isEmpty }
         XCTAssertEqual(app.threads["th_bruce"]?.isArchived, true)
-        XCTAssertEqual(away.params("threads.update").count, 1)
-        XCTAssertTrue(local.params("threads.update").isEmpty, "it's bruce's thread")
+        XCTAssertEqual(local.params("threads.update").first?["threadId"] as? String, "th_bruce")
         XCTAssertNil(app.errorMessage)
     }
 
-    func testSwipingARowConnectsToItsRunner() async throws {
-        let (app, _, away) = try await app()
+    func testSwipingARowArchivesIt() async throws {
+        let (app, local) = try await app()
         app.archive("th_bruce", slid: true)
-        try await until { !away.params("threads.update").isEmpty }
-        XCTAssertEqual(away.params("threads.update").count, 1, "a swipe used to do nothing at all")
+        try await until { !local.params("threads.update").isEmpty }
+        XCTAssertEqual(local.params("threads.update").count, 1, "a swipe used to do nothing at all")
     }
 
-    func testHibernatingARowConnectsToItsRunner() async throws {
-        let (app, _, away) = try await app()
+    func testHibernatingARowGoesThroughThisMacsRunner() async throws {
+        let (app, local) = try await app()
         app.hibernateWhen("th_bruce", said: "tomorrow")
-        try await until { !away.params("threads.hibernateWhen").isEmpty }
-        XCTAssertEqual(away.params("threads.hibernateWhen").count, 1)
+        try await until { !local.params("threads.hibernateWhen").isEmpty }
+        XCTAssertEqual(local.params("threads.hibernateWhen").count, 1)
     }
 
-    func testARunnerItCantReachIsNamedAndTheRowComesBack() async throws {
-        let (app, _, _) = try await app(token: nil)
+    func testAFailedArchiveSaysSoAndTheRowComesBack() async throws {
+        let (app, local) = try await app()
+        local.failing["threads.update"] = 1
         app.archive("th_bruce")
         try await until { app.errorMessage != nil }
-        XCTAssertEqual(app.errorMessage, "Can't reach bruce from this Mac. Its runner token isn't on this Mac yet (secrets/runners/r-bruce.token).")
+        XCTAssertNotNil(app.errorMessage)
         XCTAssertEqual(app.threads["th_bruce"]?.isArchived, false)
         XCTAssertFalse(app.slidingOff.contains("th_bruce"))
     }
@@ -349,12 +327,10 @@ private final class RecordingTransport: RPCTransport, @unchecked Sendable {
 /// thread on Hetzner Cloud and the banner said "Pictures can't go to Hetzner
 /// Cloud from this Mac yet." Through Convex (the default) they go now: this
 /// Mac's runner uploads them with the message (docs/protocol.md, "Other
-/// runners' threads through the backend", Pictures). The direct link still
-/// can't carry them, and says how to send them instead.
+/// runners' threads through the backend", Pictures).
 @MainActor
 final class RemotePicturesTests: XCTestCase {
-    private let keys = [AppModel.lastAccountKey, "lastAccountId.byProvider", "lastAccountId.codex.byProvider", AppModel.defaultRunnerKey,
-                        AppModel.directRemoteLinkKey]
+    private let keys = [AppModel.lastAccountKey, "lastAccountId.byProvider", "lastAccountId.codex.byProvider", AppModel.defaultRunnerKey]
 
     override func setUp() {
         super.setUp()
@@ -370,7 +346,7 @@ final class RemotePicturesTests: XCTestCase {
     private let cloud = RemoteRunner(id: "r-cloud", name: "Hetzner Cloud", icon: "cloud", online: true)
     private let picture = ImageRef(path: "/runner/inbox/a.png", mediaType: "image/png")
 
-    private func app(direct: Bool = false) async throws -> (AppModel, RecordingTransport) {
+    private func app() async throws -> (AppModel, RecordingTransport) {
         let app = AppModel()
         let local = RecordingTransport()
         local.answers["threads.create"] = { _ in ["thread": ["id": "th_cloud", "title": "On the cloud", "cwd": "/root"]] }
@@ -380,7 +356,6 @@ final class RemotePicturesTests: XCTestCase {
         app.useClientForTesting(client)
         app.accounts = [Account(id: "claude-here", provider: "claude", title: "me@example.com")]
         app.defaults = RunnerDefaults(cwd: "/Users/me/misc", accountId: "claude-here")
-        app.directRemoteLink = direct
         app.remoteRunners = [cloud]
         return (app, local)
     }
@@ -394,7 +369,6 @@ final class RemotePicturesTests: XCTestCase {
     func testANewThreadOnAnotherRunnerTakesItsPicturesThroughConvex() async throws {
         let (app, local) = try await app()
         app.chooseNewThreadRunner(cloud.id)
-        XCTAssertNil(app.picturesRefusal(for: nil), "pasting one is fine")
         app.drafts["new"] = Draft(text: "Why does it look like this?", images: [picture])
         app.send(threadId: nil)
         try await until { app.selection == "th_cloud" }
@@ -411,32 +385,11 @@ final class RemotePicturesTests: XCTestCase {
         var thread = ThreadSummary(id: "t_cloud", title: "On the cloud", cwd: "/root", status: .idle)
         thread.runnerId = cloud.id
         app.threads[thread.id] = thread
-        XCTAssertNil(app.picturesRefusal(for: thread))
         app.drafts[thread.id] = Draft(text: "This one", images: [picture])
         app.send(threadId: thread.id)
         try await until { !local.params("threads.send").isEmpty }
         let send = try XCTUnwrap(local.params("threads.send").first)
         XCTAssertEqual((send["images"] as? [[String: Any]])?.count, 1)
         XCTAssertNil(app.errorMessage)
-    }
-
-    func testTheDirectLinkSaysHowToSendThemAndKeepsTheDraft() async throws {
-        let (app, local) = try await app(direct: true)
-        app.remoteRunners = [RemoteRunner(id: cloud.id, name: cloud.name, online: true, rpcUrl: URL(string: "ws://127.0.0.1:1/rpc"), tokenFile: "/tmp/not-read")]
-        app.chooseNewThreadRunner(cloud.id)
-        let why = try XCTUnwrap(app.picturesRefusal(for: nil))
-        XCTAssertTrue(why.contains("Hetzner Cloud") && why.contains("Connect to other machines directly"), why)
-        let draft = Draft(text: "Look", images: [picture])
-        app.drafts["new"] = draft
-        app.send(threadId: nil)
-        XCTAssertEqual(app.errorMessage, why)
-        XCTAssertEqual(app.drafts["new"], draft, "still in the box")
-        XCTAssertTrue(local.params("threads.create").isEmpty)
-    }
-
-    func testThisMacsOwnThreadsAreNeverRefused() async throws {
-        let (app, _) = try await app(direct: true)
-        XCTAssertNil(app.picturesRefusal(for: ThreadSummary(id: "here", title: "Here", cwd: "/Users/me", status: .idle)))
-        XCTAssertNil(app.picturesRefusal(for: nil), "a new thread on this Mac")
     }
 }

@@ -4,7 +4,7 @@ import { v } from 'convex/values';
 import { internalMutation, internalQuery } from './_generated/server';
 import { hasLiveToken } from './pushTargets';
 import { runnerName } from './sync';
-import { hasLiveKey } from './lib';
+import { hasLiveKey, PRESENCE_FRESH_MS } from './lib';
 import { nextHealth } from './pushHealth';
 
 // Only phones whose token is still good (pushTargets.ts): revoking deletes
@@ -132,10 +132,6 @@ export const holdPush = internalMutation({
     return null;
   },
 });
-
-// A runner's word that Mike is at its Mac counts while it's still checking
-// in; a Mac that's asleep or offline counts as away.
-const PRESENCE_FRESH_MS = 3 * 60_000;
 
 // Apple said the token is gone (the app was removed, or it's stale).
 export const drop = internalMutation({

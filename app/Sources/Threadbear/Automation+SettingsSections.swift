@@ -41,12 +41,11 @@ extension Automation {
 extension AppDump {
     /// Settings › Runners as it shows: a line a runner in the order it lists
     /// them ("m5 *: This Mac", the star where new threads start), the
-    /// default's name, whether the order can change, and the direct link.
+    /// default's name, and whether the order can change.
     struct SettingsRunnersInfo: Encodable {
         var rows: [String]
         var `default`: String
         var canOrder: Bool
-        var directLink: Bool
     }
 
     /// Settings › Phone & browser: a line a paired device, the first
@@ -77,10 +76,7 @@ extension AppDump {
     @MainActor
     static func runnersInfo(_ app: AppModel) -> SettingsRunnersInfo {
         let selfName = app.runners.first(where: \.isSelf)?.name ?? "This Mac"
-        func status(_ runner: RemoteRunner) -> String {
-            if app.directRemoteLink, runner.tokenFile == nil { return "Not paired with this Mac" }
-            return runner.online ? "Online" : "Offline"
-        }
+        func status(_ runner: RemoteRunner) -> String { runner.online ? "Online" : "Offline" }
         func line(_ id: String?) -> String {
             if let id, let runner = app.remoteRunners.first(where: { $0.id == id }) {
                 return runner.name + (app.defaultRunnerId == runner.id ? " *" : "") + ": " + status(runner)
@@ -89,7 +85,7 @@ extension AppDump {
         }
         let rows = app.canOrderRunners ? app.orderedRunnerIds.map { line($0) } : [line(nil)] + app.remoteRunners.map { line($0.id) }
         let defaultName = app.defaultRunnerId.map { id in app.remoteRunners.first { $0.id == id }?.name ?? id } ?? "This Mac"
-        return SettingsRunnersInfo(rows: rows, default: defaultName, canOrder: app.canOrderRunners, directLink: app.directRemoteLink)
+        return SettingsRunnersInfo(rows: rows, default: defaultName, canOrder: app.canOrderRunners)
     }
 
     @MainActor

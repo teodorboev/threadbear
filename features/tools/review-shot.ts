@@ -18,6 +18,9 @@ import { GpuiDriver } from '../support/gpui.ts';
 import { SwiftDriver } from '../support/swift.ts';
 import { okValue, sleep, type Driver } from '../support/driver.ts';
 import { SHOTS_REVIEW, shotsReview } from '../support/review-demo.ts';
+import { ensurePerfLock } from './perf-lock.ts';
+
+await ensurePerfLock();
 
 const [outArg, ...wanted] = process.argv.slice(2);
 if (!outArg) throw new Error('usage: review-shot.ts <out folder> [state ...]');

@@ -420,7 +420,8 @@ pub(crate) fn drag_select(row: &str, words: &str, window: &mut Window, cx: &mut 
     let found = PAINTED.with(|p| p.borrow().iter().find(|(name, (text, _))| name.contains(&prefix) && text.contains(words)).map(|(_, found)| found.clone()));
     let (text, layout) = found.ok_or_else(|| format!("no draft box in {row} shows {words:?}"))?;
     let start = text.find(words).unwrap_or(0);
-    let (Some(first), Some(last)) = (layout.position_for_index(start), layout.position_for_index(start + words.len())) else {
+    // Words starting a wrapped row start that row, not the end of the one above.
+    let (Some(first), Some(last)) = (gpui_kit::base::selection_start_position(&layout, start), layout.position_for_index(start + words.len())) else {
         return Err(format!("{words:?} isn't laid out in {row}'s draft"));
     };
     // Into the first letter and short of the end of the last, on their line.
@@ -439,7 +440,9 @@ pub(crate) fn drag_select(row: &str, words: &str, window: &mut Window, cx: &mut 
 /// The selected part of the text, on its lines: the first from where it
 /// starts, any between whole, the last to where it ends.
 fn paint_selection(layout: &TextLayout, range: Range<usize>, color: Hsla, window: &mut Window) {
-    let (Some(start), Some(end)) = (layout.position_for_index(range.start), layout.position_for_index(range.end)) else { return };
+    // From where the first character is drawn: a selection starting a
+    // wrapped row starts that row, not the end of the row above.
+    let (Some(start), Some(end)) = (gpui_kit::base::selection_start_position(layout, range.start), layout.position_for_index(range.end)) else { return };
     let (area, line) = (layout.bounds(), layout.line_height());
     let mut quads = Vec::new();
     if start.y == end.y {
@@ -476,7 +479,7 @@ fn copy_button(draft: &DraftBlock, base: &str, window: &mut Window, cx: &App) ->
     let icon = if just { crate::icons::tall_checkmark() } else { crate::icons::symbol("doc.on.doc") }.size(px(11.)).text_color(color);
     let draft = draft.clone();
     let button = div()
-        .id(ElementId::Name(format!("draft-copy-{base}").into()))
+        .id(ElementId::Name(format!("draft-copy-{base}").into())).role(Role::Button)
         .relative()
         .flex_none()
         .w(width)
@@ -548,12 +551,12 @@ fn ease_out_cubic(t: f32) -> f32 {
 /// label, its lines as drawn, its formatted pieces, and what Copy says. Found
 /// with the same parser and the same check the box is drawn by.
 #[cfg(feature = "automation")]
-pub(crate) fn dump(text: &str) -> Option<serde_json::Value> {
+pub(crate) fn dump(text: &str, thread: &str) -> Option<serde_json::Value> {
     use serde_json::json;
     if !DraftBlock::may_hold(text) {
         return None;
     }
-    let source = crate::rows::markdown::prepare(text);
+    let source = crate::rows::markdown::prepare(text, thread);
     let root = markdown::to_mdast(&source, &markdown::ParseOptions::gfm()).ok()?;
     let mut drafts = Vec::new();
     collect(&root, &source, &mut drafts);
@@ -599,10 +602,10 @@ pub(crate) fn automation(app: &Entity<crate::app::Threadbear>, cmd: &serde_json:
         .pane
         .as_ref()
         .and_then(|p| {
-            let rows = p.read(cx).feed.model().rows();
+            let (rows, thread) = (p.read(cx).feed.model().rows(), &p.read(cx).summary.id);
             match &prefix {
                 Some(prefix) => rows.iter().find(|r| r.id.starts_with(prefix)),
-                None => rows.iter().rev().find(|r| matches!(&r.content, RowContent::Assistant(item) if dump(&item.text).is_some())),
+                None => rows.iter().rev().find(|r| matches!(&r.content, RowContent::Assistant(item) if dump(&item.text, thread).is_some())),
             }
             .map(|r| r.id.clone())
         })
@@ -621,7 +624,7 @@ pub(crate) fn automation(app: &Entity<crate::app::Threadbear>, cmd: &serde_json:
     }
     let index = cmd["index"].as_u64().unwrap_or(0) as usize;
     let Some(button) = buttons.get(index) else { return Err(format!("no draft {index} in {row}: it has {}", buttons.len())) };
-    let at = button.bounds().center();
+    let at = button.visible_bounds().center();
     window.pointer_move(at, None, cx);
     window.pointer_down(at, MouseButton::Left, cx);
     window.pointer_up(at, MouseButton::Left, cx);

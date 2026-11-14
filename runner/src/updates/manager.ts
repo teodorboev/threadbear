@@ -62,7 +62,7 @@ export type CliUpdatesDeps = {
   execPath?: string; // the runner's Node: npm and the fallback codex sit next to it
   random?: () => number;
   // The ACP agents, with the experiment's switch.
-  acp?: { on(): boolean; providers: Provider[]; binary(p: Provider): string | undefined; updateArgs(p: Provider): string[] };
+  acp?: { providers: Provider[]; binary(p: Provider): string | undefined; updateArgs(p: Provider): string[] };
 };
 
 type UpdateOptions = { version?: string; force?: boolean; bootstrap?: boolean };
@@ -219,7 +219,7 @@ export class CliUpdates {
 
   private acpProviders(): Provider[] {
     const acp = this.d.acp;
-    return acp?.on() ? acp.providers.filter((p) => acp.binary(p)) : [];
+    return acp ? acp.providers.filter((p) => acp.binary(p)) : [];
   }
 
   private acpStatus(p: Provider): CliStatus {

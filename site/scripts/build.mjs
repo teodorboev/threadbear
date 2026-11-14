@@ -13,20 +13,34 @@
 // The docs pages (/docs and /docs/<slug>) aren't in src: scripts/docs.mjs makes them from the
 // repo's docs/guide.md, a page per `## ` section, in the same layout.
 //
+// `node scripts/build.mjs --check` is ./check.sh's: the same build and checks, into a temp folder
+// that's removed after, and without git (a check host's copy of the checkout has no .git), so the
+// proof line's numbers are made up there. Twice on 13 Nov a guide change landed that this build
+// refused (a section with no icon, a link to experiments.md), and only the next deploy found it.
+//
 // It won't build if an em or en dash gets into a page, a {{placeholder}} is left over, a style=""
 // slips in (the CSP blocks it), or a link or image points at a file or #anchor that isn't there.
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { APP_STORE_LIVE, APP_STORE_URL, GITHUB_PUBLIC, GITHUB_URL, LAUNCH_VIDEO_ID, SITE_URL } from "../site.mjs";
 import { markdown, readGuide, summary } from "./docs.mjs";
-import { changelogPage, readReleases } from "./changelog.mjs";
+import { changelogPage, readPeople, readReleases } from "./changelog.mjs";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const src = join(root, "src");
-const dist = join(root, "dist");
+const CHECK = process.argv.includes("--check");
+const dist = CHECK ? mkdtempSync(join(tmpdir(), "threadbear-site-check-")) : join(root, "dist");
+if (CHECK) process.on("exit", () => rmSync(dist, { recursive: true, force: true }));
+// A check host's copy leaves out the pictures in site/ (scripts/check-remote.sh), and lists them in
+// .check-left-out, so a link to one of them still counts as landing.
+const leftOutFile = join(root, "..", ".check-left-out");
+const leftOut = new Set(CHECK && existsSync(leftOutFile)
+  ? readFileSync(leftOutFile, "utf8").split("\n").filter((f) => f.startsWith("site/public/")).map((f) => f.slice("site/public".length))
+  : []);
 
 if (APP_STORE_LIVE && !/^https:\/\/apps\.apple\.com\/app\/id\d+$/.test(APP_STORE_URL)) {
   throw new Error("APP_STORE_LIVE is on, so site.mjs needs APP_STORE_URL (https://apps.apple.com/app/id<Apple ID>)");
@@ -40,9 +54,9 @@ if (APP_STORE_LIVE && !/^https:\/\/apps\.apple\.com\/app\/id\d+$/.test(APP_STORE
 function git(...args) {
   return execFileSync("git", ["-C", root, ...args], { encoding: "utf8" }).trim();
 }
-if (git("rev-parse", "--is-shallow-repository") === "true") throw new Error("Build from a full clone: the proof line counts commits");
-const commits = Number(git("rev-list", "--count", "HEAD"));
-const firstDay = new Date(git("log", "--reverse", "--format=%aI").split("\n")[0])
+if (!CHECK && git("rev-parse", "--is-shallow-repository") === "true") throw new Error("Build from a full clone: the proof line counts commits");
+const commits = CHECK ? 1000 : Number(git("rev-list", "--count", "HEAD"));
+const firstDay = (CHECK ? new Date("2026-10-01T12:00:00Z") : new Date(git("log", "--reverse", "--format=%aI").split("\n")[0]))
   .toLocaleDateString("en-AU", { day: "numeric", month: "long", year: "numeric", timeZone: "Australia/Perth" });
 
 /**
@@ -243,10 +257,10 @@ const FAQ = [
     "You can still read all your threads on your phone and the website, because they're synced to your Convex deployment. The agents run on your Mac though, so they can't do anything while it's asleep (Threadbear won't keep it awake unless you turn on <a href=\"/docs/experiments\">that experiment</a>), and anything you send from your phone waits for it to wake up. If you want work to keep going, a second Mac or a Linux server can be an always-on machine, and you can pick it when you start a thread from your phone."],
   ["Do I need the iPhone app?",
     "No, the Mac app does everything on its own. The iPhone app and the browser links are for when you're away from your desk."],
-  // runner/src/sync.ts mirrors this; docs/on-your-mac.md has the full list. When full sync goes on
-  // by default (docs/full-convex.md, step 6) tool output goes up too, and this has to change.
+  // runner/src/sync.ts mirrors this; docs/on-your-mac.md has the full list. Full sync starts off
+  // and is offered once a phone, the website or another machine is paired (docs/full-convex.md, step 6).
   ["What goes up to Convex?",
-    "The thread list, the text of every message, one line for each thing an agent did, anything waiting on you, your projects and schedules, your logins' emails and usage, and any pictures you paste in. Tool output stays on your Mac. Anything that looks like a secret gets scrubbed out of the text on the way up, but that's not a guarantee, and nothing can scrub a picture. It's your deployment in your own Convex account, so none of it comes to me. The <a href=\"/docs/privacy\">privacy docs</a> have the rest, including the switch that keeps pictures on your Mac."],
+    "The thread list, the text of every message, a line for what each tool did, anything waiting on you, your projects and schedules, your logins' emails and usage, and any pictures you paste in. Anything that looks like a secret gets scrubbed out on the way up, but that's not a guarantee, and nothing can scrub a picture. The tool output itself stays on your Mac to start with. Once you pair your phone or add another machine, Threadbear asks if you want that going up too (kept 30 days), so you can see what the agent actually did from anywhere, even with your Mac asleep. Things like your .env files and the agent's screenshots stay on your Mac either way. It's your deployment in your own Convex account, so none of it comes to me. The <a href=\"/docs/privacy\">privacy docs</a> have the rest, including the switch that keeps pictures on your Mac."],
   // Self-hosting is step 8 of docs/setup-and-updates.md and isn't built, so setup can't do it. With
   // sync off the Mac app still works, since it talks to the runner (docs/protocol.md, "Sync").
   ["Do I have to use Convex?",
@@ -324,8 +338,13 @@ function fingerprint(name) {
   return `/${hashed}`;
 }
 
-rmSync(dist, { recursive: true, force: true });
-mkdirSync(dist, { recursive: true });
+// A check builds into the folder mkdtemp just made (mode 0700, this account's), never a remade one:
+// removing it and making it again let another account on a shared /tmp put its own folder at that
+// name in between, with symlinks at the names written below (Daybreak, 13 Nov).
+if (!CHECK) {
+  rmSync(dist, { recursive: true, force: true });
+  mkdirSync(dist, { recursive: true });
+}
 cpSync(join(root, "public"), dist, { recursive: true, filter: (from) => !from.endsWith(".DS_Store") });
 
 const styles = fingerprint("styles.css");
@@ -441,7 +460,7 @@ writePage("changelog", {
   title: "What's new · Threadbear",
   description: "What's new in Threadbear, a release at a time, with a look at the biggest changes.",
   path: "/changelog",
-}, changelogPage({ releases: readReleases(join(root, "changelog")), githubUrl: GITHUB_URL }));
+}, changelogPage({ releases: readReleases(join(root, "changelog")), githubUrl: GITHUB_URL, people: readPeople(join(root, "changelog")) }));
 
 // Every link and image that stays on the site has to land somewhere: a page, a file, and the
 // #anchor on it if there is one.
@@ -454,7 +473,7 @@ for (const [name, { html }] of built) {
     // `npm run media -- check` checks they're up.
     if (clean.startsWith("/media/")) continue;
     const page = built.get(pageName);
-    if (!page && !existsSync(join(dist, clean))) throw new Error(`${name}.html: ${attr}="${target}" goes nowhere`);
+    if (!page && !existsSync(join(dist, clean)) && !leftOut.has(clean)) throw new Error(`${name}.html: ${attr}="${target}" goes nowhere`);
     if (anchor && !(page ?? built.get(name)).html.includes(` id="${anchor}"`)) throw new Error(`${name}.html: ${target} has no #${anchor}`);
   }
 }
@@ -462,4 +481,6 @@ for (const [name, { html }] of built) {
 const urls = [...built.values()].map(({ page }) => page.path).filter(Boolean).sort()
   .map((p) => `  <url><loc>${SITE_URL}${p}</loc></url>`).join("\n");
 writeFileSync(join(dist, "sitemap.xml"), `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${urls}\n</urlset>\n`);
-console.log(`Built ${pages.length} pages and ${guide.sections.length + 1} docs pages into site/dist (${commits} commits since ${firstDay}).`);
+console.log(CHECK
+  ? `Checked ${pages.length} pages, ${guide.sections.length + 1} docs pages and the changelog: they build.`
+  : `Built ${pages.length} pages and ${guide.sections.length + 1} docs pages into site/dist (${commits} commits since ${firstDay}).`);

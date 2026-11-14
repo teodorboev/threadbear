@@ -39,12 +39,16 @@ fn two_groups() -> DockLayout {
 
 /// A headless window with the dock in it, and its model.
 fn open(cx: &mut TestAppContext) -> (AnyWindowHandle, Entity<DockModel>) {
+    open_with(cx, DockOptions::default())
+}
+
+fn open_with(cx: &mut TestAppContext, options: DockOptions) -> (AnyWindowHandle, Entity<DockModel>) {
     cx.update(gpui_kit::init);
     let model = cx.new(|_| DockModel::new(two_groups()));
     let m = model.clone();
     let handle = cx.update(|cx| {
         let bounds = Bounds { origin: gpui_kit::Point::default(), size: size(px(1000.), px(600.)) };
-        gpui_kit::open_window(WindowOptions { window_bounds: Some(WindowBounds::Windowed(bounds)), ..Default::default() }, cx, move |_, cx| cx.new(|cx| DockView::new(m, Rc::new(Panels), DockOptions::default(), cx))).expect("a test window").0
+        gpui_kit::open_window(WindowOptions { window_bounds: Some(WindowBounds::Windowed(bounds)), ..Default::default() }, cx, move |_, cx| cx.new(|cx| DockView::new(m, Rc::new(Panels), options, cx))).expect("a test window").0
     });
     // Draw once so the bars and frames are measured.
     cx.update_window(handle, |_, window, cx| window.render_frame(cx)).unwrap();
@@ -128,6 +132,39 @@ async fn a_body_press_does_nothing_without_a_hold(cx: &mut TestAppContext) {
     cx.update_window(handle, |_, w, cx| w.pointer_move(p + gpui_kit::point(px(40.), px(0.)), Some(MouseButton::Left), cx)).unwrap();
     assert_eq!(drag_panel(cx, &model), Some("b".to_string()));
     cx.update_window(handle, |_, w, cx| w.pointer_up(p, MouseButton::Left, cx)).unwrap();
+}
+
+/// Presses at `p`, holds past the hold, then moves: whichever panel that
+/// picked up, and lets go.
+fn held_drag(cx: &mut TestAppContext, handle: AnyWindowHandle, model: &Entity<DockModel>, p: gpui_kit::Point<Pixels>) -> Option<String> {
+    cx.update_window(handle, |_, w, cx| {
+        w.pointer_move(p, None, cx);
+        w.pointer_down(p, MouseButton::Left, cx);
+    })
+    .unwrap();
+    std::thread::sleep(Duration::from_millis(400));
+    cx.update_window(handle, |_, w, cx| w.pointer_move(p + gpui_kit::point(px(40.), px(0.)), Some(MouseButton::Left), cx)).unwrap();
+    let picked = drag_panel(cx, model);
+    cx.update_window(handle, |_, w, cx| w.pointer_up(p, MouseButton::Left, cx)).unwrap();
+    cx.run_until_parked();
+    picked
+}
+
+// Threadbear turns the background off (Mike, 13 Nov: most of the time a
+// press there is meant for the panel, and the tab is where you drag it).
+#[gpui_kit::test]
+async fn with_the_background_off_only_a_panel_with_no_bar_moves_from_it(cx: &mut TestAppContext) {
+    let (handle, model) = open_with(cx, DockOptions { background_moves_panel: false, ..DockOptions::default() });
+    let body = frame(cx, &model, "left");
+    let p = at(body, 100., 300.);
+    assert_eq!(held_drag(cx, handle, &model, p), None, "a held press on the background of a panel with a bar does nothing");
+
+
+    // With its title hidden there's no tab to drag, so the background does.
+    model.update(cx, |m, cx| m.set_title_hidden("a", true, cx));
+    cx.update_window(handle, |_, window, cx| window.render_frame(cx)).unwrap();
+    let body = frame(cx, &model, "left");
+    assert_eq!(held_drag(cx, handle, &model, at(body, 100., 300.)), Some("a".to_string()));
 }
 
 #[gpui_kit::test]

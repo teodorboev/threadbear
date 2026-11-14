@@ -422,10 +422,36 @@ import UniformTypeIdentifiers
         let pairing = try #require(Pairing.parse(url))
         #expect(pairing.deploymentURL.absoluteString == "https://mac.tail9ef766.ts.net:3210")
         #expect(Pairing.parse(pairing.link) == pairing)
-        for bad in ["http://mac.tail9ef766.ts.net:3210", "https://user@mac.tail9ef766.ts.net:3210", "https://mac.tail9ef766.ts.net:3210/api", "https://mac.tail9ef766.ts.net:3210?x=1", "https://ts.net", "https://evil.ts.net.example.com", "https://tail9ef766.ts.net"] {
+        for bad in ["http://mac.tail9ef766.ts.net:3210", "https://user@mac.tail9ef766.ts.net:3210", "https://mac.tail9ef766.ts.net:3210/api", "https://mac.tail9ef766.ts.net:3210?x=1"] {
             let link = URL(string: "threadbear://pair?url=\(bad.addingPercentEncoding(withAllowedCharacters: .alphanumerics)!)&token=t")!
             #expect(Pairing.parse(link) == nil, "\(bad)")
         }
+    }
+
+    /// A self-hosted backend at an address of the user's own (setup --url,
+    /// 14 Nov 2026): any https host, kept to its origin, never this phone's
+    /// own loopback, and keyed by host and port like a tailnet one.
+    @Test func pairsWithABackendAtAnyHTTPSAddress() throws {
+        for (raw, want) in [("https://Threadbear.Example.com", "https://threadbear.example.com"),
+                            ("https://threadbear.example.com/", "https://threadbear.example.com"),
+                            ("https://192.168.1.20:8443", "https://192.168.1.20:8443"),
+                            ("https://homelab.internal:3210", "https://homelab.internal:3210")] {
+            let link = URL(string: "threadbear://pair?url=\(raw.addingPercentEncoding(withAllowedCharacters: .alphanumerics)!)&token=t")!
+            let pairing = try #require(Pairing.parse(link), "\(raw)")
+            #expect(pairing.deploymentURL.absoluteString == want)
+            #expect(Pairing.parse(pairing.link) == pairing)
+        }
+        for bad in ["http://threadbear.example.com", "https://user:pw@threadbear.example.com", "https://threadbear.example.com/convex", "https://threadbear.example.com/#x",
+                    "https://127.0.0.1:13210", "https://localhost:3210", "https://[::1]:3210", "ftp://threadbear.example.com"] {
+            let link = URL(string: "threadbear://pair?url=\(bad.addingPercentEncoding(withAllowedCharacters: .alphanumerics)!)&token=t")!
+            #expect(Pairing.parse(link) == nil, "\(bad)")
+        }
+        #expect(Pairing.serverName(URL(string: "https://threadbear.example.com:8443")!) == "threadbear.example.com:8443")
+        #expect(Pairing.serverName(URL(string: "https://threadbear.example.com")!) == "threadbear.example.com")
+        // Keys from before stay as they were.
+        #expect(Pairing.serverName(URL(string: "https://mac.tail1.ts.net:3210")!) == "mac.tail1.ts.net:3210")
+        #expect(Pairing.serverName(URL(string: "https://happy-bear-123.convex.cloud:443")!) == "happy-bear-123.convex.cloud")
+        #expect(Pairing.serverName(URL(string: "http://127.0.0.1:3210")!) == "127.0.0.1")
     }
 
     /// An older backend leaves pushOff out, and that means it can send.
@@ -455,8 +481,8 @@ import UniformTypeIdentifiers
         #expect(try #require(Pairing.parse(URL(string: "threadbear://pair?url=https://x.convex.cloud&token=t")!)).runnerKeys.isEmpty)
     }
 
-    @Test func refusesOtherHosts() {
-        #expect(Pairing.parse(URL(string: "threadbear://pair?url=https://evil.example.com&token=t")!) == nil)
+    @Test func refusesPlainHTTP() {
+        #expect(Pairing.parse(URL(string: "threadbear://pair?url=http://evil.example.com&token=t")!) == nil)
         #expect(Pairing.parse(URL(string: "threadbear://pair?url=http://a.convex.cloud&token=t")!) == nil)
     }
 }

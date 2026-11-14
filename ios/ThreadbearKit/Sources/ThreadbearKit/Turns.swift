@@ -26,7 +26,23 @@ public struct WorkedTurn: Hashable, Sendable {
 /// "Needs you", "The summary"): Mike's message, one line of work, then the
 /// reply. The phone has a small screen, so this matters more here.
 public enum Turns {
+    /// A thread's items, with each login's note (role `note`) where it
+    /// happened: after what was on show before it and before the first
+    /// reply after it. The notes are taken out first, so a turn folds and
+    /// picks its reply as if they weren't there, as the Mac keeps them out
+    /// of its line of work. `web/src/turns.ts` does the same.
     public static func fold(_ messages: [PhoneMessage], busy: Bool) -> [ThreadItem] {
+        let notes = messages.filter { $0.role == .note }
+        guard !notes.isEmpty else { return foldTurns(messages, busy: busy) }
+        var out = foldTurns(messages.filter { $0.role != .note }, busy: busy)
+        for note in notes {
+            let at = out.firstIndex { ($0.placedSeq ?? .min) > note.seq } ?? out.count
+            out.insert(.note(note), at: at)
+        }
+        return out
+    }
+
+    static func foldTurns(_ messages: [PhoneMessage], busy: Bool) -> [ThreadItem] {
         // A turn starts at a message from Mike, the phone, a schedule or
         // another agent; one the runner sent (a restart, a resume) joins the
         // turns before it, as on the Mac.
@@ -186,7 +202,8 @@ public enum Turns {
     /// tool's row, and the done card went by the very last row, so it never
     /// showed there while the Mac and the website did (the parity run, 9 Nov).
     public static func lastShown(_ messages: [PhoneMessage]) -> PhoneMessage? {
-        messages.last { $0.role != .tool || isStep($0) }
+        // Nor a login's note: it's the runner's line, after the reply.
+        messages.last { $0.role != .note && ($0.role != .tool || isStep($0)) }
     }
 
     /// A step of work: a tool call outside Threadbear's own tools and
@@ -195,7 +212,7 @@ public enum Turns {
     static func isStep(_ m: PhoneMessage) -> Bool {
         switch m.role {
         case .user: true
-        case .assistant: false
+        case .assistant, .note: false
         case .tool: !(m.text.hasPrefix("threadbear: ") || m.text.hasPrefix("Find tools: "))
         }
     }
@@ -217,8 +234,6 @@ public struct PhoneAsk: Codable, Sendable, Hashable {
     /// Web pages to go to; files on the Mac never come to the phone.
     public var links: [PhoneAskLink]?
     public var ticked: Bool?
-    /// A command with a Run button (backend API 71), shown whole.
-    public var run: PhoneAskRun?
 
     public init(action: String, why: String? = nil, reply: String? = nil, options: [String]? = nil, optionNotes: [String]? = nil, suggested: Double? = nil, links: [PhoneAskLink]? = nil, ticked: Bool? = nil) {
         self.action = action
@@ -269,22 +284,6 @@ public struct PhoneAsk: Codable, Sendable, Hashable {
     public var suggestedIndex: Int? { suggested.flatMap { $0.wholeCount() } }
 }
 
-public struct PhoneAskRun: Codable, Sendable, Hashable {
-    public var command: String
-    public var buttonId: String
-    public var cwd: String?
-    public var running: Bool?
-    public var failed: String?
-
-    public init(command: String, buttonId: String, cwd: String? = nil, running: Bool? = nil, failed: String? = nil) {
-        self.command = command
-        self.buttonId = buttonId
-        self.cwd = cwd
-        self.running = running
-        self.failed = failed
-    }
-}
-
 public struct PhoneAskLink: Codable, Sendable, Hashable {
     public var title: String
     public var url: String
@@ -333,6 +332,23 @@ public struct AskAnswer: Codable, Sendable, Hashable {
         asks.enumerated().compactMap { i, ask in
             guard let n = picks[i], ask.choices.indices.contains(n) else { return nil }
             return (i, AskAnswer(action: ask.action, answer: ask.choices[n]))
+        }
+    }
+}
+
+extension ThreadItem {
+    /// Where an item sits among the thread's rows, for placing a note. A
+    /// turn's folded work has no place of its own: its line goes above the
+    /// turn's replies whichever rows it holds, so a login that ran out
+    /// before doing anything put the note above the limit's own words, by
+    /// the work that came after (Codex's review, 13 Nov). The note goes by
+    /// the messages instead. A divider goes with the row after it.
+    var placedSeq: Int? {
+        switch self {
+        case let .message(m), let .note(m): m.seq
+        case let .tools(items): items.first?.seq
+        case .worked: nil
+        case let .gap(g): g.seq
         }
     }
 }

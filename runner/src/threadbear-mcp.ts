@@ -25,7 +25,7 @@ import { SAID_MAX } from './wake-when.ts';
 
 export { parseWhen, relativeFuture, relativeTime };
 import { RUNNER_VERSION, expandHome } from './config.ts';
-import { runCommandProblem, ALREADY_ENDED, ARCHIVE_ADDED, MAX_UNTIL, MAX_WAIT_FOR, SNOOZE_ADDED, snoozeFromTool, endTurnDescription, endTurnForm, endTurnMisfit, endTurnTaken, openCardsNote, END_TURN_TOOL, BULLETS_ONLY, ENDED, takenEndTurn, MAX_BYLINE, NARRATION_ONLY, NO_REPLY, needsFromTool, oneReplyAccepted, offersToTakeItBack, oneReplyAlreadyWritten, summaryFromTool, triedFirstNudged, tryFirstNudge, turnReply, type TurnReply } from './needs.ts';
+import { droppedOpenLines, OPEN_GONE, ALREADY_ENDED, ARCHIVE_ADDED, MAX_UNTIL, MAX_WAIT_FOR, SNOOZE_ADDED, snoozeFromTool, endTurnDescription, endTurnForm, endTurnMisfit, endTurnTaken, openCardsNote, END_TURN_TOOL, BULLETS_ONLY, ENDED, takenEndTurn, MAX_BYLINE, NARRATION_ONLY, NO_REPLY, needsFromTool, oneReplyAccepted, offersToTakeItBack, oneReplyAlreadyWritten, summaryFromTool, triedFirstNudged, tryFirstNudge, turnReply, unreadMessageRefusal, type TurnReply } from './needs.ts';
 
 // end_turn's needs, both forms: "done" meant this turn's step until 11 Nov
 // 2026, when thread 0222c475 said nothing with three draft PRs unmerged in
@@ -62,6 +62,12 @@ export type ThreadControl = {
   unpin?: (...args: Parameters<Runner['unpin']>) => Aw<ReturnType<Runner['unpin']>>;
   showPanel?: (threadId: string, ask: Parameters<Runner['showPanel']>[1]) => ReturnType<Runner['showPanel']>;
   endTurnNudged?: (threadId: string) => boolean;
+  // The Stop hook sent the turn back for a card its reply asked for, after an
+  // end_turn it took (needs.ts, REPLY_ASKS): the next one isn't a repeat.
+  cardReopened?: (threadId: string) => boolean;
+  // A message the agent can't have read when it wrote this end_turn
+  // (needs.ts, UNREAD_MESSAGE). Asking counts as a refusal for it.
+  unreadMessage?: (threadId: string) => boolean;
   // What this thread's subagents are parked on (approvals.ts).
   openSubagentCards?: (threadId: string) => string[];
   // What end_turn owes a review by another lab (runner/lab-review.ts).
@@ -257,11 +263,6 @@ export function buildThreadbearTools(
     gateway?: () => string | undefined;
     gatewayHealth?: () => Promise<ConnectorService[] | undefined>;
     remote?: () => RemoteControl | undefined;
-    // The runAsks experiment: end_turn's asks[].run is only offered while
-    // it's on.
-    runAsks?: () => boolean;
-    // The looseEnds experiment: end_turn's open is only offered while it's on.
-    looseEnds?: () => boolean;
   } = {},
 ) {
   const codex = opts.provider === 'codex';
@@ -1360,9 +1361,20 @@ export function buildThreadbearTools(
     return endTurnTaken({ ok: true, text }) ? text + openCardsNote(control.openSubagentCards?.(selfId) ?? []) : text;
   };
 
+  // A call written before the agent could read a message sent into the turn
+  // (needs.ts, UNREAD_MESSAGE). Only the thread's own call, which is in its
+  // events by now: a sub-agent's never is, and asking for it would use up
+  // the refusal its parent's call needs (from Codex's review).
+  const refuseUnread = async (): Promise<void> => {
+    if (codex || !control.unreadMessage) return;
+    if ((await replied()).landed && control.unreadMessage(selfId)) throw new Error(unreadMessageRefusal());
+  };
+
   const repeatEndTurn = (events: PersistedEvent[], input: { needs?: unknown; archive?: unknown; snooze?: unknown }): string | undefined => {
     const taken = takenEndTurn(events, SERVER_NAME);
     if (!taken) return undefined;
+    // Sent back for a card its reply asked for: this call is that card.
+    if (control.cardReopened?.(selfId)) return undefined;
     const waiting = input.needs === 'you' || needsFromTool(taken)?.needs === 'you';
     if (input.archive === true && !waiting) return ARCHIVE_ADDED;
     // So does snooze, for the same reason (needs.ts, snoozeFromTool).
@@ -1448,9 +1460,6 @@ export function buildThreadbearTools(
                 .max(3)
                 .optional()
                 .describe('Where to go to do it or judge it: the page, the PR, the file. Give one whenever there is somewhere to go.'),
-              ...(opts.runAsks?.() === true
-                ? { run: z.string().optional().describe("A shell command for them to run with one press, when it's theirs to run and you can't (prod, a deploy). The card shows it with a Run button; it runs once in this thread's folder with no way to answer a prompt, and the output comes back to you as a message.") }
-                : {}),
             }),
           )
           .max(10)
@@ -1461,16 +1470,6 @@ export function buildThreadbearTools(
           .max(3)
           .optional()
           .describe('With needs "nothing": follow-ups worth doing next, in the user\'s voice, which they read later with this thread forgotten: which app or thing, and what they\'d see change or get, in their words, 8 to 15 words. See the description. Only ones that really came up; usually none.'),
-        // The agent's own "anything else?" before Mike has to type it
-        // (experiment looseEnds; docs/protocol.md, "Loose ends"): the
-        // runner sees git and threads, not a decision waiting on someone.
-        // Not Mike's own steps, nor the agent's for later: a "Reply to
-        // Gautam" line sat on a card he couldn't click or clear, after
-        // he'd sent it, and "I'll rebuild at 5:27" came back to his inbox
-        // unrun (12 Nov 2026).
-        ...(opts.looseEnds?.() === true
-          ? { open: z.array(z.string()).max(3).optional().describe('With needs "nothing": what\'s still open that git and Threadbear can\'t see and that waits on someone else or runs elsewhere (a colleague\'s decision, a job still running), a short line each; [] when nothing is. Never a step for the user (that\'s an ask) or one you\'ll do yourself later (book it with schedule_message). The done card lists them.') }
-          : {}),
         byline: z
           .string()
           .optional()
@@ -1482,23 +1481,20 @@ export function buildThreadbearTools(
         snooze: z
           .string()
           .optional()
-          .describe('Hibernates this thread once the turn is over, until 2h, 1d, tomorrow, an ISO time with its offset, "restart" (the runner next starting), "release" (it starting on a new release) or words saying when ("when the phone arrives"), with needs "nothing": when the user asked for that, or when the rest waits on a message (one wakes it), until it should have come. It only brings the thread back, it doesn\'t run you: for a step of your own later, use schedule_message. Asked after you called end_turn? Call it again with this.'),
+          .describe('Hibernates this thread once the turn is over, until 2h, 1d, tomorrow, an ISO time with its offset, "restart" (the runner next starting), "release" (it starting on a new release) or words saying when ("when the phone arrives"), with needs "nothing": when the user asked for that, or when the rest waits on a message (one wakes it), until it should have come. It only brings the thread back, it doesn\'t run you: for a step of your own later, use schedule_message. Except words for something to happen ("until X ships"): those wake you with a turn to check. Asked after you called end_turn? Call it again with this.'),
         waitFor: waitForArg,
         findings: findingsArg,
       },
       handle(sayingOpenCards(async (input) => {
         checkSnooze(input.snooze);
-        // Refused rather than dropped, so the agent doesn't tell them there's
-        // a Run button when the card has none.
-        for (const ask of (input as { asks?: { run?: unknown }[] }).asks ?? []) {
-          const problem = typeof ask.run === 'string' ? runCommandProblem(ask.run) : undefined;
-          if (problem) throw new Error(problem);
-        }
         const parsed = needsFromTool(input);
         const needs = parsed?.needs ?? 'nothing';
         await checkWaitFor(input.waitFor, needs);
         const asks = parsed?.asks ?? [];
         const events = await turnEvents();
+        // Before anything that could take the call: a refusal of any kind
+        // hands the message over, so only an accepted one needs this.
+        await refuseUnread();
         const repeat = repeatEndTurn(events, input);
         if (repeat) return repeat;
         checkFindings(input, needs, events);
@@ -1525,7 +1521,10 @@ export function buildThreadbearTools(
         // line it would only write again. A call that never landed is taken
         // as having written nothing: its turn can't be read.
         const before = codex ? undefined : await replied();
-        return oneReplyAccepted(needs === 'you', restart, Boolean(before?.landed && before.replied));
+        // A turn sent back for a card (needs.ts, REPLY_ASKS) that has worked
+        // since its reply, after a refusal: the reply it writes now takes the
+        // first one's place, so it's asked for whole (from Codex's review).
+        return oneReplyAccepted(needs === 'you', restart, Boolean(before?.landed && before.replied) || control.cardReopened?.(selfId) === true);
       })),
     );
 
@@ -1584,7 +1583,7 @@ export function buildThreadbearTools(
         snooze: z
           .string()
           .optional()
-          .describe('Hibernate this thread once the turn is over, until 30m, 2h, 1d, tomorrow, an ISO time with its offset, "restart" (until the runner next starts), "release" (until it starts on a new release), or words saying when ("when the phone arrives"). Only with needs "nothing": when the user has asked for this thread to be snoozed or hibernated, or when the rest waits on a message (one wakes it), until it should have come. It only brings the thread back, it doesn\'t run you: for a step of your own later, use schedule_message. If they ask after you have called end_turn, call it again with this.'),
+          .describe('Hibernate this thread once the turn is over, until 30m, 2h, 1d, tomorrow, an ISO time with its offset, "restart" (until the runner next starts), "release" (until it starts on a new release), or words saying when ("when the phone arrives"). Only with needs "nothing": when the user has asked for this thread to be snoozed or hibernated, or when the rest waits on a message (one wakes it), until it should have come. It only brings the thread back, it doesn\'t run you: for a step of your own later, use schedule_message. Except words for something to happen ("until X ships"): those wake you with a turn to check. If they ask after you have called end_turn, call it again with this.'),
         waitFor: waitForArg,
         findings: findingsArg,
       },
@@ -1616,6 +1615,7 @@ export function buildThreadbearTools(
         // runner knows, so it keeps a message that follows anyway
         // (needs.ts, BULLETS_ONLY).
         const owed = Boolean(!needsMessage && reply && (!reply.replied || reply.narrationOnly));
+        await refuseUnread();
         const repeat = repeatEndTurn(await turnEvents(), { ...args, needs });
         if (repeat) return repeat;
         // A connector that needs Mike to sign in again (a gateway service
@@ -1683,7 +1683,14 @@ export function buildThreadbearTools(
       const form = endTurnForm(args);
       return Boolean(form) && (form === 'oneReply') !== oneReply;
     };
-    if (codex) return Object.assign(today, { formFor: (args: unknown) => (otherForm(args) ? other : today) });
+    // A session from before 13 Nov 2026 still sends `open` (needs.ts,
+    // droppedOpenLines). No schema has it now, so it's gone by the time a
+    // handler runs: what the call is told is added here, from the call as
+    // it came, and only to a done turn that was taken.
+    const openGone = (r: Result): Result => (!r.isError && r.content[0]?.text.startsWith(`${ENDED} is done`) ? ok(r.content.map((c) => c.text).join('\n') + OPEN_GONE) : r);
+    const sayingOpenGone = (t: typeof today, args: unknown): typeof today =>
+      droppedOpenLines(args) ? ({ ...t, handler: (async (a: unknown, extra: unknown) => openGone(await (t.handler as (a: unknown, extra: unknown) => Promise<Result>)(a, extra))) as never }) : t;
+    if (codex) return Object.assign(today, { formFor: (args: unknown) => sayingOpenGone(otherForm(args) ? other : today, args) });
     // Unlike Codex, which runs the other form's handler, Claude's goes by
     // how its CLI was started: it ends the turn at an accepted end_turn only
     // with bullets (adapter.ts, terminalMcpTools), so only today's handler
@@ -1700,7 +1707,9 @@ export function buildThreadbearTools(
       inputSchema: z.looseObject(published) as never,
       handler: (async (args: unknown, extra: unknown) => {
         const fits = z.object((otherForm(args) ? shapes.other : shapes.today) as z.ZodRawShape).safeParse(args);
-        return fits.success ? run(fits.data, extra) : fail(endTurnMisfit(z.prettifyError(fits.error), oneReply));
+        if (!fits.success) return fail(endTurnMisfit(z.prettifyError(fits.error), oneReply));
+        const r = await run(fits.data, extra);
+        return droppedOpenLines(args) ? openGone(r) : r;
       }) as never,
     });
   };
@@ -1714,8 +1723,8 @@ export function buildThreadbearTools(
             "Sends you a message in this thread when the user's Threadbear Mac app next restarts onto a new build: after you've landed an app change and asked them to Restart to Update (in the Threadbear menu), so you can check it in the running app. An end_turn ask that mentions Restart to Update does this by itself. `text` is what to send then; by default a line saying it restarted. One per thread: asking again replaces it.",
             { text: z.string().max(4000).optional().describe('What to send when it restarts, e.g. what to check.') },
             handle(async ({ text }) => {
-              const { build } = appRestarts.watch(selfId, text);
-              return `You'll get a message here when the app restarts onto a build other than the one running now${build ? ` (${build.short})` : ''}. End your turn when you've nothing else to do.`;
+              const { running } = appRestarts.watch(selfId, text);
+              return `You'll get a message here when the app restarts onto a build other than the one running now${running ? ` (${running})` : ''}. End your turn when you've nothing else to do.`;
             }),
           ),
         ]
@@ -1865,7 +1874,7 @@ export function buildThreadbearTools(
           const confined = Boolean(caller?.confined && !there && cwd && control.sandboxed?.(cwd));
           const target: Authority = { mode: permissionMode ?? 'full', confined };
           if (caller && above(target, caller)) {
-            await confirm('create_thread', [`Start a thread with ${accessName(target, caller)}${cwd ? ` in ${cwd}` : ''}${there ? ` on ${runner!.trim()}` : ''}`], { from: head.trim(), text, folder: cwd, permissionMode: target.mode, ...(there ? { runner } : {}) }, extra?.signal);
+            await confirm('create_thread', [`Start a thread with ${accessName(target, caller)}${cwd ? ` in ${cwd}` : ''}${there ? ` on ${runner!.trim()}` : ''}`], { from: head.trim(), text, ...(title?.trim() ? { title: title.trim() } : {}), folder: cwd, permissionMode: target.mode, ...(there ? { runner } : {}) }, extra?.signal);
             if (!there) await sameFolder(f ?? '.', cwd!);
           }
           return { cwd, confined };
@@ -1976,7 +1985,7 @@ export function buildThreadbearTools(
         const id = await resolve(asked);
         const stops = (snooze !== undefined && snooze.trim().toLowerCase() !== 'off') || archived === true;
         if (id === selfId && stops) throw new Error("Can't snooze or archive this thread from inside its own turn. Do it once the turn is over by calling end_turn with needs \"nothing\" and archive: true, or snooze: and when to wake (the times this takes, or words like \"when the phone arrives\"), again if you already have.");
-        const upd: Parameters<ThreadControl['update']>[0] = { threadId: id };
+        const upd: Parameters<ThreadControl['update']>[0] = { threadId: id, byAgent: true };
         if (title !== undefined) {
           upd.title = title;
           upd.titleBy = mikeAsked ? 'mike' : 'agent';
@@ -1997,13 +2006,20 @@ export function buildThreadbearTools(
         // moving a thread outside its sandbox onto another login (its pool)
         // is reaching outside (as update_schedule's login, above).
         const by = await restricted();
+        // A title is the renaming agent's own words, and a thread's title
+        // reaches its agent and others' (list_threads, a new thread's
+        // same-work note), so renaming a thread with more access is a
+        // message to it (Codex's review of Daybreak finding 111, 13 Nov 2026).
+        if (title !== undefined) await confirm('update_thread', await sendReason(id, by, 'Rename'), { threadId: id, title }, extra?.signal);
         if (by?.confined && p !== undefined && id !== selfId) {
           const t = await accessOf(id);
           if (above(t, by)) await confirm('update_thread', [`Change the logins of "${t.title}", which has ${accessName(t, by)}`], { threadId: id, pool: p }, extra?.signal);
         }
         if (permissionMode !== undefined && by) {
           const t = await modeOf(id);
-          if (raises(permissionMode, t.mode)) await confirm('update_thread', [`Switch ${threadName(id, t.title)} to ${MODE_NAMES[permissionMode]}`], { threadId: id, permissionMode }, extra?.signal);
+          // The card shows a title set in the same call: allowed, it lands
+          // under the raised mode (Codex's second review, finding 111).
+          if (raises(permissionMode, t.mode)) await confirm('update_thread', [`Switch ${threadName(id, t.title)} to ${MODE_NAMES[permissionMode]}`], { threadId: id, permissionMode, ...(title !== undefined ? { title } : {}) }, extra?.signal);
           // The mode it has already is left out, so this write landing after
           // someone else lowers it (a handover's round trip) can't raise it back.
           else if (permissionMode === t.mode) delete upd.permissionMode;
@@ -2075,7 +2091,7 @@ export function buildThreadbearTools(
           if (reasons.length) await sameFolder(f, cwd);
         }
         // Allowed (or never shut in): it may leave the sandbox now.
-        const t = (await control.update({ threadId: id, cwd, accountId, ...(leaves ? { unconfine: true } : {}) })).thread;
+        const t = (await control.update({ threadId: id, cwd, accountId, byAgent: true, ...(leaves ? { unconfine: true } : {}) })).thread;
         const self = id === selfId;
         if (then?.trim()) {
           await control.send(id, `${MOVE_MESSAGE_PREFIX}${t.cwd}]\n\n${then.trim()}`);
@@ -2234,13 +2250,13 @@ export function serverInstructions(selfId: string, o: { one: boolean; bulletRepl
   );
 }
 
-export function threadbearMcpServer(control: ThreadControl, selfId: string, schedules?: ScheduleControl, projects?: ProjectControl, appRestarts?: AppRestartControl, bulletReplies: () => boolean = () => true, pocket?: () => PocketControl | undefined, oneReply: () => boolean = () => false, gateway?: () => string | undefined, gatewayHealth?: () => Promise<ConnectorService[] | undefined>, remote?: () => RemoteControl | undefined, runAsks?: () => boolean, looseEnds?: () => boolean): McpSdkServerConfigWithInstance {
+export function threadbearMcpServer(control: ThreadControl, selfId: string, schedules?: ScheduleControl, projects?: ProjectControl, appRestarts?: AppRestartControl, bulletReplies: () => boolean = () => true, pocket?: () => PocketControl | undefined, oneReply: () => boolean = () => false, gateway?: () => string | undefined, gatewayHealth?: () => Promise<ConnectorService[] | undefined>, remote?: () => RemoteControl | undefined): McpSdkServerConfigWithInstance {
   const one = oneReply();
   const server = createSdkMcpServer({
     name: SERVER_NAME,
     version: RUNNER_VERSION,
     instructions: serverInstructions(selfId, { one, bulletReplies: bulletReplies(), pocket: Boolean(pocket?.()), projects: Boolean(projects) }),
-    tools: buildThreadbearTools(control, selfId, Date.now, schedules, projects, appRestarts, { bulletReplies, pocket, oneReply: () => one, gateway, gatewayHealth, remote, runAsks, looseEnds }),
+    tools: buildThreadbearTools(control, selfId, Date.now, schedules, projects, appRestarts, { bulletReplies, pocket, oneReply: () => one, gateway, gatewayHealth, remote }),
   });
   server.tools = [...ALWAYS_ASK_TOOLS].map((name) => ({ name: name.split('__').at(-1)!, permission_policy: 'always_ask' as const }));
   return server;

@@ -15,7 +15,7 @@ use crate::sidebar::{icon, icon_button, palette, tipped, MenuAction, MenuRow, Pa
 use crate::{call, icons, now_ms, style};
 use gpui_kit::base::TestSupportExt as _;
 use gpui_kit::component::dialog::DialogButtonProps;
-use gpui_kit::component::spinner::Spinner;
+use crate::spinner::Spinner;
 use gpui_kit::component::{h_flex, v_flex, Sizable as _, WindowExt as _};
 use gpui_kit::prelude::*;
 use gpui_kit::*;
@@ -469,7 +469,7 @@ impl Threadbear {
             .id(ElementId::Name(format!("schedule-{id}").into()))
             .test_support()
             // Named by its tip, as the Swift app's rows are found.
-            .aria_label(tip.clone())
+            .role(Role::ListItem).aria_label(tip.clone())
             .tip(tip.clone())
             .relative()
             .gap(px(3.))

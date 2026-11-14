@@ -44,7 +44,7 @@ impl Threadbear {
         let launch = crate::installed::launch();
         let short = launch.build.as_ref().map(|b| b.short.clone()).filter(|s| !s.is_empty());
         let view = AboutView {
-            lines: den::lines(self.threads.values(), now, &local),
+            lines: den::lines(self.threads.values().map(|t| &**t), now, &local),
             build: launch.build.as_ref().and_then(|b| den::build(&b.short, &b.built_at, &local)),
             short,
         };

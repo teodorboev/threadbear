@@ -12,6 +12,10 @@ use gpui_kit::component::Icon;
 /// here: the star's shape, filled with the current text colour.
 const STAR_FILLED: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2.5l2.9 6.4 7 .7-5.2 4.7 1.5 6.9L12 17.7l-6.2 3.5 1.5-6.9-5.2-4.7 7-.7z" fill="black"/></svg>"#;
 
+/// A filled message bubble distinguishes a board card worked on by this
+/// thread from the outline button that opens another thread.
+const BUBBLE_FILLED: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 3h16a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H7l-5 3V5a2 2 0 0 1 2-2z" fill="black"/></svg>"#;
+
 /// `hand.raised.fill`, the asks card's mark: Lucide's hand is an outline, and
 /// the Swift card's is the filled one, four fingers and the thumb out to the
 /// right. Drawn to SF's proportions (about 11 by 15 at the card's 14 pt
@@ -74,6 +78,7 @@ pub fn try_symbol(name: &str) -> Option<Icon> {
     let lucide = match name {
         "star" => IconName::Star,
         "star.fill" => return Some(Icon::default().data(STAR_FILLED)),
+        "bubble.left.fill" => return Some(Icon::default().data(BUBBLE_FILLED)),
         "star.slash" => IconName::StarOff,
         "tray" => IconName::Inbox,
         "tray.and.arrow.up" => IconName::ArchiveRestore,
@@ -194,6 +199,8 @@ pub fn try_symbol(name: &str) -> Option<Icon> {
         "wrench.and.screwdriver.fill" => IconName::Wrench,
         "person.crop.circle.badge.exclamationmark" => IconName::UserRoundX,
         "checkmark.circle.fill" => IconName::CircleCheck,
+        // Finish setting up's item still to do.
+        "circle" => IconName::Circle,
         "arrow.up.right" => IconName::ArrowUpRight,
         "arrow.up.left.and.arrow.down.right" => IconName::Maximize2,
         "key" => IconName::Key,

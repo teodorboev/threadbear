@@ -343,6 +343,21 @@ pub const EFFORT_LEVELS: &[&str] = &["low", "medium", "high", "xhigh", "max"];
 pub const CODEX_EFFORT_LEVELS: &[&str] = &["low", "medium", "high", "xhigh", "max", "ultra"];
 
 /// ComposerChips.canSend.
+/// How long the Stop button stays a "Stopping…" spinner after it's pressed.
+/// The runner ends a turn its CLI doesn't stop within its 10-second grace,
+/// so a spinner older than this is left over: from a press whose thread
+/// was switched away from before the turn ended (the flag was only cleared
+/// by drawing the thread idle), so the next turn, maybe hours later, came
+/// up spinning, or from a press that never reached the runner (13 Nov
+/// 2026, the implicit state machines scan).
+pub const STOPPING_SHOWN_MS: i64 = 30_000;
+
+/// Whether a Stop pressed at `pressed_ms` still shows as "Stopping…" at
+/// `now_ms` while the thread is still busy.
+pub fn still_stopping(pressed_ms: Option<i64>, now_ms: i64) -> bool {
+    pressed_ms.is_some_and(|at| now_ms >= at && now_ms - at < STOPPING_SHOWN_MS)
+}
+
 pub fn can_send(text: &str, image_count: usize) -> bool {
     image_count > 0 || !text.trim().is_empty()
 }
@@ -879,5 +894,13 @@ mod tests {
         assert_eq!(picked_answer_label(&ask, OWN_ANSWER, Some(&note("  The testers \u{FFFC} ", 1))).as_deref(), Some("The testers"));
         assert_eq!(picked_answer_label(&ask, OWN_ANSWER, Some(&note("\u{FFFC}", 1))).as_deref(), Some("1 picture"));
         assert_eq!(picked_answer_label(&ask, OWN_ANSWER, Some(&note("", 3))).as_deref(), Some("3 pictures"));
+    }
+
+    #[test]
+    fn a_stop_shows_as_stopping_only_for_the_turn_it_was_pressed_for() {
+        assert!(still_stopping(Some(1_000), 1_000));
+        assert!(still_stopping(Some(1_000), 1_000 + STOPPING_SHOWN_MS - 1));
+        assert!(!still_stopping(Some(1_000), 1_000 + STOPPING_SHOWN_MS), "left over from a turn long gone");
+        assert!(!still_stopping(None, 5_000));
     }
 }

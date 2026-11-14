@@ -398,6 +398,31 @@ impl DockLayout {
         self.root = rest;
     }
 
+    /// Gives a panel a new id where it is: the same tab, window and hidden
+    /// title (Threadbear's Pin swaps a panel for its pinned copy in place).
+    /// Nothing happens when `from` isn't open or `to` already is.
+    pub fn rename(&mut self, from: &str, to: &str) {
+        if from == to || !self.contains(from) || self.contains(to) {
+            return;
+        }
+        self.root = Self::map_groups(&self.root, &mut |g: &DockGroup| {
+            let mut g = g.clone();
+            for p in g.panels.iter_mut().filter(|p| p.as_str() == from) {
+                *p = to.to_string();
+            }
+            if g.selected == from {
+                g.selected = to.to_string();
+            }
+            g
+        });
+        for f in self.floating.iter_mut().filter(|f| f.panel == from) {
+            f.panel = to.to_string();
+        }
+        if self.hidden_titles.remove(from) {
+            self.hidden_titles.insert(to.to_string());
+        }
+    }
+
     /// Shows a panel that's a tab in its group.
     pub fn select(&mut self, panel: &str) {
         let root = Self::map_groups(&self.root, &mut |g: &DockGroup| {

@@ -13,24 +13,13 @@ import UniformTypeIdentifiers
 /// - web addresses (http, https) open in the browser;
 /// - any other scheme opens only once Mike says yes to that link, by name;
 /// - a file is looked at after its symlinks are followed, and that real
-///   file is what opens. One that runs as a program asks first on this
-///   Mac's own threads, and is never opened from another Mac's copy;
+///   file is what opens. One that runs as a program asks first. Another
+///   Mac's files are never opened here (RemoteFiles.swift);
 /// - Threadbear's own pages and files (`openOwn`) are fixed in the code.
 ///
 /// OpenGateSourceTests fails on a `NSWorkspace.shared.open` anywhere else.
 @MainActor
 enum OpenGate {
-    /// Whose file it is, which decides what a program gets.
-    enum Origin: Equatable {
-        /// A file on this Mac: a link in this Mac's thread, a pin, a folder
-        /// Mike's browsing. A program asks first.
-        case thisMac
-        /// This Mac's copy of another Mac's file (RemoteFileCache), from
-        /// the runner called `name`: only a file in `root`, and never a
-        /// program, as that runner chose what it is.
-        case otherMac(name: String, root: URL)
-    }
-
     /// What asks Mike: the question's words and its yes button.
     struct Question: Equatable {
         var title: String
@@ -87,13 +76,13 @@ enum OpenGate {
     /// `openFile`, a `threadbear://thread/<id>` its thread, anything else
     /// only once Mike says yes to it.
     @discardableResult
-    static func openLink(_ url: URL, origin: Origin = .thisMac) -> Bool {
+    static func openLink(_ url: URL) -> Bool {
         switch LinkPolicy.kind(of: url) {
         case .web(let web):
             workspaceOpen(web)
             return true
         case .file(let file):
-            guard let cleared = clear(file, origin: origin) else { return false }
+            guard let cleared = clear(file) else { return false }
             open(cleared)
             return true
         case .ask(let other):
@@ -193,39 +182,21 @@ enum OpenGate {
         return "Threadbear can't tell what this kind of file does when it's opened.\(opener) which may run what's in it."
     }
 
-    /// Clears `url` to be opened, asking Mike first if it's a program on
-    /// this Mac, saying no (with why) if it's another Mac's program, a
-    /// copy from outside the cache, or not there.
-    static func clear(_ url: URL, origin: Origin) -> Cleared? {
+    /// Clears `url` to be opened, asking Mike first if it's a program,
+    /// saying no (with why) if it's not there.
+    static func clear(_ url: URL) -> Cleared? {
         let name = (url.path as NSString).lastPathComponent
         guard url.isFileURL, let look = look(url) else {
             refuse("\(name.isEmpty ? "That file" : name) isn't there any more.")
             return nil
         }
-        switch origin {
-        case .otherMac(let runner, let root):
-            let cache = root.standardizedFileURL.resolvingSymlinksInPath().path
-            guard look.resolved.path.hasPrefix(cache.hasSuffix("/") ? cache : cache + "/") else {
-                refuse("Threadbear only opens \(runner)'s files from its own copies of them.")
-                return nil
-            }
-            // Only a document, and only in an app that just shows it: that
-            // Mac chose the bytes, and an app on this one may run them (a
-            // .js in an editor that runs it, Codex review, 7 Nov).
-            let app = appFor(look.resolved)
-            guard look.runs == nil, let app, LinkPolicy.isViewer(bundleId: appBundleId(app)) else {
-                refuse("Threadbear won't open \(name) from \(runner) in \(app.map(appName) ?? "an app"): it could run as a program on this Mac. It shows in the pane instead.")
-                return nil
-            }
-        case .thisMac:
-            if let why = look.runs {
-                let link = look.linked ? "\n\n\(name) is a link to \(look.resolved.lastPathComponent)." : ""
-                let question = Question(
-                    title: "Open \(look.resolved.lastPathComponent)?",
-                    detail: "\(why) It's from a thread, so Threadbear asks before running it.\(link)\n\n\(look.resolved.path)",
-                    yes: "Open")
-                guard ask(question) else { return nil }
-            }
+        if let why = look.runs {
+            let link = look.linked ? "\n\n\(name) is a link to \(look.resolved.lastPathComponent)." : ""
+            let question = Question(
+                title: "Open \(look.resolved.lastPathComponent)?",
+                detail: "\(why) It's from a thread, so Threadbear asks before running it.\(link)\n\n\(look.resolved.path)",
+                yes: "Open")
+            guard ask(question) else { return nil }
         }
         let kept = FilePathRefs.withQuery(look.resolved, query: url.query, fragment: url.fragment)
         return Cleared(url: kept)
@@ -253,8 +224,8 @@ enum OpenGate {
 
     /// `clear` then `open`, for a caller that needn't see between.
     @discardableResult
-    static func openFile(_ url: URL, origin: Origin = .thisMac) -> Bool {
-        guard let cleared = clear(url, origin: origin) else { return false }
+    static func openFile(_ url: URL) -> Bool {
+        guard let cleared = clear(url) else { return false }
         open(cleared)
         return true
     }
@@ -263,7 +234,7 @@ enum OpenGate {
 
     /// Whose file a link in SwiftUI text names.
     enum Files {
-        /// A thread's: another Mac's is fetched from that Mac.
+        /// A thread's: another Mac's isn't opened here.
         case thread(String)
         /// This Mac's own (a project's notes, written here).
         case thisMac

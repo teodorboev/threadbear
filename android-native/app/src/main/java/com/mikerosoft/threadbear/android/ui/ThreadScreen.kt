@@ -431,7 +431,6 @@ private fun StatusCard(vm: ThreadViewModel, thread: PhoneThread, messages: List<
     val answering by vm.answering.collectAsStateWithLifecycle()
     val answeredAsks by vm.answeredAsks.collectAsStateWithLifecycle()
     val answeredDone by vm.answeredDone.collectAsStateWithLifecycle()
-    val pressing by vm.pressingRuns.collectAsStateWithLifecycle()
     val pending = thread.pendingApproval
     // The choice tapped on this card, spinning until it goes.
     fun tapped(id: String) = answering?.takeIf { it.first == id }?.second
@@ -463,10 +462,9 @@ private fun StatusCard(vm: ThreadViewModel, thread: PhoneThread, messages: List<
         // Its own id per status, so the seconds start again when a stopped one runs.
         thread.isBusy || thread.working != null -> androidx.compose.runtime.key(thread.status == ThreadStatus.RUNNING) { WorkingLine(thread.working) }
         showsAsks -> AsksCard(
-            asks, picks, busy = answeredAsks == thread.asksSeq, pressing = pressing,
+            asks, picks, busy = answeredAsks == thread.asksSeq,
             pick = { i, c -> picks = if (c == null) picks - i else picks + (i to c) },
             send = { vm.sendAsks(thread, picks) },
-            run = { vm.run(it.buttonId) },
         )
         thread.status == ThreadStatus.ERROR -> Row(verticalAlignment = Alignment.CenterVertically) {
             Icon(Line.Alert, null, Modifier.size(16.dp), tint = signals.failed)
