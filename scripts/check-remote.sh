@@ -743,7 +743,7 @@ trap finish EXIT
 # ssh lived on, and the check with it.
 on_signal() {
   local kid
-  for kid in $(pgrep -P $$ 2>/dev/null); do kill_tree "$kid"; done
+  for kid in $(ps -A -o pid= -o ppid= 2>/dev/null | awk -v p="$$" '$2 == p { print $1 }'); do kill_tree "$kid"; done
   exit "$1"
 }
 trap 'on_signal 143' TERM
