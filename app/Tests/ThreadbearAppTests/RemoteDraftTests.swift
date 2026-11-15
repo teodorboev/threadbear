@@ -218,8 +218,8 @@ final class RemoteRowActionTests: XCTestCase {
         let (app, local) = try await app()
         app.archive("th_bruce")
         // The row archives at once (a guess the runner confirms), so wait
-        // for the call to reach bruce too, not just for the row.
-        try await until { app.threads["th_bruce"]?.isArchived == true && !away.params("threads.update").isEmpty }
+        // for the call to reach this Mac's runner too, not just for the row.
+        try await until { app.threads["th_bruce"]?.isArchived == true && !local.params("threads.update").isEmpty }
         XCTAssertEqual(app.threads["th_bruce"]?.isArchived, true)
         XCTAssertEqual(local.params("threads.update").first?["threadId"] as? String, "th_bruce")
         XCTAssertNil(app.errorMessage)
