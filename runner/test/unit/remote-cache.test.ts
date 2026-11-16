@@ -408,7 +408,14 @@ cp -R "$source/desktop/scripts/shared-cargo" "$dest/desktop/scripts/"
   // The first run makes this checkout's folders; then its target gets an old-style build in it.
   // A host each: the fake ssh runs here, so a run's in-use marker keeps the
   // last run's turn lock open.
-  const run = (where: string, ...cmd: string[]) => spawnSync('/bin/bash', [path.join(SCRIPTS, 'remote.sh'), where, '--', ...cmd], { env: h.env, encoding: 'utf8', timeout: 30_000 });
+  // remote.sh puts node's folder before the rest of the PATH. Where node sits
+  // beside a real cargo (Homebrew's /opt/homebrew/bin), that cargo would come
+  // before the fake one below, so node goes through a folder of its own.
+  const nodeDir = path.join(h.root, 'node-bin');
+  fs.mkdirSync(nodeDir);
+  fs.symlinkSync(process.execPath, path.join(nodeDir, 'node'));
+  const env = { ...h.env, THREADBEAR_NODE: path.join(nodeDir, 'node'), THREADBARE_NODE: path.join(nodeDir, 'node') };
+  const run = (where: string, ...cmd: string[]) => spawnSync('/bin/bash', [path.join(SCRIPTS, 'remote.sh'), where, '--', ...cmd], { env, encoding: 'utf8', timeout: 30_000 });
   assert.equal(run('host1', 'true').status, 0);
   const target = path.join(h.base, fs.readdirSync(h.base).find((n) => n.startsWith('target-'))!);
   fs.mkdirSync(path.join(target, 'debug', '.fingerprint'), { recursive: true });
