@@ -8,7 +8,7 @@ struct PairView: View {
     @State private var scanning = false
     /// The code the scanner read, asked about once its sheet has gone, so
     /// the alert isn't put up while the sheet is still leaving.
-    @State private var scanned: URL?
+    @State private var scanned: String?
 
     var body: some View {
         VStack(spacing: 24) {
@@ -45,13 +45,13 @@ struct PairView: View {
             }
             Spacer()
             // For when the link came another way (Messages to yourself).
-            Button("Paste a pairing link") {
-                guard let raw = UIPasteboard.general.string, let url = URL(string: raw.trimmingCharacters(in: .whitespacesAndNewlines)) else {
-                    model.report(TransportError.server("There's no link on the clipboard."))
+            Button("Paste a pairing code") {
+                guard let raw = UIPasteboard.general.string?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else {
+                    model.report(TransportError.server("There's no pairing code on the clipboard."))
                     return
                 }
                 // The clipboard is anyone's to fill, so this is asked about too.
-                model.askToPair(url)
+                model.askToPair(raw, from: .pasted)
             }
             .font(.subheadline)
             // Made-up threads on the phone only, for a look before there's
@@ -62,15 +62,14 @@ struct PairView: View {
         }
         .padding(32)
         .fullScreenCover(isPresented: $scanning, onDismiss: {
-            if let url = scanned { model.askToPair(url) }
+            if let code = scanned { model.askToPair(code, from: .scanned) }
             scanned = nil
         }) {
-            // Only a Threadbear pairing link ends the scan; any other code
-            // in view is ignored.
-            ScanSheet(accept: { $0.hasPrefix("threadbear://pair") }) { code in
-                guard let url = URL(string: code) else { return }
+            // Only a Threadbear pairing code (or an older Mac's pairing
+            // link) ends the scan; any other code in view is ignored.
+            ScanSheet(accept: { $0.hasPrefix(Pairing.textPrefix) || $0.hasPrefix("threadbear://pair") }) { code in
                 // The sheet has already dismissed itself.
-                scanned = url
+                scanned = code
             }
         }
     }

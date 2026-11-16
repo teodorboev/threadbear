@@ -31,9 +31,9 @@ test('end_turn input: nothing, you with asks, and junk falls back', () => {
 
 test('end_turn input: next steps go with needs nothing only', () => {
   // Mike, 30 Oct: follow-ups in the prose got lost under a done card.
-  assert.deepEqual(needsFromTool({ needs: 'nothing', next: [' Show Bruce pictures ', '', 7, 'Show Bruce pictures', 'Start Bruce threads'] }), {
+  assert.deepEqual(needsFromTool({ needs: 'nothing', next: [' Show Mac mini pictures ', '', 7, 'Show Mac mini pictures', 'Start Mac mini threads'] }), {
     needs: 'nothing',
-    next: ['Show Bruce pictures', 'Start Bruce threads'],
+    next: ['Show Mac mini pictures', 'Start Mac mini threads'],
   });
   assert.deepEqual(needsFromTool({ summary: ['Done.'], next: ['Do the next bit'] }), { needs: 'nothing', next: ['Do the next bit'] });
   assert.equal(needsFromTool({ needs: 'nothing', next: ['a', 'b', 'c', 'd'] })!.next!.length, 3);
@@ -158,15 +158,15 @@ test('the section: follow-ups listed after "nothing needed" are the done card\'s
     '',
     'So everything from this thread is now live:',
     '- **On your Mac:** the app records calls again.',
-    '- **On Bruce:** new calls get their speakers labelled by Nemotron 3 Diarization.',
+    '- **On Mac mini:** new calls get their speakers labelled by Nemotron 3 Diarization.',
     '',
     'Nothing needed from you right now; the work is finished. Two follow-ups are worth doing:',
-    "- **Check your next call:** confirm Bruce actually used Nemotron on it. Its background service is the one setup I couldn't test before deploying.",
+    "- **Check your next call:** confirm Mac mini actually used Nemotron on it. Its background service is the one setup I couldn't test before deploying.",
     '- **Try a bigger Whisper model:** the transcribed words are now the weaker part of the notes.',
   ].join('\n');
   assert.deepEqual(needsFromText(text), {
     needs: 'nothing',
-    next: ['Check your next call: confirm Bruce actually used Nemotron on it', 'Try a bigger Whisper model: the transcribed words are now the weaker part of the notes'],
+    next: ['Check your next call: confirm Mac mini actually used Nemotron on it', 'Try a bigger Whisper model: the transcribed words are now the weaker part of the notes'],
   });
   // A line of lead-in, a cap of three, and long ones cut at a word.
   const many = ['Nothing needed from you right now.', '', 'Worth doing next:', '', '1. One', '2. Two', '3. Three', '4. Four'].join('\n');
@@ -275,7 +275,7 @@ test("turnReply: the thread's own tools after the message don't count as work, n
   assert.deepEqual(turnReply(log(user(), started, call('b1', 'Bash'), text('Started the build; back when it finishes.'), call('e1', END))), { landed: true, replied: true });
 });
 
-test('turnReply: only the current turn counts, and a message from Mike mid-turn wants a reply of its own', () => {
+test('turnReply: only the current turn counts, and a message from Alex mid-turn wants a reply of its own', () => {
   // Last turn's answer doesn't carry over.
   assert.deepEqual(turnReply(log(user(), { type: 'turn.started', turnId: 'turn-0' }, text('Earlier answer.'), { type: 'turn.completed', turnId: 'turn-0', outcome: 'completed', durationMs: 1 }, user('again'), started, call('e1', END))), { landed: true, replied: false });
   assert.deepEqual(turnReply(log(user(), started, text('Working on it.'), user('also do X'), call('e1', END))), { landed: true, replied: false });
@@ -406,7 +406,7 @@ test('one reply: a closing section comes off the reply, bold, # or a bare line',
 // write the card out again, and that looked like not using the card at all.
 test('one reply: a section repeating the card comes off the reply, and one saying more stays', () => {
   const card = { needs: 'you' as const, asks: [{ action: 'Press Bring Them In.' }] };
-  const repeat = 'It is ready.\n\n**What I need from you**\n1. On Tinker Desk, press Bring Them In, then tell me.';
+  const repeat = 'It is ready.\n\n**What I need from you**\n1. On build-box, press Bring Them In, then tell me.';
   assert.equal(replyWithoutRepeat(repeat, card), 'It is ready.');
   // What comes after the list isn't on the card, so it stays.
   assert.equal(replyWithoutRepeat(`${repeat}\n  Say how it went.\n\nOne follow-up: try a clash next.`, card), 'It is ready.\n\nOne follow-up: try a clash next.');
@@ -421,8 +421,8 @@ test('one reply: a section repeating the card comes off the reply, and one sayin
   assert.equal(replyWithoutRepeat(repeat, { needs: 'nothing', next: ['Try it'] }), repeat);
 });
 
-// Mike pressed ? on rows in the agent's shorthand, with no reason given
-// (~/dev/me/misc/end-turn-eval/next-rows). Every form of end_turn has to say
+// Alex pressed ? on rows in the agent's shorthand, with no reason given
+// (~/code/misc/end-turn-eval/next-rows). Every form of end_turn has to say
 // how to write one, as agents are on all of them.
 test('every form of end_turn says how to write a follow-up row', () => {
   for (const provider of ['claude', 'codex'] as const) {
@@ -508,7 +508,7 @@ test('WakeRead: a notice handed over with "Now write your reply" opens the turn 
 // and what the check must leave alone: over 2,935 done replies it found only
 // those two, once a quoted question stopped counting.
 test("replyAsks: a reply's closing question or go-ahead, and nothing softer", () => {
-  const go = "Yes, I think it's ready to go live:\n- **Approved:** Mike Wheaton approved it.\n- **Cost:** about $9 a day.\n\nSay go and I'll merge main into prod, then check on convex.dev that /examples loads.";
+  const go = "Yes, I think it's ready to go live:\n- **Approved:** Alex Wheaton approved it.\n- **Cost:** about $9 a day.\n\nSay go and I'll merge main into prod, then check on convex.dev that /examples loads.";
   assert.equal(replyAsks(go), "Say go and I'll merge main into prod, then check on convex.dev that /examples loads.");
   assert.equal(replyAsks('Four fork fixes are in. Plan and Ask (#8) overlaps the mode you already have. Which do you want to start with?'), 'Which do you want to start with?');
   // Put to the user mid-paragraph, with a line after it.

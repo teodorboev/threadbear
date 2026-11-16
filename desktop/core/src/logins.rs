@@ -617,7 +617,7 @@ mod tests {
     fn logins() -> RunnerLogins {
         RunnerLogins::from_hello(&json!({
             "accounts": [
-                { "id": "claude-main", "provider": "claude", "email": "mike@example.com", "defaultModel": "claude-fable-5-1", "models": [
+                { "id": "claude-main", "provider": "claude", "email": "alex@example.com", "defaultModel": "claude-fable-5-1", "models": [
                     { "id": "opus", "model": "claude-opus-5-5", "title": "Opus 5.5", "description": "For complex work" },
                     { "id": "claude-fable-5-1", "title": "Fable 5.1" },
                     { "id": "claude-sonnet-4-5", "title": "Sonnet 4.5" }
@@ -694,16 +694,16 @@ mod tests {
     #[test]
     fn account_names() {
         let l = logins();
-        assert_eq!(short_account_name("claude-main", &l.accounts), "mike");
+        assert_eq!(short_account_name("claude-main", &l.accounts), "alex");
         assert_eq!(short_account_name("codex-main", &l.accounts), "Codex");
-        assert_eq!(l.account("claude-main").unwrap().name(), "mike@example.com");
+        assert_eq!(l.account("claude-main").unwrap().name(), "alex@example.com");
         assert_eq!(l.account("codex-main").unwrap().name(), "sam@example.com");
     }
 
     #[test]
     fn two_logins_with_one_email_go_by_note_or_id() {
         let a = |id: &str, email: &str, note: Option<&str>| Account { id: id.into(), provider: "claude".into(), email: Some(email.into()), note: note.map(Into::into), ..Default::default() };
-        let accounts = vec![a("claude-main", "mike@example.com", None), a("claude-2", "Mike@Example.com", Some("Hooks")), a("claude-3", "sam@example.com", None)];
+        let accounts = vec![a("claude-main", "alex@example.com", None), a("claude-2", "Alex@Example.com", Some("Hooks")), a("claude-3", "sam@example.com", None)];
         assert_eq!(twin_label(&accounts[0], &accounts).as_deref(), Some("claude-main"));
         assert_eq!(twin_label(&accounts[1], &accounts).as_deref(), Some("Hooks"));
         assert_eq!(twin_label(&accounts[2], &accounts), None);

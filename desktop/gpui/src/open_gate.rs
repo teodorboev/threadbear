@@ -393,21 +393,148 @@ fn clicked(url: &str, event: &ClickEvent, origin: Origin, base: &str, cx: &mut A
 /// absolute.
 pub(crate) fn open_file(path: &str, origin: Origin, cx: &mut App) {
     match policy::decide_file(path, origin, &app_for) {
-        FileVerdict::Open { url, .. } => system_open(&url, cx),
+        FileVerdict::Open { url, look, with, .. } => open_checked(path, &look, &with, &url, cx),
         FileVerdict::Refuse(why) => refuse(why, cx),
-        FileVerdict::Ask { question, url, look } => {
+        FileVerdict::Ask { question, url, look, with } => {
             let path = path.to_owned();
-            ask(question, cx, move |cx| {
-                // What was said yes to, still: not a file swapped in while
-                // the question was up.
-                if policy::still_same(&path, &look, &app_for) {
-                    system_open(&url, cx);
-                } else {
-                    refuse(format!("{} changed while Threadbear was asking, so it didn't open it.", threadbear_core::highlights::last_component(&path)), cx);
-                }
-            });
+            // What was said yes to, still: not a file swapped in while the
+            // question was up (`open_checked` looks again).
+            ask(question, cx, move |cx| open_checked(&path, &look, &with, &url, cx));
         }
     }
+}
+
+/// Opens a file `decide_file` checked: only if it's still the same file (its
+/// path, its identity on disk, its kind and its app), and then the file
+/// itself, never whatever its path names by the time the system looks it up
+/// (Daybreak 125, 15 Nov 2026). On a Mac that's a file reference URL, which
+/// names the file by its inode, handed to the app that was checked; tried on
+/// Tinker Desk, an app or script moved into the path after the reference was
+/// made never ran, and the one asked about did. Elsewhere a file opens from
+/// a private copy of the checked file.
+fn open_checked(path: &str, look: &policy::Look, with: &policy::Opener, url: &str, cx: &mut App) {
+    if !policy::still_same(path, look, &app_for) {
+        refuse(format!("{} changed while Threadbear was opening it, so it didn't open it.", threadbear_core::highlights::last_component(path)), cx);
+        return;
+    }
+    if let Err(why) = open_the_file(look, with, url, cx) {
+        refuse(format!("{} {why}", threadbear_core::highlights::last_component(path)), cx);
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn open_the_file(look: &policy::Look, with: &policy::Opener, url: &str, cx: &mut App) -> Result<(), String> {
+    use objc2_app_kit::{NSWorkspace, NSWorkspaceOpenConfiguration};
+    use objc2_foundation::{NSArray, NSString, NSURL};
+    let changed = "changed while Threadbear was opening it, so it didn't open it.".to_owned();
+    // The reference names the inode at the path now; it must be the one
+    // looked at, or a swap got in between the look and here.
+    let Some(file) = NSURL::fileURLWithPath(&NSString::from_str(&look.resolved.to_string_lossy())).fileReferenceURL() else {
+        // A disk with no file references (ExFAT, a network share): a file
+        // opens from a private copy of the one held since the look, as off
+        // a Mac; a folder there isn't opened.
+        if look.is_dir {
+            return Err("is on a disk Threadbear can't open folders on safely. Open it from Finder.".to_owned());
+        }
+        let copy = policy::checked_copy(look, &opened_folder().ok_or_else(|| changed.clone())?, COPY_LIMIT).map_err(|e| copy_error(&e))?;
+        let copy_url = policy::file_url(&copy.to_string_lossy());
+        if scripted_opens(url) {
+            return Ok(());
+        }
+        let copy = NSURL::fileURLWithPath(&NSString::from_str(&copy.to_string_lossy()));
+        let files = NSArray::from_retained_slice(&[copy]);
+        let ws = NSWorkspace::sharedWorkspace();
+        match with {
+            policy::Opener::App(app) => {
+                let app = NSURL::fileURLWithPath(&NSString::from_str(&app.to_string_lossy())).fileReferenceURL().ok_or_else(|| changed.clone())?;
+                ws.openURLs_withApplicationAtURL_configuration_completionHandler(&files, &app, &NSWorkspaceOpenConfiguration::configuration(), None);
+            }
+            _ => system_open(&copy_url, cx),
+        }
+        return Ok(());
+    };
+    let reference = |url: &NSURL| url.absoluteString().map(|s| policy::reference_id(&s.to_string())).unwrap_or_default();
+    // An inode number names a file only on its own volume, so the volume
+    // too (verify-fix's read of the Daybreak 125 fix): the one a reference
+    // to the mount point found at the look carries.
+    let volume = look.volume.as_ref().and_then(|v| NSURL::fileURLWithPath(&NSString::from_str(&v.to_string_lossy())).fileReferenceURL()).and_then(|v| reference(&v)).map(|(volume, _)| volume);
+    match (reference(&file), look.id, volume) {
+        (Some((v, inode)), Some(id), Some(want)) if v == want && inode == id.inode => {}
+        _ => return Err(changed),
+    }
+    // A script's run keeps the URL alone, as every open is kept, for the specs.
+    if scripted_opens(url) {
+        return Ok(());
+    }
+    let ws = NSWorkspace::sharedWorkspace();
+    let files = NSArray::from_retained_slice(&[file]);
+    match with {
+        // The app that was checked opens it as a document, whatever it is.
+        // The app by a reference too: the real app that was checked, not
+        // whatever a path to it names by the time it launches.
+        policy::Opener::App(app) => {
+            let app = NSURL::fileURLWithPath(&NSString::from_str(&app.to_string_lossy())).fileReferenceURL().ok_or_else(|| changed.clone())?;
+            ws.openURLs_withApplicationAtURL_configuration_completionHandler(&files, &app, &NSWorkspaceOpenConfiguration::configuration(), None);
+        }
+        // Shown selected in Finder: a window rooted at it, or Finder asked
+        // to open it, launched an app swapped in there; revealing didn't.
+        policy::Opener::FileViewer => ws.activateFileViewerSelectingURLs(&files),
+        // What was said yes to (an app opening as itself), by its reference.
+        policy::Opener::System => {
+            ws.openURL(&files.objectAtIndex(0));
+        }
+    }
+    Ok(())
+}
+
+/// The longest file copied to open it (off a Mac, or a Mac disk with no
+/// file references).
+const COPY_LIMIT: u64 = 512 * 1024 * 1024;
+
+#[cfg(not(target_os = "macos"))]
+fn open_the_file(look: &policy::Look, with: &policy::Opener, url: &str, cx: &mut App) -> Result<(), String> {
+    let _ = with;
+    // A plain folder goes to the file browser by its path, after the look:
+    // nothing here can hold one through the system's opener.
+    if look.is_dir {
+        if look.runs.is_some() {
+            return Err("is a bundle, which Threadbear can't open safely here. Open it from your file manager.".to_owned());
+        }
+        // With a slash on the end, the path only resolves to a folder: a
+        // file or a link to one swapped in after the look isn't found.
+        system_open(&format!("{}/", url.trim_end_matches('/')), cx);
+        return Ok(());
+    }
+    // A file (a document, or a program said yes to) opens from a private
+    // copy of the file that was checked.
+    let folder = opened_folder().ok_or_else(|| "couldn't be copied to open it.".to_owned())?;
+    let copy = policy::checked_copy(look, &folder, COPY_LIMIT).map_err(|e| copy_error(&e))?;
+    system_open(&policy::file_url(&copy.to_string_lossy()), cx);
+    Ok(())
+}
+
+/// What's said when a checked file couldn't be copied to open it.
+fn copy_error(e: &std::io::Error) -> String {
+    match e.kind() {
+        std::io::ErrorKind::FileTooLarge => "is too big to open from Threadbear. Open it from your file manager.".to_owned(),
+        _ => "changed while Threadbear was opening it, so it didn't open it.".to_owned(),
+    }
+}
+
+/// Where files are copied to open them (off a Mac, or from a Mac disk with
+/// no file references): the app's own folder, which an agent working in a
+/// project doesn't write to.
+fn opened_folder() -> Option<std::path::PathBuf> {
+    if cfg!(target_os = "macos") {
+        let home = std::env::var_os("HOME").filter(|d| !d.is_empty())?;
+        return Some(std::path::PathBuf::from(home).join("Library/Caches/Threadbear/opened"));
+    }
+    if cfg!(windows) {
+        let local = std::env::var_os("LOCALAPPDATA").filter(|d| !d.is_empty())?;
+        return Some(std::path::PathBuf::from(local).join("Threadbear").join("opened"));
+    }
+    let home = std::env::var_os("HOME").filter(|d| !d.is_empty())?;
+    Some(std::path::PathBuf::from(home).join(".cache").join("threadbear").join("opened"))
 }
 
 /// A small, read-only raster for a local PDF or video hover card. Called on

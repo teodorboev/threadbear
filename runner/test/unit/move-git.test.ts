@@ -167,7 +167,7 @@ test("a bundle whose base the new machine can't get says so", async () => {
 test('one repo under its several origin URLs', () => {
   const k = repoKey('https://github.com/mikecann/threadbear');
   for (const u of ['git@github.com:mikecann/threadbear.git', 'https://github.com/mikecann/threadbear.git', 'ssh://git@github.com/mikecann/threadbear.git', 'https://x-access-token@github.com/MikeCann/threadbear/']) assert.equal(repoKey(u), k, u);
-  assert.notEqual(repoKey('git@github.com:mikecann/other.git'), k);
+  assert.notEqual(repoKey('git@github.com:alex-example/other.git'), k);
 });
 
 test('what changed in a shared checkout, for what stays behind', async () => {

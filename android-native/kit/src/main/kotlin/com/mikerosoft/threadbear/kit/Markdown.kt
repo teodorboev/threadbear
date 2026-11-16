@@ -75,7 +75,28 @@ sealed class MarkdownBlock {
          */
         const val MAX_TABLE_CELLS = 2_000
 
-        fun parse(text: String): List<MarkdownBlock> = parse(text, 0, Cells(MAX_TABLE_CELLS))
+        /**
+         * The pictures one message may draw; `![alt](src)`s past it are
+         * their alt text, in brackets. Each drawn picture is a download and
+         * a decoded bitmap held while its row is composed, and a secondary
+         * runner's 8,000-character reply could ask for hundreds (Daybreak
+         * finding 130, 15 Nov 2026). The runner sends at most six pictures a
+         * message from another Mac (relay.ts MAX_PICTURES), and an agent's
+         * reply rarely shows more than a few.
+         */
+        const val MAX_PICTURES = 10
+
+        fun parse(text: String): List<MarkdownBlock> =
+            capPictures(parse(text, 0, Cells(MAX_TABLE_CELLS)), Cells(MAX_PICTURES))
+
+        /** The first `left` pictures in reading order, quotes included, stay pictures; the rest become words. */
+        internal fun capPictures(blocks: List<MarkdownBlock>, left: Cells): List<MarkdownBlock> = blocks.map { block ->
+            when (block) {
+                is Image -> if (left.left > 0) block.also { left.left-- } else Paragraph("[${block.alt.ifEmpty { "picture" }}]")
+                is Quote -> Quote(capPictures(block.blocks, left))
+                else -> block
+            }
+        }
 
         /** `depth` is how many quotes this text is inside; `cells` is shared with the quotes around it. */
         internal fun parse(text: String, depth: Int, cells: Cells): List<MarkdownBlock> =

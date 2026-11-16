@@ -39,7 +39,7 @@ function ownTmp(): string {
   return d;
 }
 
-// Folders 755 and files 644 from `dir` down, as a checkout of Mike's is:
+// Folders 755 and files 644 from `dir` down, as a checkout of Alex's is:
 // a host whose umask is 002 would leave them group-writable, which an
 // outside file must not be (R9).
 function tidy(dir: string): void {
@@ -54,25 +54,25 @@ function tidy(dir: string): void {
 // Every live command (sh(...) in a badge, `when`, summary or list panel)
 // in the patches in Mike's repos on 7 Nov 2026, as the runner gets them
 // (a template's `${...}` filled in as the patch fills it).
-const MIKES = {
-  // bruce-ops/.threadbear/patches/bruce.ts
-  bruce: "ssh -o ConnectTimeout=4 -o BatchMode=yes bruce 'launchctl list; echo ---; df -h / /Volumes/CannMedia; echo ---; memory_pressure -Q | tail -1'",
-  // cannvas/.threadbear/patches/cannvas.ts
-  cannvasFeedback: 'npx convex data items --component feedback --prod --format jsonLines --limit 200',
-  cannvasFetch: 'git fetch -q origin main',
-  cannvasDeployed: 'ssh -o ConnectTimeout=4 -o BatchMode=yes cannvas readlink /opt/cannvas/current',
-  cannvasOnMain: 'git merge-base --is-ancestor 3f9c2a1 origin/main && echo yes || echo no',
-  cannvasBehind: 'git rev-list --count 3f9c2a1..origin/main',
-  cannvasMerged: 'gh pr list --state merged --limit 200 --json headRefName',
-  cannvasBranches: "git branch -a --no-merged origin/main --sort=-committerdate --format='%(refname:short)%09%(committerdate:relative)%09%(subject)'",
+const ALEXS = {
+  // mac-mini-ops/.threadbear/patches/mac-mini.ts
+  mini: "ssh -o ConnectTimeout=4 -o BatchMode=yes mac-mini 'launchctl list; echo ---; df -h / /Volumes/MediaDrive; echo ---; memory_pressure -Q | tail -1'",
+  // sketchpad/.threadbear/patches/sketchpad.ts
+  sketchpadFeedback: 'npx convex data items --component feedback --prod --format jsonLines --limit 200',
+  sketchpadFetch: 'git fetch -q origin main',
+  sketchpadDeployed: 'ssh -o ConnectTimeout=4 -o BatchMode=yes sketchpad readlink /opt/sketchpad/current',
+  sketchpadOnMain: 'git merge-base --is-ancestor 3f9c2a1 origin/main && echo yes || echo no',
+  sketchpadBehind: 'git rev-list --count 3f9c2a1..origin/main',
+  sketchpadMerged: 'gh pr list --state merged --limit 200 --json headRefName',
+  sketchpadBranches: "git branch -a --no-merged origin/main --sort=-committerdate --format='%(refname:short)%09%(committerdate:relative)%09%(subject)'",
   // port-geo-christmas-lights-cruise/.threadbear/patches/entries.ts
   portGeo: 'npx convex data entries --prod --format jsonLines --limit 1000',
-  // poddle/.threadbear/patches/poddle.ts
-  poddleVersions: 'node scripts/asc-status.mjs 6825613455',
-  poddleFeedback: 'npx convex data items --component feedback --prod --format jsonLines --limit 200',
-  poddleStats: 'npx convex run --prod adminStats:overview',
+  // pantry/.threadbear/patches/pantry.ts
+  pantryVersions: 'node scripts/asc-status.mjs 1234567890',
+  pantryFeedback: 'npx convex data items --component feedback --prod --format jsonLines --limit 200',
+  pantryStats: 'npx convex run --prod adminStats:overview',
   // tandem/.threadbear/patches/tandem.ts (its quote() around each path)
-  tandem: "tandem waiting --json '/Users/m5-mike/Movies/My Video/edit.tandem' '/Users/m5-mike/Movies/it'\\''s/b.tandem'",
+  tandem: "tandem waiting --json '/Users/alex/Movies/My Video/edit.tandem' '/Users/alex/Movies/it'\\''s/b.tandem'",
   // stocks/.threadbear/patches/holdings.ts
   stocksBalance: 'stocks balance',
   stocksPositions: 'stocks positions',
@@ -80,19 +80,19 @@ const MIKES = {
   walkiesStats: 'npx convex run --prod stats:overview',
   // walkies/.threadbear/patches/walkies.ts
   walkiesFeedback: 'npx convex data items --component feedback --prod --format jsonLines --limit 200',
-  // The one mikecann/walkies#79 rewrote without perl.
+  // The one alex-example/walkies#79 rewrote without perl.
   walkiesPixel: 's=$(cat ~/.config/walkies/dads-pixel-serial 2>/dev/null) || { echo 0; exit 0; }; { dns-sd -B _adb-tls-connect._tcp local. & p=$!; sleep 3; kill $p; } 2>/dev/null | grep -c "adb-$s" || true',
 };
-// Ones that run a script in another of Mike's repos (stashit, walkies,
+// Ones that run a script in another of Alex's repos (stashit, walkies,
 // and Threadbear's own app-store.ts, which is always trusted anyway).
-const MIKES_OUTSIDE = {
-  ascStatus: 'node ~/dev/me/poddle/scripts/asc-status.mjs 6826105788',
+const ALEXS_OUTSIDE = {
+  ascStatus: 'node ~/dev/me/poddle/scripts/asc-status.mjs 1234567891',
   ascThere: 'test -f ~/dev/me/poddle/scripts/asc-status.mjs',
 };
 
-// A repo laid out like Mike's: a real git checkout, convex installed (not
-// committed), a script of its own, and a home with poddle's script in it.
-function mikesRepo() {
+// A repo laid out like Alex's: a real git checkout, convex installed (not
+// committed), a script of its own, and a home with pantry's script in it.
+function alexsRepo() {
   const root = ownTmp();
   const repo = path.join(root, 'repo');
   const home = path.join(root, 'home');
@@ -149,25 +149,25 @@ const refusedHook = (repo: string, cases: [string, RegExp][]) => {
   for (const [command, why] of cases) assert.match(hook(repo, command).problem ?? 'accepted', why, command);
 };
 
-test("every live command in Mike's patches is on the short list", async () => {
-  const { repo, home } = mikesRepo();
-  for (const [name, command] of Object.entries(MIKES)) assert.equal(live(repo, command, { home }).problem, undefined, name);
-  for (const [name, command] of Object.entries(MIKES_OUTSIDE)) assert.equal(live(repo, command, { home }).problem, undefined, name);
+test("every live command in Alex's patches is on the short list", async () => {
+  const { repo, home } = alexsRepo();
+  for (const [name, command] of Object.entries(ALEXS)) assert.equal(live(repo, command, { home }).problem, undefined, name);
+  for (const [name, command] of Object.entries(ALEXS_OUTSIDE)) assert.equal(live(repo, command, { home }).problem, undefined, name);
   // And through the gate the runner uses, against what the hash covered.
-  const { files, blocked } = await trustedFiles(repo, Object.values(MIKES));
-  for (const [name, command] of Object.entries(MIKES)) assert.equal(liveCommandProblem(command, repo, files, blocked), undefined, name);
+  const { files, blocked } = await trustedFiles(repo, Object.values(ALEXS));
+  for (const [name, command] of Object.entries(ALEXS)) assert.equal(liveCommandProblem(command, repo, files, blocked), undefined, name);
   // node scripts/asc-status.mjs reaches the script, which the hash covered.
-  assert.ok(live(repo, MIKES.poddleVersions).files.includes(path.join(repo, 'scripts/asc-status.mjs')));
+  assert.ok(live(repo, ALEXS.pantryVersions).files.includes(path.join(repo, 'scripts/asc-status.mjs')));
 });
 
 test("the one that can't fit: walkies-arrow's older Pixel check still runs perl, which stays refused", () => {
-  const { repo } = mikesRepo();
+  const { repo } = alexsRepo();
   const old = `s=$(cat ~/.config/walkies/dads-pixel-serial 2>/dev/null) || { echo 0; exit 0; }; perl -e 'alarm 3; exec @ARGV' dns-sd -B _adb-tls-connect._tcp local. 2>/dev/null | grep -c "adb-$s" || true`;
   assert.match(live(repo, old).problem ?? '', /runs perl, which isn't on the short list/);
 });
 
 test('npx runs only convex, installed in node_modules/.bin: one it would fetch, flags before the name, or another package are refused', () => {
-  const { repo } = mikesRepo();
+  const { repo } = alexsRepo();
   refusedLive(repo, [
     ['npx some-tool --x', /only `npx convex data` and `npx convex run`/],
     ['npx -y convex run --prod stats:overview', /`npx -y`/],
@@ -227,12 +227,12 @@ const BYPASSES: [string, RegExp][] = [
 ];
 
 test('the shell tricks the pattern follower let through are refused', () => {
-  const { repo } = mikesRepo();
+  const { repo } = alexsRepo();
   refusedLive(repo, BYPASSES);
 });
 
 test("...and refused at the gate a trusted patch's live function goes through, so they never run", async () => {
-  const { repo } = mikesRepo();
+  const { repo } = alexsRepo();
   const { files, blocked } = await trustedFiles(repo, ['node scripts/build.mjs']);
   for (const [command] of BYPASSES) assert.ok(liveCommandProblem(command, repo, files, blocked), command);
   assert.equal(liveCommandProblem('node scripts/build.mjs', repo, files, blocked), undefined);
@@ -324,13 +324,13 @@ const OFF_LIST: [string, RegExp][] = [
 ];
 
 test('shell outside the list is refused, whatever it is', () => {
-  const { repo } = mikesRepo();
+  const { repo } = alexsRepo();
   refusedHook(repo, OFF_LIST);
   for (const [command] of OFF_LIST) assert.ok(live(repo, command).problem, command);
 });
 
 test('what is on the list is accepted: words, strings, variables, $(...) of allowed commands, pipes, && || ;, groups, &, redirects to /dev/null', () => {
-  const { repo } = mikesRepo();
+  const { repo } = alexsRepo();
   for (const command of [
     'echo hi',
     "echo 'a b' \"c $HOME ${HOME}\" d\\ e",
@@ -374,7 +374,7 @@ test('what is on the list is accepted: words, strings, variables, $(...) of allo
 });
 
 test('a script a hook runs is held to the list too (control flow allowed), and so is a package script', () => {
-  const { repo } = mikesRepo();
+  const { repo } = alexsRepo();
   write(repo, {
     'tools/ok.sh': '#!/bin/zsh\n# fine\nset -euo pipefail\ncd "$(dirname "$0")/.." || exit 1\nif [ -f package.json ]; then\n  for f in a b; do echo "$f"; done\nfi\ncase "$1" in\n  -h|--help) echo help ;;\n  *) ./tools/count.sh ;;\nesac\n',
     'tools/eval.sh': '#!/bin/sh\neval "$(cat ./tools/steps.txt)"\n',
@@ -398,7 +398,7 @@ test('a script a hook runs is held to the list too (control flow allowed), and s
 });
 
 test("a Claude Code hook gets its list, without `&`, and only programs known to load nothing from the folder", () => {
-  const { repo } = mikesRepo();
+  const { repo } = alexsRepo();
   write(repo, { '.claude/hooks/session-start.mjs': "console.log('hi');\n", 'hook.sh': '#!/bin/sh\necho hi\n' });
   const h = (command: string) => hook(repo, command).problem;
   // lets-build-it's hooks, and the usual shapes.
@@ -412,7 +412,7 @@ test("a Claude Code hook gets its list, without `&`, and only programs known to 
 });
 
 test('the parser stays linear on hostile input', () => {
-  const { repo } = mikesRepo();
+  const { repo } = alexsRepo();
   const t = (command: string) => {
     const start = process.cpuUsage();
     live(repo, command);
@@ -428,7 +428,7 @@ test('the parser stays linear on hostile input', () => {
 // ---- the outside review's requirements ----
 
 test('R1: program names are compared in lower case and by the name a path resolves to, so every spelling gets the same treatment', () => {
-  const { repo, root } = mikesRepo();
+  const { repo, root } = alexsRepo();
   // The same checks as the plain name.
   assert.equal(live(repo, 'GIT fetch -q origin main').problem, undefined);
   assert.equal(live(repo, 'NPX convex run --prod stats:overview').problem, undefined);
@@ -470,7 +470,7 @@ test('R1: program names are compared in lower case and by the name a path resolv
 });
 
 test('R2: a lone `{` or `}` is refused anywhere but a group it opens or closes, after a redirect too', () => {
-  const { repo } = mikesRepo();
+  const { repo } = alexsRepo();
   const cases: [string, RegExp][] = [
     ["{ echo } python3 -c 'print(1)'; }", /lone `}`/],
     ['{ >/dev/null } python3 -c x; }', /lone `}`/],
@@ -491,8 +491,8 @@ test('R2: a lone `{` or `}` is refused anywhere but a group it opens or closes, 
   assert.equal(live(repo, '{ { echo a; }; } >/dev/null').problem, undefined);
 });
 
-test("R3: a live command runs only the programs Mike's patches run, in the forms they use; the installed-program fallback is gone", () => {
-  const { repo } = mikesRepo();
+test("R3: a live command runs only the programs Alex's patches run, in the forms they use; the installed-program fallback is gone", () => {
+  const { repo } = alexsRepo();
   refusedLive(repo, [
     // Programs that were "installed programs" before.
     ['ls', /runs ls, which isn't on the short list/],
@@ -512,7 +512,7 @@ test("R3: a live command runs only the programs Mike's patches run, in the forms
     ['wait', /runs wait/],
     ['sh ./tools/count.sh', /runs sh/],
     ['npm run build', /runs npm/],
-    // Mike's programs in forms his patches don't use.
+    // Alex's programs in forms his patches don't use.
     ['git status', /`git status`, which isn't one of the git commands on the short list/],
     ['git log --oneline', /`git log`/],
     ['gh api /user', /`gh api \/user`/],
@@ -535,7 +535,7 @@ test("R3: a live command runs only the programs Mike's patches run, in the forms
 });
 
 test("R3: a hashed script a live command runs is held to the same live list, so a script can't reach what the command can't", () => {
-  const { repo } = mikesRepo();
+  const { repo } = alexsRepo();
   assert.equal(live(repo, './tools/count.sh').problem, undefined);
   assert.ok(live(repo, './tools/count.sh').files.includes(path.join(repo, 'tools/count.sh')));
   write(repo, {
@@ -570,7 +570,7 @@ test("R3: a hashed script a live command runs is held to the same live list, so 
 });
 
 test("Muse's review: where a hook's script is, and what node_modules/.bin/convex is, are checked rather than assumed", async () => {
-  const { repo, root } = mikesRepo();
+  const { repo, root } = alexsRepo();
   const script = (name: string, body: string) => {
     write(repo, { [name]: `#!/bin/sh\n${body}\n` });
     fs.chmodSync(path.join(repo, name), 0o755);
@@ -625,13 +625,13 @@ test("Muse's review: where a hook's script is, and what node_modules/.bin/convex
 });
 
 test('R4: every word of a listed program is literal, but for a pattern that starts with literal text; find runs, deletes and writes nothing', () => {
-  const { repo } = mikesRepo();
+  const { repo } = alexsRepo();
   refusedLive(repo, [
     ['s=$(cat /dev/null); cat "$s"', /runs cat with `\$s`, worked out as it runs/],
     ['s=$(cat /dev/null); git rev-list --count "$s"', /runs git with `\$s`/],
     ['git merge-base --is-ancestor $(cat /dev/null) origin/main', /worked out as it runs/],
     ['h=$(cat /dev/null); ssh -o BatchMode=yes "$h" ls', /worked out as it runs/],
-    ['s=$(cat /dev/null); ssh bruce "ls $s"', /worked out as it runs/],
+    ['s=$(cat /dev/null); ssh mac-mini "ls $s"', /worked out as it runs/],
     ['s=$(cat /dev/null); grep -c "$s"', /runs grep with `\$s`, worked out as it runs/],
     ['s=$(cat /dev/null); grep -c $s', /worked out as it runs/],
     ['s=$(cat /dev/null); grep -c "-$s"', /worked out as it runs/],
@@ -659,8 +659,8 @@ test('R4: every word of a listed program is literal, but for a pattern that star
   ]);
 });
 
-test('R5: git runs only the read-only subcommands cannvas uses, in a repo whose own config adds nothing git runs', () => {
-  const { repo } = mikesRepo();
+test('R5: git runs only the read-only subcommands sketchpad uses, in a repo whose own config adds nothing git runs', () => {
+  const { repo } = alexsRepo();
   refusedLive(repo, [
     ['git stash', /`git stash`/],
     ['git stash list', /`git stash`/],
@@ -718,7 +718,7 @@ test('R5: git runs only the read-only subcommands cannvas uses, in a repo whose 
 });
 
 test("R5: liveCommandEnv's settings beat the repo's own config, so the attacks it could make don't run", () => {
-  const { repo, root } = mikesRepo();
+  const { repo, root } = alexsRepo();
   const marker = path.join(root, 'ran');
   const script = path.join(root, 'evil.sh');
   fs.writeFileSync(script, `#!/bin/sh\ntouch ${marker}\nexit 1\n`);
@@ -813,7 +813,7 @@ test("R5: liveCommandEnv's settings beat the repo's own config, so the attacks i
 });
 
 test("R5: a repo's filter drivers don't run: its own are refused, and your own don't for the live list's git commands, which don't read the working tree", () => {
-  const { repo, root } = mikesRepo();
+  const { repo, root } = alexsRepo();
   git(repo, 'config', 'filter.x.clean', 'id');
   assert.match(repoGitConfigProblem(repo) ?? '', /sets filter\.x\.clean/);
   git(repo, 'config', '--unset', 'filter.x.clean');
@@ -846,9 +846,9 @@ test("R5: a repo's filter drivers don't run: its own are refused, and your own d
   assert.equal(fs.existsSync(marker), true, 'the test plays it right');
 });
 
-test('R6: gh runs only `gh pr list`, with the options cannvas uses', () => {
-  const { repo } = mikesRepo();
-  assert.equal(live(repo, MIKES.cannvasMerged).problem, undefined);
+test('R6: gh runs only `gh pr list`, with the options sketchpad uses', () => {
+  const { repo } = alexsRepo();
+  assert.equal(live(repo, ALEXS.sketchpadMerged).problem, undefined);
   refusedLive(repo, [
     ['gh pr view 1', /`gh pr view`/],
     ['gh pr checkout 1', /`gh pr checkout`/],
@@ -865,7 +865,7 @@ test('R6: gh runs only `gh pr list`, with the options cannvas uses', () => {
 });
 
 test("R7: programs that can write a file run only in forms that can't", () => {
-  const { repo } = mikesRepo();
+  const { repo } = alexsRepo();
   const both: [string, RegExp][] = [
     ['tee /tmp/x', /runs tee, which isn't on the short list/],
     ['cp a b', /runs cp/],
@@ -890,22 +890,22 @@ test("R7: programs that can write a file run only in forms that can't", () => {
   refusedHook(repo, both);
   refusedLive(repo, [
     // On the other machine too, only what his patches run there.
-    ["ssh bruce 'rm -rf x'", /has `rm`/],
-    ['ssh bruce rm -rf x', /`ssh -rf`/],
-    ["ssh bruce 'launchctl load x'", /ssh's launchctl with 2 words/],
-    ["ssh bruce 'readlink x > /tmp/y'", /has a redirect/],
-    ["ssh bruce 'readlink x & echo'", /has `&`/],
-    ["ssh bruce '{ readlink x; }'", /has a group/],
-    ["ssh bruce 'readlink $(id)'", /has a word worked out as it runs/],
-    ["ssh bruce 'python3 -c 1'", /has `python3`/],
-    ['ssh bruce', /0 words after its options|1 word after its options/],
-    ['ssh -E /tmp/log bruce ls', /`ssh -E`/],
-    ['ssh -S /tmp/ctl bruce ls', /`ssh -S`/],
-    ['ssh -i ./key bruce ls', /`ssh -i`/],
-    ['ssh -o UserKnownHostsFile=/tmp/x bruce ls', /`ssh -o` with `UserKnownHostsFile/],
-    ['ssh -o ControlPath=/tmp/x bruce ls', /`ssh -o` with `ControlPath/],
-    ['ssh -o IdentityFile=./k bruce ls', /`ssh -o` with `IdentityFile/],
-    ['ssh bruce -oProxyCommand=id ls', /`ssh -oProxyCommand=id`/],
+    ["ssh mac-mini 'rm -rf x'", /has `rm`/],
+    ['ssh mac-mini rm -rf x', /`ssh -rf`/],
+    ["ssh mac-mini 'launchctl load x'", /ssh's launchctl with 2 words/],
+    ["ssh mac-mini 'readlink x > /tmp/y'", /has a redirect/],
+    ["ssh mac-mini 'readlink x & echo'", /has `&`/],
+    ["ssh mac-mini '{ readlink x; }'", /has a group/],
+    ["ssh mac-mini 'readlink $(id)'", /has a word worked out as it runs/],
+    ["ssh mac-mini 'python3 -c 1'", /has `python3`/],
+    ['ssh mac-mini', /0 words after its options|1 word after its options/],
+    ['ssh -E /tmp/log mac-mini ls', /`ssh -E`/],
+    ['ssh -S /tmp/ctl mac-mini ls', /`ssh -S`/],
+    ['ssh -i ./key mac-mini ls', /`ssh -i`/],
+    ['ssh -o UserKnownHostsFile=/tmp/x mac-mini ls', /`ssh -o` with `UserKnownHostsFile/],
+    ['ssh -o ControlPath=/tmp/x mac-mini ls', /`ssh -o` with `ControlPath/],
+    ['ssh -o IdentityFile=./k mac-mini ls', /`ssh -o` with `IdentityFile/],
+    ['ssh mac-mini -oProxyCommand=id ls', /`ssh -oProxyCommand=id`/],
     ['awk \'{ print > "/tmp/x" }\' /dev/null', /runs awk/],
   ]);
   refusedHook(repo, [
@@ -922,7 +922,7 @@ test("R7: programs that can write a file run only in forms that can't", () => {
 });
 
 test('R8: output goes only to /dev/null or another descriptor, in the command and in every script it runs', () => {
-  const { repo } = mikesRepo();
+  const { repo } = alexsRepo();
   const cases: [string, RegExp][] = [
     ['echo x > /tmp/x', /writes to \/tmp\/x \(`>`\)/],
     ['echo x >> ./log', /writes to \.\/log \(`>>`\)/],
@@ -952,11 +952,11 @@ test('R8: output goes only to /dev/null or another descriptor, in the command an
 });
 
 test("R9: a script outside the repo runs only if it's on the list, and it and every folder on its way are yours or root's, writable by nobody else, and it fully resolves", () => {
-  const { repo, home, root } = mikesRepo();
+  const { repo, home, root } = alexsRepo();
   fs.chmodSync(root, 0o755);
   const scripts = path.join(home, 'dev/me/poddle/scripts');
   const x = path.join(scripts, 'asc-status.mjs');
-  const asc = () => live(repo, MIKES_OUTSIDE.ascStatus, { home }).problem;
+  const asc = () => live(repo, ALEXS_OUTSIDE.ascStatus, { home }).problem;
   assert.equal(asc(), undefined);
   // Only the listed script, and only with the words it takes.
   const other = path.join(root, 'other');

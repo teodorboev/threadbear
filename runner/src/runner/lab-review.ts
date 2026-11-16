@@ -1,7 +1,8 @@
 // Review by another lab (Settings > General, runner.json `labReview`): when a
 // turn that changed code ends with nothing needed, a review thread starts
-// in the same folder on the other provider (Codex for a Claude thread,
-// Claude for a Codex one), told to try to break the change without
+// in the same folder on another lab's login, the first with room in Mike's
+// order (Settings > General > Code review, lab-reviewers.ts; Codex then Claude unless he
+// changes it), told to try to break the change without
 // editing anything. The thread waits on it (end_turn's waitFor machinery,
 // runner/hibernation.ts), wakes with its findings, and fixes what holds
 // up. At most LAB_REVIEW_ROUNDS reviews between two of Mike's messages.
@@ -36,9 +37,10 @@ import type { Runner, ThreadState } from '../runner.ts';
 import type { RunnerPart } from './part.ts';
 import type { Account, Hunk, LabReviewLedger, PermissionMode, Provider, ReviewFinding, ReviewOutcome, ReviewSeverity } from '../protocol.ts';
 import type { LabLedger, ReviewVerdict, ThreadRecord } from '../store.ts';
-import { pickInPool, poolAccounts, poolForFolder } from '../pools.ts';
+import { loginOk, pickInPool, poolAccounts, poolForFolder } from '../pools.ts';
 import { providerInfo, providerName } from '../providers.ts';
 import { cutSafely, safeEnd } from '../safe-cut.ts';
+import { DEFAULT_LAB_REVIEWERS, type LabReviewer } from '../lab-reviewers.ts';
 
 export const LAB_REVIEW_ROUNDS = 3;
 // Fewer changed lines of code than this (docs and plain text don't count)
@@ -65,7 +67,8 @@ const LOOK_BACK = 4000;
 
 export type TurnChange = { files: { path: string; added: number; removed: number }[]; codeLines: number; diff: string; clipped: boolean };
 // boxed: the other lab was passed over because it can't run in the sandbox.
-export type ReviewLogin = { account: Account; independent: boolean; boxed?: boolean };
+// reviewer: the entry of Mike's list it came from, for its model and effort.
+export type ReviewLogin = { account: Account; independent: boolean; reviewer: LabReviewer; boxed?: boolean };
 
 export const labReviewPart = {
   // Called once a turn has finished with nothing needed and nothing left
@@ -115,8 +118,11 @@ export const labReviewPart = {
         text: reviewBrief({ rec, ask: lastAsk(this, st), reply, change, independent: login.independent, round, earlier: rec.labReview?.findings }),
         cwd: rec.cwd,
         accountId: login.account.id,
-        model: this.defaultModelFor(login.account.provider),
-        effort: 'high',
+        // The reviewer's own, else the provider's default model at high.
+        // create checks both against the login (checkSettings), and drops
+        // an effort its provider has none of.
+        model: login.reviewer.model ?? this.defaultModelFor(login.account.provider),
+        effort: login.reviewer.effort ?? 'high',
         // Never more access than the reviewed thread has: its brief carries
         // that thread's diff and reply, which in an Ask or Auto thread may
         // come from text Mike doesn't trust, and the reviewer runs commands
@@ -265,17 +271,23 @@ export const labReviewPart = {
     return { files, codeLines, diff, clipped };
   },
 
-  // The login a review of this thread runs on: another provider's when the
-  // folder allows one, else a fresh session of the same provider. For a
-  // thread in a sandbox, only a provider that runs in one.
+  // The login a review of this thread runs on: the first reviewer in Mike's
+  // order (Settings > General > Code review, lab-reviewers.ts) that's another lab and has
+  // a login with room the folder allows, else a fresh session of the
+  // thread's own provider. For a thread in a sandbox, only a provider that
+  // runs in one. The reviewer's model and effort come with it.
   reviewLogin(this: Runner, rec: ThreadRecord, o: { confined?: boolean } = {}): ReviewLogin | undefined {
     const accounts = this.usableAccounts();
     const pools = this.pools();
-    const kept = poolForFolder(pools, rec.cwd);
+    // Kept for its folder, or for the folder it came from: a thread's
+    // worktree sits beside the repo (<repo>-threads/slot-n), outside the
+    // kept folder, but it's still that pool's work (Grok's review, 15 Nov
+    // 2026: a Convex thread in a worktree was reviewed off the Convex pool).
+    const ownPool = rec.poolId ? pools.find((p) => p.id === rec.poolId && p.folders?.length) : undefined;
+    const kept = poolForFolder(pools, rec.cwd) ?? ownPool;
     // Logins kept for certain folders never review anything else.
     const keptIds = new Set(pools.filter((p) => p.folders?.length).flatMap((p) => p.accountIds));
     const others = kept ? [kept] : pools.filter((p) => !p.folders?.length);
-    const other: Provider = rec.provider === 'codex' ? 'claude' : 'codex';
     const now = this.clock.now();
     const pick = (provider: Provider): Account | undefined => {
       for (const pool of others) {
@@ -283,15 +295,26 @@ export const labReviewPart = {
         const a = id ? accounts.find((x) => x.id === id) : undefined;
         if (a) return a;
       }
-      // Not in any pool (a login added since the pools were set).
+      // Not in any pool (a login added since the pools were set, or an
+      // ACP agent's, which pools don't hold). A folder kept for a pool
+      // never goes outside it.
       if (kept) return undefined;
-      return accounts.find((a) => a.provider === provider && !keptIds.has(a.id) && !pools.some((p) => poolAccounts(p, accounts).includes(a)));
+      return accounts.find((a) => a.provider === provider && !keptIds.has(a.id) && !pools.some((p) => poolAccounts(p, accounts).includes(a)) && loginOk(a));
     };
     const fits = (provider: Provider) => !o.confined || providerInfo(provider).sandbox;
-    const lab = fits(other) ? pick(other) : undefined;
-    if (lab) return { account: lab, independent: true };
+    const order = this.cfg.labReviewers ?? DEFAULT_LAB_REVIEWERS;
+    const labs = order.filter((r) => r.provider !== rec.provider);
+    for (const r of labs) {
+      if (!fits(r.provider)) continue;
+      const account = pick(r.provider);
+      if (account) return { account, independent: true, reviewer: r };
+    }
+    // Its own provider, as listed if it is (for its model and effort).
+    const own = order.find((r) => r.provider === rec.provider) ?? { provider: rec.provider };
     const same = fits(rec.provider) ? pick(rec.provider) : undefined;
-    return same ? { account: same, independent: false, ...(!fits(other) && pick(other) ? { boxed: true } : {}) } : undefined;
+    if (!same) return undefined;
+    const boxed = labs.some((r) => !fits(r.provider) && pick(r.provider));
+    return { account: same, independent: false, reviewer: own, ...(boxed ? { boxed: true } : {}) };
   },
 };
 

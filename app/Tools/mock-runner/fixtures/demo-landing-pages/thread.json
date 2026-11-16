@@ -1,7 +1,7 @@
 {
   "id": "demo_landing_pages",
   "title": "Rebuild the three landing pages",
-  "cwd": "/Users/mike/dev/me/misc",
+  "cwd": "/Users/alex/code/misc",
   "accountId": "claude-main",
   "provider": "claude",
   "permissionMode": "full",

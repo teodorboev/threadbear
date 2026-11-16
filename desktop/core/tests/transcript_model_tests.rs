@@ -50,7 +50,7 @@ fn testAWakeNoteStaysOutOfTheGroupAbove() {
     ]);
     assert_eq!(ids(&model), ["u:2", "g:t:c1", "a:m1", "f:t1", "n:8"]);
     assert!(!model.rows().last().unwrap().in_group);
-    for note in ["Woke up after hibernating for 2 days.", "Woke up from hibernating.", "Woke up after 3 hours, as the runner restarted.", "Woke up: Mike mentioned woodworking."] {
+    for note in ["Woke up after hibernating for 2 days.", "Woke up from hibernating.", "Woke up after 3 hours, as the runner restarted.", "Woke up: Alex mentioned woodworking."] {
         assert!(RowContent::Note(note.to_owned()).is_wake_note(), "{note}");
     }
     assert!(!RowContent::Note("Put in Threadbear".to_owned()).is_wake_note());

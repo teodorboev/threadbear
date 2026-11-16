@@ -82,6 +82,6 @@ When("the runner says Threadbear Runner.app is behind main", async function (thi
   await this.app.do({ cmd: 'mock', method: 'updates', params: { state: 'idle', launcherChanged: true, launcherReason: "Threadbear Runner.app was built from older launcher sources than main's." } });
 });
 
-When('the runner says it will reinstall itself once no thread is busy', async function (this: ThreadbearWorld) {
+When('the runner says it is updating Threadbear Runner by itself', async function (this: ThreadbearWorld) {
   await this.app.do({ cmd: 'mock', method: 'updates', params: { state: 'idle', launcherChanged: true, reinstall: { state: 'waiting', auto: true } } });
 });

@@ -142,4 +142,4 @@ Feature: The open card in the composer
     And I send "decisions"
     Then the card in the composer says "Needs you"
     When I rest on link 1 of ask 1 on the card
-    Then the card shows the peek "See the list of repos | github.com/mikecann?tab=repositories"
+    Then the card shows the peek "See the list of repos | github.com/alex-example?tab=repositories"

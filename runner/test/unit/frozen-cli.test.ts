@@ -24,7 +24,7 @@ class FakeProbe implements FrozenProbe {
 function setUp() {
   const h = makeHarness();
   const probe = new FakeProbe();
-  const check = new FrozenClis({ host: h.runner, clock: h.clock, log: nullLogger, machine: 'bruce', probe });
+  const check = new FrozenClis({ host: h.runner, clock: h.clock, log: nullLogger, machine: 'mac-mini', probe });
   const { thread } = h.runner.create({ text: 'Print the plans', accountId: 'claude-3' });
   const s = h.adapter.last;
   s.init();
@@ -46,7 +46,7 @@ test('a frozen CLI is told about at the second look, and the thread needs you', 
   assert.deepEqual(notes(), [], 'once could be a slow disk');
   await look();
   assert.equal(notes().length, 1);
-  assert.match(notes()[0], /Claude Code is stuck opening a file on bruce/);
+  assert.match(notes()[0], /Claude Code is stuck opening a file on mac-mini/);
   assert.match(notes()[0], /permission prompt/);
   assert.equal(summary().needsYou, true);
   await look();
@@ -101,7 +101,7 @@ test('a CLI still frozen after the wait is stopped, the turn fails and the next 
   assert.equal(s.killed, true);
   const ends = h.events(thread.id).filter((e) => e.type === 'turn.completed');
   assert.equal(ends.at(-1)!.outcome, 'failed');
-  assert.match(String(ends.at(-1)!.error), /stuck opening a file on bruce/);
+  assert.match(String(ends.at(-1)!.error), /stuck opening a file on mac-mini/);
   assert.equal(h.runner.list().find((t) => t.id === thread.id)!.needsYou, true);
   h.runner.send(thread.id, 'Try again', []);
   await tick();

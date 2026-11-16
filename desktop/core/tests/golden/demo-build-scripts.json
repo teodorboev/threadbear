@@ -93,7 +93,7 @@
       "inGroup" : true,
       "kind" : "diff",
       "seq" : 9,
-      "text" : "Write /Users/mike/dev/photo-sync/scripts/release.sh",
+      "text" : "Write /Users/alex/dev/photo-sync/scripts/release.sh",
       "turn" : "turn_1"
     },
     {
@@ -101,7 +101,7 @@
       "inGroup" : true,
       "kind" : "approval",
       "seq" : 10,
-      "text" : "Write /Users/mike/dev/photo-sync/scripts/release.sh (allow)",
+      "text" : "Write /Users/alex/dev/photo-sync/scripts/release.sh (allow)",
       "turn" : "turn_1"
     },
     {

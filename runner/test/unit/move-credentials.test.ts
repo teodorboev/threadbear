@@ -27,7 +27,7 @@ const CASES: [string, string][] = [
   ['ssh://git@github.com/o/r.git', 'ssh://git@github.com/o/r.git'],
   ['git@github.com:mikecann/threadbear.git', 'git@github.com:mikecann/threadbear.git'],
   ['https://github.com/mikecann/threadbear', 'https://github.com/mikecann/threadbear'],
-  ['/Users/mike/origin.git', '/Users/mike/origin.git'],
+  ['/Users/alex/origin.git', '/Users/alex/origin.git'],
 ];
 
 test('an address loses anything that could be a password or token, on the runner and in the backend', () => {
@@ -66,16 +66,16 @@ test('the preview sends the target only what it plans from, scrubbed, and an old
   scrubber.known.add('hunter2-very-secret-value');
   const info = moveInfoFrom({
     title: 'Deploy with hunter2-very-secret-value',
-    cwd: '/Users/mike/dev/app',
-    home: '/Users/mike',
+    cwd: '/Users/alex/dev/app',
+    home: '/Users/alex',
     provider: 'claude',
     accountId: 'claude-main',
-    email: 'mike@example.com',
+    email: 'alex@example.com',
     model: 'opus',
     effort: 'max',
     permissionMode: 'ask',
     origin: `https://user:${TOKEN}@github.com/owner/private.git`,
-    repoTop: '/Users/mike/dev/app',
+    repoTop: '/Users/alex/dev/app',
     subdir: '',
     worktree: true,
     sessionId: 'sess-1',
@@ -84,16 +84,16 @@ test('the preview sends the target only what it plans from, scrubbed, and an old
   const sent = previewInfo(info, (v) => scrubber.doc(v));
   assert.deepEqual(sent, {
     title: '',
-    cwd: '/Users/mike/dev/app',
-    home: '/Users/mike',
+    cwd: '/Users/alex/dev/app',
+    home: '/Users/alex',
     provider: 'claude',
     accountId: 'claude-main',
     permissionMode: 'ask',
     worktree: true,
     schedules: 0,
-    email: 'mike@example.com',
+    email: 'alex@example.com',
     origin: 'https://github.com/owner/private.git',
-    repoTop: '/Users/mike/dev/app',
+    repoTop: '/Users/alex/dev/app',
     subdir: '',
   });
   // A target from before this reads it as before.

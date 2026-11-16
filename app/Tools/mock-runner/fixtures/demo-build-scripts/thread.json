@@ -1,7 +1,7 @@
 {
   "id": "demo_build_scripts",
   "title": "Tidy up the build scripts",
-  "cwd": "/Users/mike/dev/photo-sync",
+  "cwd": "/Users/alex/dev/photo-sync",
   "accountId": "claude-main",
   "provider": "claude",
   "permissionMode": "ask",

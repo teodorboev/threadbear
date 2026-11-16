@@ -85,7 +85,7 @@ test('the card pick is read only from answers on the card the runner worded', ()
   assert.equal(pick(FULL_SYNC_ON, [{ ...ASK, action: fullSyncQuestion('machine', 'Mac') }]), undefined);
 });
 
-test("Mike's pick on a decoy card the asking thread was talked into sets nothing", () => {
+test("Alex's pick on a decoy card the asking thread was talked into sets nothing", () => {
   const { h, asking, full } = world();
   cardUp(h, asking.id, { needs: 'you', asks: [{ question: 'Turn on local diagnostic logging? It stays on this Mac.', options: [FULL_SYNC_ON, FULL_SYNC_OFF] }] });
   h.runner.send(asking.id, FULL_SYNC_ON, [], { answers: [{ action: 'Turn on local diagnostic logging? It stays on this Mac.', answer: FULL_SYNC_ON }] });
@@ -109,7 +109,7 @@ test("another Auto thread's words, raw or by RPC, set nothing; the asking thread
   assert.equal(readRunnerJson(h.runner.cfg.home).sync?.fullAskedThread, asking.id);
 });
 
-test("Mike's pick on the card sets it, once; a replay, or a pick on another thread, does nothing", async () => {
+test("Alex's pick on the card sets it, once; a replay, or a pick on another thread, does nothing", async () => {
   const { h, asking, attacker, full } = world('ask');
   cardUp(h, asking.id);
   h.runner.send(asking.id, `${QUESTION}\n${FULL_SYNC_OFF}`, [], { answers: [{ action: QUESTION, answer: FULL_SYNC_OFF }] });

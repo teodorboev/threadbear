@@ -12,29 +12,29 @@ import { buildThreadbearTools, type RemoteControl } from '../../src/threadbear-m
 import { pickRunner, stillRunner } from '../../src/moves.ts';
 import type { PermissionMode } from '../../src/protocol.ts';
 
-const legit = { id: 'legitcloud01', name: 'Hetzner Cloud' };
-const main = { id: 'main00000001', name: 'M5' };
+const legit = { id: 'legitcloud01', name: 'Cloud box' };
+const main = { id: 'main00000001', name: 'Laptop' };
 const evil = { id: 'evilrunner01', name: 'Evil Box' };
 
 test('a word that is one runner\'s whole name and part of another\'s names neither', () => {
   assert.deepEqual(pickRunner('cloud', [main, legit, evil]), legit);
   assert.deepEqual(pickRunner('legitcloud01', [main, legit, evil]), legit);
-  assert.deepEqual(pickRunner('m5', [main, legit, evil]), main);
+  assert.deepEqual(pickRunner('laptop', [main, legit, evil]), main);
   const renamed = [main, legit, { ...evil, name: 'cloud' }];
   const r = pickRunner('cloud', renamed);
   assert.ok('problem' in r, JSON.stringify(r));
-  assert.match('problem' in r ? r.problem : '', /Hetzner Cloud \(legitcloud01\) or cloud \(evilrunner01\)/);
+  assert.match('problem' in r ? r.problem : '', /Cloud box \(legitcloud01\) or cloud \(evilrunner01\)/);
   // Its id still names it, and so does the whole name no other contains.
   assert.deepEqual(pickRunner('legitcloud01', renamed), legit);
-  assert.deepEqual(pickRunner('Hetzner Cloud', renamed), legit);
+  assert.deepEqual(pickRunner('Cloud box', renamed), legit);
   assert.ok('problem' in pickRunner('nowhere', renamed));
   assert.ok('problem' in pickRunner('  ', renamed));
 });
 
 test('as the move goes, the runner must still be there under the name the card showed', () => {
-  assert.deepEqual(stillRunner('legitcloud01', 'Hetzner Cloud', [main, legit]), legit);
-  assert.throws(() => stillRunner('legitcloud01', 'Hetzner Cloud', [main]), /isn't there any more/);
-  assert.throws(() => stillRunner('legitcloud01', 'Hetzner Cloud', [main, { ...legit, name: 'cloud' }]), /is called cloud now/);
+  assert.deepEqual(stillRunner('legitcloud01', 'Cloud box', [main, legit]), legit);
+  assert.throws(() => stillRunner('legitcloud01', 'Cloud box', [main]), /isn't there any more/);
+  assert.throws(() => stillRunner('legitcloud01', 'Cloud box', [main, { ...legit, name: 'cloud' }]), /is called cloud now/);
 });
 
 function setup(mode: PermissionMode) {
@@ -71,14 +71,14 @@ test('ask: the card names the runner by name and id, and a rename while it is up
     card = s.cards().at(-1);
   }
   assert.ok(card, 'a card');
-  assert.match(card.title, /to the runner Hetzner Cloud \(legitcloud01\)/);
+  assert.match(card.title, /to the runner Cloud box \(legitcloud01\)/);
   assert.equal(card.input.runner, 'legitcloud01');
   // The other Mac takes the word while the card is up.
   s.rename([main, legit, { ...evil, name: 'cloud' }]);
   s.h.runner.respondApproval({ threadId: s.me.id, approvalId: card.approvalId, decision: 'allow' });
   const r = await p;
   assert.equal(r.error, false, r.text);
-  assert.deepEqual(s.moved, [{ threadId: s.me.id, runnerId: 'legitcloud01', runnerName: 'Hetzner Cloud' }]);
+  assert.deepEqual(s.moved, [{ threadId: s.me.id, runnerId: 'legitcloud01', runnerName: 'Cloud box' }]);
 });
 
 test('ask: an ambiguous word is refused before any card', async () => {
@@ -93,8 +93,8 @@ test('ask: an ambiguous word is refused before any card', async () => {
 
 test('full: no card, and the move still goes by the id picked', async () => {
   const s = setup('full');
-  const r = await s.call({ runner: 'Hetzner' });
+  const r = await s.call({ runner: 'Cloud box' });
   assert.equal(r.error, false, r.text);
   assert.equal(s.cards().length, 0);
-  assert.deepEqual(s.moved, [{ threadId: s.me.id, runnerId: 'legitcloud01', runnerName: 'Hetzner Cloud' }]);
+  assert.deepEqual(s.moved, [{ threadId: s.me.id, runnerId: 'legitcloud01', runnerName: 'Cloud box' }]);
 });

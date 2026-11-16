@@ -86,11 +86,11 @@
       "expected": "claude-3"
     },
     {
-      "name": "an account with a note (claude-2, Convex work only) is never picked",
+      "name": "an account with a note (claude-2, Work only) is never picked",
       "lastUsedId": "claude-main",
       "accounts": [
         { "id": "claude-main", "provider": "claude", "windows": [["five_hour", 40], ["weekly", 40]] },
-        { "id": "claude-2", "provider": "claude", "note": "Convex work only", "windows": [["five_hour", 100], ["weekly", 100]] }
+        { "id": "claude-2", "provider": "claude", "note": "Work only", "windows": [["five_hour", 100], ["weekly", 100]] }
       ],
       "expected": "claude-main"
     },
@@ -99,7 +99,7 @@
       "lastUsedId": "claude-2",
       "accounts": [
         { "id": "claude-main", "provider": "claude", "windows": [["five_hour", 40], ["weekly", 40]] },
-        { "id": "claude-2", "provider": "claude", "note": "Convex work only", "windows": [["five_hour", 100], ["weekly", 100]] },
+        { "id": "claude-2", "provider": "claude", "note": "Work only", "windows": [["five_hour", 100], ["weekly", 100]] },
         { "id": "claude-3", "provider": "claude", "windows": [["five_hour", 60], ["weekly", 60]] }
       ],
       "expected": "claude-3"
@@ -165,7 +165,7 @@
       "accounts": [
         { "id": "claude-main", "provider": "claude", "blocked": true, "windows": [["five_hour", 0], ["weekly", 50]] },
         { "id": "claude-1", "provider": "claude", "windows": [["five_hour", 0.5], ["weekly", 50]] },
-        { "id": "claude-2", "provider": "claude", "note": "Convex work only", "windows": [["five_hour", 100], ["weekly", 100]] },
+        { "id": "claude-2", "provider": "claude", "note": "Work only", "windows": [["five_hour", 100], ["weekly", 100]] },
         { "id": "codex-main", "provider": "codex", "windows": [["weekly", 99]] }
       ],
       "expected": "claude-main"

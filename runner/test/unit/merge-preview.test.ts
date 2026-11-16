@@ -31,10 +31,10 @@ test('the merge preview shows clashes and changes, and runs no merge driver from
   fs.writeFileSync(path.join(repo, 'a.sh'), 'theirs\n');
   git(repo, 'commit', '-qam', 'their change');
   git(repo, 'checkout', '-q', 'release');
-  fs.writeFileSync(path.join(repo, 'a.sh'), 'mike\n');
+  fs.writeFileSync(path.join(repo, 'a.sh'), 'alex\n');
   fs.writeFileSync(path.join(repo, 'b.txt'), 'new\n');
   git(repo, 'add', '.');
-  git(repo, 'commit', '-qm', "Mike's change");
+  git(repo, 'commit', '-qm', "Alex's change");
   const release = git(repo, 'rev-parse', 'HEAD');
   git(repo, 'checkout', '-q', 'main');
   const marker = path.join(root, 'ran');

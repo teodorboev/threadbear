@@ -1,0 +1,123 @@
+{
+  "release": "2026-11-14",
+  "highlights": [
+    {
+      "kind": "added",
+      "title": "The new app, for everyone",
+      "text": "The new app for Mac, Windows and Linux is ready for everyone. The Mac app offers it once when it opens and keeps a card at the top of the sidebar: Start using it starts a thread that builds it, sorts out anything in the way and asks you before it switches. The old app stays installed.",
+      "media": {
+        "type": "image",
+        "src": "new-app-offer.webp",
+        "width": 1720,
+        "height": 1300,
+        "alt": "The Mac app with a card at the top of the sidebar, \"A new Threadbear app\", with Start using it and Later, and a window over the thread saying \"Try the new Threadbear app\": it runs on Windows and Linux too, opens with your threads, settings and drafts, and this app no longer gets new features. Its buttons are Not now and Start using the new app."
+      }
+    },
+    {
+      "kind": "added",
+      "title": "Open Anything",
+      "text": "In the new app, ⌘K (or ⌘P) opens any thread, panel, project or page by typing a bit of its name. Return opens it, ⌘Return opens it beside. An experiment: turn it on in Settings > General > Experiments.",
+      "media": {
+        "type": "clip",
+        "src": "open-anything.mp4",
+        "poster": "open-anything.webp",
+        "width": 1600,
+        "height": 1058,
+        "alt": "A box comes up over the window with Recent and Go to. Typing \"conv\" lists the Convex panels, then \"photo\" narrows it to the Photo sync project, and choosing it opens the project's page."
+      }
+    },
+    {
+      "kind": "added",
+      "title": "Reinstall the runner from Updates",
+      "text": "When the runner's own app needs reinstalling, the Updates panel has a Reinstall now button in place of a command to copy into a terminal. It waits until no thread is busy, then the runner restarts.",
+      "media": {
+        "type": "clip",
+        "src": "reinstall.mp4",
+        "poster": "reinstall.webp",
+        "width": 760,
+        "height": 860,
+        "alt": "The Updates panel says Threadbear Runner.app was built from older sources and has a Reinstall now button. Pressing it shows \"Reinstalling the runner\" with a spinner, then \"The runner is up to date.\""
+      }
+    },
+    {
+      "kind": "changed",
+      "title": "Spelling in the new app's message box",
+      "text": "The new app's message box checks spelling as the old one did: red marks under misspelled words, the Mac's autocorrect and text replacements, and right-click for suggestions.",
+      "media": {
+        "type": "image",
+        "src": "spelling.webp",
+        "width": 1000,
+        "height": 250,
+        "alt": "The message box with \"Can you chek the dashbord colours in dark mode and make the tabel headers easier to read?\", with red wavy lines under chek, dashbord and tabel."
+      }
+    },
+    {
+      "kind": "added",
+      "title": "The paw at work",
+      "text": "While a thread works in the new app, the paw beside \"Bear with me\" flips, spins, kneads, waves or leaves a few prints, a different move every couple of seconds.",
+      "media": {
+        "type": "clip",
+        "src": "working-paw.mp4",
+        "poster": "working-paw.webp",
+        "width": 560,
+        "height": 130,
+        "alt": "A working thread's line \"Bear with me\" with its time counting up, and the small paw beside it changing moves: a wave, a trail of prints, a spin."
+      }
+    },
+    {
+      "kind": "added",
+      "title": "A new thread's box drops into place",
+      "text": "In the new app, the message box on a new thread drops down under the transcript when you send, and threads ease in as you open them.",
+      "media": {
+        "type": "clip",
+        "src": "new-thread-drop.mp4",
+        "poster": "new-thread-drop.webp",
+        "width": 1080,
+        "height": 1640,
+        "alt": "The new thread page asks \"What should we work on?\". \"Make the empty state friendlier\" is typed into the box and sent, the box slides down to the bottom of the window and the reply streams in above it."
+      }
+    }
+  ],
+  "added": [
+    "Self-hosting behind your own address: setup takes --url and --site-url, for when your own proxy, Tailscale or VPN already reaches the Mac",
+    "Patches can see their thread's title and projects, so a panel can show in only the threads it's for",
+    {
+      "text": "With the Codex models on Full access, the runner answers Codex's own questions, so a thread never stops for Allow or Deny",
+      "credit": "Ian Macartney"
+    },
+    "New threads can be told which open threads may already be on the same work, and to hand it over rather than do it twice (an experiment)"
+  ],
+  "changed": [
+    {
+      "text": "New threads start on the permission mode you last picked for one, as they already did for the model",
+      "credit": "Ian Macartney"
+    },
+    {
+      "text": "Picking another model from the menu after a usage limit carries on straight away, and an idle move says the new model starts from your next message",
+      "credit": "Ian Macartney"
+    },
+    "The done card no longer lists the agent's own \"Still open\" lines, which never gave you anything to do; a job still running is checked instead",
+    "The Run card on questions is gone: use the play button on a shell code block",
+    "OpenCode and Cursor are standard, no longer an experiment: they turn up wherever they're installed and signed in",
+    "Full sync is off for a new install and offered once, when a phone, browser or second Mac turns up and it would help",
+    "Switching a thread to Full access allows the cards it's waiting on that Full wouldn't have asked",
+    "An agent that snoozes until something happens is woken once it has, with a turn to check, not the first time someone mentions it",
+    "A thread that moves to another login at a usage limit says so in a quiet line, in place of the limit's red error",
+    "You can change the login of a thread on another machine from the Mac, and the phone and website say when a thread moved login",
+    "The direct link between Macs (tb pair and Connect to other machines directly) is gone: other machines' threads have gone through Convex for over a week",
+    "Renaming a thread that has more access than the agent asking now needs your OK",
+    "The web runtime for panels keeps itself up to date with Chromium, and Updates says when it falls behind",
+    "The new app swaps in its updates by handing over to the new build, each thread keeps its scroll place, and Updates says what the restart is waiting on with a countdown",
+    "Panels in the new app move only by their title or tab; Settings > General > Move panels by their background turns the old way back on",
+    "The new app caught up on more of the old one: the first-run tour, the Browser pane, Notion task boards, pictures of PDFs and videos on file cards, Highlights and Files side by side, a Full sync switch in Settings, and the side pane's open file coming back after a restart"
+  ],
+  "fixed": [
+    "A thread whose page had an emoji cut in half by a long tool title sat on its spinner and never opened",
+    "Messages sent just before pressing Stop could disappear",
+    "Long notes in a thread ran off both sides instead of wrapping",
+    "Claude Code installed with npm or Homebrew wasn't found unless it was also in ~/.local/bin",
+    "A turn that failed on another machine showed as an empty reply",
+    "A patch's command only got the first 64 KB of a command's output",
+    "Security fixes: a project's app could open in Chrome's place, a crafted page or drag could hang the app, a second runner could make a moving thread look like it was on this Mac, part of a secret could reach Convex from a running job's line, and a malformed reply or setting could change logins or remove threads"
+  ]
+}

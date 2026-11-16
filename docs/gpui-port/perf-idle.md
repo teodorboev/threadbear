@@ -317,6 +317,46 @@ while keeping the generic loading-spinner clock. Its working-row comparison
 is pending, including a loader beside a working arc: two clocks can draw on
 staggered frames, so the isolated loading result does not cover that case.
 
+## Native working arc (parked, 15 Nov)
+
+The biggest idle gap left against Swift is the sidebar's working arc: about
+24% of one core with one working thread on screen, against Swift's 2%, because
+GPUI redraws it from the app 60 times a second where Swift hands it to Core
+Animation. A Mac-only prototype hands the arc to a `CAShapeLayer` instead,
+with the same geometry, colour and 0.9 s turn, and falls back to the Rust arc
+under menus and overlays, while rows move, and on other platforms.
+
+Where it got to, on Tinker Desk (M2, 60 Hz), with the arc off and on in the
+same binary:
+
+| One working row on screen | Rust arc | Core Animation arc |
+|---|---:|---:|
+| App CPU, % of one core, quiet | 24.1 | 2.6 |
+| App CPU, % of one core, seven cores busy | 10.5 | 1.3 |
+| Interrupt wakeups/second | about 92 | about 9.5 |
+| WindowServer CPU, quiet (shared, all apps) | 19.6 | 19.8 |
+
+The last version passes the menu and freeze check (no blank or misplaced arc
+in 361 frames, 96 with a menu open, eight working rows, seven cores busy and a
+0.25 s main-thread stall) and the scroll alignment check (725 frames, 240
+real wheel steps, no arc drifting from its row). Both use a recording of the
+app's own window through a display filter. A recording of the window by
+itself still shows a one-frame blank on the switch, including in a small
+AppKit, Metal and Core Animation app with no GPUI in it, so it's a difference
+between ways of recording, not proof either way of what the screen shows.
+
+Open risks: native layers covering GPUI overlays, clipping and opacity while
+rows move, window lifetime and recovery from a failed draw, and what it costs
+in scrolling and in WindowServer.
+
+Not done: the paired scroll CPU and input-to-handoff comparison on the last
+version (an earlier one held the main thread in `nextDrawable` while
+scrolling, 21 to 34 ms p90 from invalidation to handoff), the matched Swift
+comparison under load, and a final review. Mike stopped it on 15 Nov as not
+worth more time. The work is on the branch
+[`perf3-native-arc`](https://github.com/mikecann/threadbear/tree/perf3-native-arc),
+switched off by default, if someone wants to pick it up.
+
 ## Retained loader with the original arc timer
 
 On 14 November, after the OS update, both saved binaries ran on the same

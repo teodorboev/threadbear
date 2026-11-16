@@ -12,7 +12,7 @@ import { relayEvents, type RelayRow, type RelayThreadRow } from '../../src/relay
 import { call, load } from '../helpers/convex-memory.ts';
 import { threeWays } from '../helpers/routes.ts';
 
-const MOVED = 'Moved to mike@example.org: mike@example.net hit its 5-hour limit, back at 11:30 am.';
+const MOVED = 'Moved to alex@example.org: alex@example.net hit its 5-hour limit, back at 11:30 am.';
 const at = (s: number) => new Date(Date.parse('2026-11-13T02:00:00Z') + s * 1000).toISOString();
 
 test("a login's note goes up as a note row, and no other note does", () => {
@@ -36,8 +36,8 @@ test('another Mac plays a note row as the note it was, between the turns', () =>
     { seq: 6, role: 'user', text: 'Carry on from where you left off.', origin: 'runner', turn: 'bbbb2222', at: at(3) },
     { seq: 7, role: 'assistant', text: 'Landed.', turn: 'bbbb2222', at: at(4) },
   ];
-  const idle: RelayThreadRow = { runnerId: 'pixel', status: 'idle' };
-  const ev = relayEvents('t', rows, idle, [], false, 'Pixel') as Record<string, any>[];
+  const idle: RelayThreadRow = { runnerId: 'phone', status: 'idle' };
+  const ev = relayEvents('t', rows, idle, [], false, 'Phone') as Record<string, any>[];
   const types = ev.map((e) => (e.type === 'system.note' ? `note:${e.turnId ?? ''}` : `${e.type}:${e.turnId}`));
   assert.deepEqual(types, [
     'turn.started:aaaa1111',
@@ -61,17 +61,17 @@ test("a note after the last turn leaves that turn's card and its end as they wer
   const rows: RelayRow[] = [
     { seq: 2, role: 'user', text: 'Land it', turn: 'aaaa1111', at: at(0) },
     { seq: 3, role: 'assistant', text: 'Half way there.', turn: 'aaaa1111', at: at(1) },
-    { seq: 5, role: 'note', text: 'Every login in Claude is out of room. Carrying on at 11:30 am when mike@example.net is back.', at: at(2) },
+    { seq: 5, role: 'note', text: 'Every login in Claude is out of room. Carrying on at 11:30 am when alex@example.net is back.', at: at(2) },
   ];
-  const done = (row: RelayThreadRow, settled = true) => (relayEvents('t', rows, row, [], false, 'Pixel', settled) as Record<string, any>[]).find((e) => e.type === 'turn.completed');
+  const done = (row: RelayThreadRow, settled = true) => (relayEvents('t', rows, row, [], false, 'Phone', settled) as Record<string, any>[]).find((e) => e.type === 'turn.completed');
   // The done card rides on the last turn's end, note or no note.
-  assert.equal(done({ runnerId: 'pixel', status: 'idle', needs: 'nothing', next: ['Ship it'] })?.needs, 'nothing');
-  assert.deepEqual(done({ runnerId: 'pixel', status: 'idle', needs: 'nothing', next: ['Ship it'] })?.next, ['Ship it']);
+  assert.equal(done({ runnerId: 'phone', status: 'idle', needs: 'nothing', next: ['Ship it'] })?.needs, 'nothing');
+  assert.deepEqual(done({ runnerId: 'phone', status: 'idle', needs: 'nothing', next: ['Ship it'] })?.next, ['Ship it']);
   // A thread waiting for room failed its last turn: still said.
-  assert.equal(done({ runnerId: 'pixel', status: 'error' })?.outcome, 'failed');
+  assert.equal(done({ runnerId: 'phone', status: 'error' })?.outcome, 'failed');
   // And it isn't over until that runner's row says so.
-  assert.equal(done({ runnerId: 'pixel', status: 'running' }), undefined);
-  assert.equal(done({ runnerId: 'pixel', status: 'idle' }, false), undefined);
+  assert.equal(done({ runnerId: 'phone', status: 'running' }), undefined);
+  assert.equal(done({ runnerId: 'phone', status: 'idle' }, false), undefined);
 });
 
 test("a kind of row this runner doesn't know is left out, not drawn as a tool call", () => {
@@ -79,7 +79,7 @@ test("a kind of row this runner doesn't know is left out, not drawn as a tool ca
     { seq: 2, role: 'user', text: 'Hi', turn: 'aaaa1111', at: at(0) },
     { seq: 3, role: 'later', text: 'Something new', turn: 'aaaa1111', at: at(1) },
   ] as unknown as RelayRow[];
-  const ev = relayEvents('t', rows, { runnerId: 'pixel', status: 'idle' }, [], false, 'Pixel') as Record<string, any>[];
+  const ev = relayEvents('t', rows, { runnerId: 'phone', status: 'idle' }, [], false, 'Phone') as Record<string, any>[];
   assert.equal(ev.some((e) => e.type === 'tool.call'), false);
 });
 
@@ -90,7 +90,7 @@ test('through the backend: the other Mac gets the note, the phone and the websit
     p.loginMoved();
   });
   assert.deepEqual(refused, []);
-  const moved = 'Moved to mike@example.org: mike@example.net hit its 5-hour limit, back at 11:30 am.';
+  const moved = 'Moved to alex@example.org: alex@example.net hit its 5-hour limit, back at 11:30 am.';
   assert.deepEqual(views.here.notes, [moved]);
   assert.deepEqual(views.relay.notes, [moved]);
   assert.deepEqual(views.phone.notes, [moved], 'the phone route now reads phone:messages with notes, like the app');
@@ -101,7 +101,7 @@ test('through the backend: the other Mac gets the note, the phone and the websit
   const phone = load('phone');
   const page = (await call(b.ctx, phone.messages, { token: 'phone-token', threadId, tools: true })) as { messages: { role: string; text: string }[] };
   assert.ok(page.messages.length > 0);
-  assert.equal(page.messages.some((m) => m.role === 'note' || m.text.includes('mike@example')), false);
+  assert.equal(page.messages.some((m) => m.role === 'note' || m.text.includes('alex@example')), false);
   // And as the website and a newer iPhone app ask: the note, in its place.
   const asked = (await call(b.ctx, phone.messages, { token: 'phone-token', threadId, tools: true, notes: true })) as { messages: { role: string; text: string; seq: number }[] };
   assert.deepEqual(asked.messages.filter((m) => m.role === 'note').map((m) => m.text), [moved]);
@@ -134,5 +134,5 @@ test('through the backend: the other Mac gets the note, the phone and the websit
   await b.ctx.db.patch(row._id, { share: { access: 'link', slug: 'link1' } });
   const shared = (await call(b.ctx, load('share').view, { slug: 'link1', limit: 30 })) as { messages: { role: string; text: string }[] };
   assert.ok(shared.messages.length > 0);
-  assert.equal(shared.messages.some((m) => m.role === 'note' || m.text.includes('mike@example')), false);
+  assert.equal(shared.messages.some((m) => m.role === 'note' || m.text.includes('alex@example')), false);
 });

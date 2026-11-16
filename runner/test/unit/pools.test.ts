@@ -6,8 +6,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import type { Account, Pool, UsageWindow } from '../../src/protocol.ts';
-// Mike's pool folders, as his runner.json has them (poolFolders).
-const DEFAULT_POOL_FOLDERS: Record<string, string[]> = { 'claude-2': ['~/dev/convex'] };
+// Alex's pool folders, as his runner.json has them (poolFolders).
+const DEFAULT_POOL_FOLDERS: Record<string, string[]> = { 'claude-2': ['~/dev/work'] };
 import {
   UNKNOWN_WAIT_MS,
   WAIT_SLACK_MS,
@@ -40,15 +40,15 @@ function acct(id: string, opts: { provider?: 'claude' | 'codex'; note?: string; 
   return a;
 }
 
-const MIKE = [acct('claude-main'), acct('claude-1'), acct('claude-2', { note: 'Convex work only' }), acct('claude-3'), acct('codex-main')];
+const ALEX = [acct('claude-main'), acct('claude-1'), acct('claude-2', { note: 'Work only' }), acct('claude-3'), acct('codex-main')];
 
 // ---------------------------------------------------------- the list
 
-test("defaultPools: one per provider without notes, one per noted login, in Mike's order", () => {
-  const pools = defaultPools(MIKE, {}, DEFAULT_POOL_FOLDERS);
+test("defaultPools: one per provider without notes, one per noted login, in Alex's order", () => {
+  const pools = defaultPools(ALEX, {}, DEFAULT_POOL_FOLDERS);
   assert.deepEqual(pools, [
     { id: 'claude', title: 'Claude', accountIds: ['claude-main', 'claude-1', 'claude-3'], builtIn: true },
-    { id: 'convex', title: 'Convex', accountIds: ['claude-2'], builtIn: true, folders: ['~/dev/convex'] },
+    { id: 'work', title: 'Work', accountIds: ['claude-2'], builtIn: true, folders: ['~/dev/work'] },
     { id: 'codex', title: 'Codex', accountIds: ['codex-main'], builtIn: true },
   ]);
 });
@@ -67,21 +67,21 @@ test('defaultPools: notes from the map count too; a note with no word, or a clas
 
 test("readPools: runner.json's list replaces the built-in one; bad entries are skipped", () => {
   const saved = [{ id: 'mine', title: 'Mine', accountIds: ['claude-3', 'codex-main'], folders: [' ~/x ', ''] }, { id: 'broken' }, 'nope'];
-  assert.deepEqual(readPools({ pools: saved }, MIKE), [{ id: 'mine', title: 'Mine', accountIds: ['claude-3', 'codex-main'], folders: ['~/x'] }]);
+  assert.deepEqual(readPools({ pools: saved }, ALEX), [{ id: 'mine', title: 'Mine', accountIds: ['claude-3', 'codex-main'], folders: ['~/x'] }]);
   // An icon is kept, trimmed; a blank or non-string one is dropped.
   const icons = [{ id: 'a', title: 'A', accountIds: ['claude-3'], icon: ' leaf ' }, { id: 'b', title: 'B', accountIds: ['claude-3'], icon: 7 }, { id: 'c', title: 'C', accountIds: ['claude-3'], icon: ' ' }];
-  assert.deepEqual(readPools({ pools: icons }, MIKE).map((p) => p.icon), ['leaf', undefined, undefined]);
+  assert.deepEqual(readPools({ pools: icons }, ALEX).map((p) => p.icon), ['leaf', undefined, undefined]);
   // Nothing usable, or nothing saved: the built-in ones.
-  assert.equal(readPools({ pools: ['nope'] }, MIKE, DEFAULT_POOL_FOLDERS)[0].builtIn, true);
-  assert.equal(readPools({}, MIKE).length, 3);
+  assert.equal(readPools({ pools: ['nope'] }, ALEX, DEFAULT_POOL_FOLDERS)[0].builtIn, true);
+  assert.equal(readPools({}, ALEX).length, 3);
   assert.equal(readPools({ accountNotes: { 'claude-1': 'Work' } }, [acct('claude-1')])[0].id, 'work');
 });
 
 test('validatePools: duplicates, blanks, empty logins and unknown logins are refused', () => {
-  const ok = validatePools([{ id: 'a', title: 'A', accountIds: ['claude-1'], builtIn: true }], MIKE);
+  const ok = validatePools([{ id: 'a', title: 'A', accountIds: ['claude-1'], builtIn: true }], ALEX);
   assert.deepEqual(ok, { pools: [{ id: 'a', title: 'A', accountIds: ['claude-1'] }] }, 'builtIn is dropped');
-  assert.deepEqual(validatePools([], MIKE), { pools: [] });
-  const err = (raw: unknown) => ('error' in validatePools(raw, MIKE) ? (validatePools(raw, MIKE) as { error: string }).error : '');
+  assert.deepEqual(validatePools([], ALEX), { pools: [] });
+  const err = (raw: unknown) => ('error' in validatePools(raw, ALEX) ? (validatePools(raw, ALEX) as { error: string }).error : '');
   assert.match(err({}), /must be an array/);
   assert.match(err([{ id: 'a', title: 'A', accountIds: ['claude-1'] }, { id: 'a', title: 'B', accountIds: ['claude-3'] }]), /Two pools are called a/);
   assert.match(err([{ id: ' ', title: 'A', accountIds: ['claude-1'] }]), /blank id/);
@@ -92,8 +92,8 @@ test('validatePools: duplicates, blanks, empty logins and unknown logins are ref
 });
 
 test('findPool: by id, else id or title ignoring case', () => {
-  const pools = defaultPools(MIKE, {}, {});
-  assert.equal(findPool(pools, 'convex')?.id, 'convex');
+  const pools = defaultPools(ALEX, {}, {});
+  assert.equal(findPool(pools, 'work')?.id, 'work');
   assert.equal(findPool(pools, 'Claude')?.id, 'claude');
   assert.equal(findPool(pools, 'CODEX ')?.id, 'codex');
   assert.equal(findPool(pools, 'grok'), undefined);

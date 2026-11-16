@@ -1,7 +1,7 @@
 {
   "id": "demo_sqlite_vs_files",
   "title": "Compare SQLite and plain files for the runner",
-  "cwd": "/Users/mike/dev/me/misc",
+  "cwd": "/Users/alex/code/misc",
   "accountId": "claude-3",
   "provider": "claude",
   "permissionMode": "full",

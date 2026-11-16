@@ -1,6 +1,6 @@
 // Moving a thread to another login while a turn runs (as in T3 Code): the
 // turn carries on where it started and says so, and the next message from
-// Mike stops it and starts its own turn on the new login, with a handoff
+// Alex stops it and starts its own turn on the new login, with a handoff
 // that has the work between messages, not only the chat.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';

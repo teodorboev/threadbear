@@ -37,20 +37,20 @@ function hostsFor(env: Record<string, string | undefined>, configured?: string[]
 }
 
 test('by itself, a landing goes where its own THREADBEAR_CHECK_HOST says, else runner.json', () => {
-  assert.equal(hostsFor({ THREADBEAR_CHECK_HOST: 'cloud' }, ['tinker-desk', 'cloud']), 'hosts=cloud prefer=');
-  assert.equal(hostsFor({}, ['tinker-desk', 'cloud']), 'hosts=tinker-desk,cloud prefer=');
+  assert.equal(hostsFor({ THREADBEAR_CHECK_HOST: 'cloud' }, ['build-box', 'cloud']), 'hosts=cloud prefer=');
+  assert.equal(hostsFor({}, ['build-box', 'cloud']), 'hosts=build-box,cloud prefer=');
 });
 
 test("a group's check goes to the configured hosts with those asked for first, whatever the holder set", () => {
   // The holder asked only for cloud: the configured Mac stays in the list.
-  assert.equal(hostsFor({ THREADBEAR_CHECK_HOST: 'cloud', THREADBEAR_CHECK_PREFER: 'cloud,gone' }, ['tinker-desk', 'cloud']),
-    'hosts=tinker-desk,cloud prefer=cloud,gone');
+  assert.equal(hostsFor({ THREADBEAR_CHECK_HOST: 'cloud', THREADBEAR_CHECK_PREFER: 'cloud,gone' }, ['build-box', 'cloud']),
+    'hosts=build-box,cloud prefer=cloud,gone');
   // The holder asked for this Mac (empty): the group still goes to a host.
-  assert.equal(hostsFor({ THREADBEAR_CHECK_HOST: '', THREADBEAR_CHECK_PREFER: 'cloud' }, ['tinker-desk', 'cloud']),
-    'hosts=tinker-desk,cloud prefer=cloud');
+  assert.equal(hostsFor({ THREADBEAR_CHECK_HOST: '', THREADBEAR_CHECK_PREFER: 'cloud' }, ['build-box', 'cloud']),
+    'hosts=build-box,cloud prefer=cloud');
   // The holder asked for this Mac and nobody asked for anything.
-  assert.equal(hostsFor({ THREADBEAR_CHECK_HOST: '', THREADBEAR_CHECK_GROUP: '1' }, ['tinker-desk', 'cloud']),
-    'hosts=tinker-desk,cloud prefer=');
+  assert.equal(hostsFor({ THREADBEAR_CHECK_HOST: '', THREADBEAR_CHECK_GROUP: '1' }, ['build-box', 'cloud']),
+    'hosts=build-box,cloud prefer=');
   // Nothing configured or asked for: the holder's, as before.
   assert.equal(hostsFor({ THREADBEAR_CHECK_HOST: 'cloud', THREADBEAR_CHECK_GROUP: '1' }), 'hosts=cloud prefer=');
   // Nothing configured: the hosts asked for are the list.

@@ -1290,6 +1290,29 @@ export function checkDigest(command: string, cwd: string, commandOnly = false): 
   return { hash: sha256(Buffer.from(JSON.stringify([CHECK_TAG, command, pairs, Boolean(problem)]))), files: pairs.map(([f]) => f), ...(problem ? { problem } : {}) };
 }
 
+// Every file a schedule's check reaches from `cwd`, as checkDigest follows
+// it, there yet or not, for writeRunsAsCode: an approved check runs by
+// itself, as the runner's user, with nobody watching, and its digest is
+// taken a moment before `/bin/sh` opens the scripts. A thread that asks
+// first could otherwise edit one in that moment (or any time before a run
+// that's already passed its digest), and its edit would run unasked
+// (Daybreak 126, 15 Nov 2026). `problem`: what it can't follow, as in
+// checkDigest, so the caller fails closed; the paths the command names
+// after it are in `files` all the same. `top`: the repo it runs in.
+export function checkReach(command: string, cwd: string): { files: string[]; problem?: string; top: string } {
+  const reads = new Reads();
+  const start = followOptions(cwd, reads);
+  const followed = followOutside(command, 'the check', start, reads);
+  const files = new Set([...followed.files, ...followed.missing]);
+  if (followed.problem) {
+    for (const word of command.split(/[\s'"`;&|()<>=]+/)) {
+      if (!word || word.length > MAX_PATH || !word.includes('/')) continue;
+      files.add(path.resolve(start.folder, word.startsWith('~/') ? path.join(os.homedir(), word.slice(2)) : word));
+    }
+  }
+  return { files: [...files], ...(followed.problem ? { problem: followed.problem } : {}), top: start.top };
+}
+
 // The files a shell command run in `folder` reaches, as patch trust
 // follows a patch's commands (script-trust.ts): the scripts it runs, what
 // they import, run and source, there or not. For code-writes, which asks

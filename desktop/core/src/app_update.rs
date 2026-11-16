@@ -416,8 +416,8 @@ mod tests {
             bundle(&dir, "next.app", &BuildInfo { built_on: built_on.map(str::to_owned), ..build("new", "t2") });
         };
         // Check hosts never count, and a bundle that doesn't say goes.
-        std::fs::write(&json, r#"{"checkHosts":["tinker-desk"],"checkHost":"tinker-desk"}"#).unwrap();
-        for who in [Some("tinker-desk"), None] {
+        std::fs::write(&json, r#"{"checkHosts":["build-box"],"checkHost":"build-box"}"#).unwrap();
+        for who in [Some("build-box"), None] {
             staged(who);
             assert!(drop_untrusted_staged(&next, &json).unwrap().is_some(), "{who:?}");
             assert!(!next.exists(), "{who:?}");
@@ -425,10 +425,10 @@ mod tests {
         staged(Some(""));
         assert_eq!(drop_untrusted_staged(&next, &json), Ok(None));
         assert!(next.exists());
-        std::fs::write(&json, r#"{"checkHosts":["tinker-desk"],"updateBuildHosts":["builder"]}"#).unwrap();
+        std::fs::write(&json, r#"{"checkHosts":["build-box"],"updateBuildHosts":["builder"]}"#).unwrap();
         staged(Some("builder"));
         assert_eq!(drop_untrusted_staged(&next, &json), Ok(None));
-        staged(Some("tinker-desk"));
+        staged(Some("build-box"));
         assert!(drop_untrusted_staged(&next, &json).unwrap().is_some());
         // No runner.json, or one that can't be read: only a build here.
         std::fs::remove_file(&json).unwrap();

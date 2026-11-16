@@ -8,17 +8,17 @@ import assert from 'node:assert/strict';
 import { relayEvents, type Card, type RelayRow, type RelayThreadRow } from '../../src/relay.ts';
 import type { LabReviewLedger } from '../../src/protocol.ts';
 
-const T = 'thread-on-bruce';
+const T = 'thread-on-mac-mini';
 const at = (s: number) => new Date(Date.parse('2026-11-12T10:00:00Z') + s * 1000).toISOString();
 const PLAN: RelayRow = { seq: 4, role: 'assistant', text: '# Bots\n\n1. Add a bots table', plan: true, turn: 'aaaa1111', at: at(1) };
 const start: RelayRow = { seq: 2, role: 'user', text: 'Plan the bots', turn: 'aaaa1111', at: at(0) };
-const idle: RelayThreadRow = { runnerId: 'bruce', status: 'idle', needs: 'you' };
+const idle: RelayThreadRow = { runnerId: 'mac-mini', status: 'idle', needs: 'you' };
 
 const outcome = (plan: RelayRow, after: RelayRow[] = []) =>
-  relayEvents(T, [start, plan, ...after], idle, [], false, 'bruce').find((e) => e.type === 'plan.resolved' && e.itemId === `relay-${plan.seq}`)?.decision;
+  relayEvents(T, [start, plan, ...after], idle, [], false, 'mac-mini').find((e) => e.type === 'plan.resolved' && e.itemId === `relay-${plan.seq}`)?.decision;
 
 test('a plan row is a plan card, not a reply folded into the work', () => {
-  const ev = relayEvents(T, [start, PLAN], idle, [], false, 'bruce');
+  const ev = relayEvents(T, [start, PLAN], idle, [], false, 'mac-mini');
   const plan = ev.find((e) => e.type === 'plan.proposed');
   assert.ok(plan, 'a plan.proposed');
   assert.equal(plan.itemId, 'relay-4');
@@ -29,7 +29,7 @@ test('a plan row is a plan card, not a reply folded into the work', () => {
 
 test('a plan row from an older backend, with no flag, is a reply as before', () => {
   const { plan: _plan, ...asText } = PLAN;
-  const ev = relayEvents(T, [start, asText], idle, [], false, 'bruce');
+  const ev = relayEvents(T, [start, asText], idle, [], false, 'mac-mini');
   assert.equal(ev.some((e) => e.type === 'plan.proposed'), false);
   assert.ok(ev.some((e) => e.type === 'assistant.text' && e.text === PLAN.text));
 });
@@ -38,7 +38,7 @@ test('what became of a plan is what its runner says, never a guess from what cam
   const turn = 'aaaa1111';
   assert.equal(outcome({ ...PLAN, planDecision: 'go' }), 'go');
   assert.equal(outcome({ ...PLAN, planDecision: 'revise' }), 'revise');
-  // Work after it, Mike writing, a schedule's message: none of them say
+  // Work after it, Alex writing, a schedule's message: none of them say
   // which (a denied plan's revision reads files too, Codex's review).
   assert.equal(outcome(PLAN, [{ seq: 6, role: 'tool', text: 'Read ~/x.ts', toolKind: 'read', turn, at: at(2) }]), undefined);
   assert.equal(outcome(PLAN, [{ seq: 6, role: 'user', text: 'Use Postgres instead', turn: 'bbbb2222', at: at(5) }]), undefined);
@@ -48,8 +48,8 @@ test('what became of a plan is what its runner says, never a guess from what cam
 });
 
 test('a resolution that comes later goes in its own seq, after the plan', () => {
-  const waiting = relayEvents(T, [start, PLAN], idle, [], false, 'bruce');
-  const resolved = relayEvents(T, [start, { ...PLAN, planDecision: 'go' }], idle, [], false, 'bruce');
+  const waiting = relayEvents(T, [start, PLAN], idle, [], false, 'mac-mini');
+  const resolved = relayEvents(T, [start, { ...PLAN, planDecision: 'go' }], idle, [], false, 'mac-mini');
   const proposed = resolved.find((e) => e.type === 'plan.proposed')!;
   const went = resolved.find((e) => e.type === 'plan.resolved')!;
   assert.equal(went.decision, 'go');
@@ -61,19 +61,19 @@ test("Claude's plan card goes with the plan's card, only once the plan is here a
   const pending = { approvalId: 'a1', kind: 'approval' as const, seq: 5, name: 'ExitPlanMode', title: 'Finish the plan', options: ['deny'], planSeq: 4 };
   const row: RelayThreadRow = { ...idle, status: 'waiting', pendingApproval: pending };
   const card: Card = { pending, slot: 5 * 8 + 1 };
-  const withPlan = relayEvents(T, [start, PLAN], row, [card], false, 'bruce').find((e) => e.type === 'approval.requested');
+  const withPlan = relayEvents(T, [start, PLAN], row, [card], false, 'mac-mini').find((e) => e.type === 'approval.requested');
   assert.equal(withPlan?.itemId, 'relay-4');
   // Without the plan row (an older backend's, or not read yet) the card
   // stands on its own: one naming a plan that isn't drawn would show nothing.
   const { plan: _plan, ...asText } = PLAN;
-  const without = relayEvents(T, [start, asText], row, [card], false, 'bruce').find((e) => e.type === 'approval.requested');
+  const without = relayEvents(T, [start, asText], row, [card], false, 'mac-mini').find((e) => e.type === 'approval.requested');
   assert.equal(without?.itemId, undefined);
 });
 
 test("another lab's review goes on its own turn's end, and no other", () => {
   const review: LabReviewLedger = { reviewer: 'Codex (codex-1)', independent: true, rounds: 1, threadId: 'r1', passed: false, findings: [{ id: 1, round: 1, severity: 'high', claim: 'Drops the session on refresh.', outcome: 'fixed' }] };
   const reply: RelayRow = { seq: 6, role: 'assistant', text: 'Fixed it.', turn: 'aaaa1111', at: at(3) };
-  const end = (cardTurn?: string) => relayEvents(T, [start, reply], { ...idle, needs: 'nothing', review, ...(cardTurn ? { cardTurn } : {}) }, [], false, 'bruce').filter((e) => e.type === 'turn.completed').at(-1);
+  const end = (cardTurn?: string) => relayEvents(T, [start, reply], { ...idle, needs: 'nothing', review, ...(cardTurn ? { cardTurn } : {}) }, [], false, 'mac-mini').filter((e) => e.type === 'turn.completed').at(-1);
   assert.deepEqual(end('aaaa1111')?.review, review);
   // The row is a newer turn's whose rows haven't come yet (Codex's review).
   assert.equal(end('cccc3333')?.review, undefined);
@@ -87,13 +87,13 @@ test("another lab's review goes on its own turn's end, and no other", () => {
 // most MAX_HELD rows.
 test('in a run of plans each but the newest was sent back', () => {
   const plans: RelayRow[] = Array.from({ length: 2_000 }, (_, i) => ({ seq: 10 + i, role: 'assistant', text: 'p', plan: true, turn: 'aaaa1111', at: at(1) }));
-  const ev = relayEvents(T, [start, ...plans, { ...plans[0]!, seq: 5000, planDecision: 'go' }, { seq: 5001, role: 'tool', text: 'Read x', toolKind: 'read', turn: 'aaaa1111', at: at(2) }], idle, [], false, 'bruce');
+  const ev = relayEvents(T, [start, ...plans, { ...plans[0]!, seq: 5000, planDecision: 'go' }, { seq: 5001, role: 'tool', text: 'Read x', toolKind: 'read', turn: 'aaaa1111', at: at(2) }], idle, [], false, 'mac-mini');
   const resolved = ev.filter((e) => e.type === 'plan.resolved');
   assert.equal(resolved.length, plans.length + 1);
   assert.ok(resolved.slice(0, -1).every((e) => e.decision === 'revise'));
   // The newest says what became of it itself.
   assert.deepEqual([resolved.at(-1)!.itemId, resolved.at(-1)!.decision], ['relay-5000', 'go']);
   // With no decision and none after it, the newest still waits.
-  const waiting = relayEvents(T, [start, ...plans], idle, [], false, 'bruce').filter((e) => e.type === 'plan.resolved');
+  const waiting = relayEvents(T, [start, ...plans], idle, [], false, 'mac-mini').filter((e) => e.type === 'plan.resolved');
   assert.equal(waiting.some((e) => e.itemId === `relay-${plans.at(-1)!.seq}`), false);
 });

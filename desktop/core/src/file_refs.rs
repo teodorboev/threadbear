@@ -385,7 +385,7 @@ mod tests {
 
     #[test]
     fn another_macs_home_comes_from_its_folder() {
-        assert_eq!(remote_home("/Users/mikeysee/dev/x", "/Users/me"), "/Users/mikeysee");
-        assert_eq!(remote_home("/home/mike/x", "/Users/me"), "/Users/me");
+        assert_eq!(remote_home("/Users/alex/dev/x", "/Users/me"), "/Users/alex");
+        assert_eq!(remote_home("/home/alex/x", "/Users/me"), "/Users/me");
     }
 }

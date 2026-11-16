@@ -134,19 +134,24 @@ the data dir (`<home>`, normally `~/Library/Application Support/Threadbear`):
   launch.mjs), and a runner with neither still runs node as the program.
   Any of those sets `launcherChanged` and `launcherReason`, which
   `tb status` and the app's Updates panel show (`launchAgentBehind` in
-  `src/update.ts`). The Updates panel's Reinstall now (`runner.reinstall`)
-  has the runner run `install-runner.sh` itself, or it does so by itself
-  with the `selfReinstall` experiment (`src/reinstall.ts`). Stopping the
-  runner's job stops its whole process group, so the script runs as a
-  launchd job of its own, `<label>.reinstall`, from a one-shot plist in
-  `<home>/runner/reinstall/` (a transient `systemd-run --user` unit on
-  Linux), from the checkout the release was built from, once no thread is
-  busy. Its output goes to `<home>/runner/reinstall.log` and its exit code
-  to `<home>/runner/reinstall/result`, read by whichever runner is up then.
-  `install-runner.sh` exits 75 when threads are busy (it asks again right
-  before it stops anything, as building can take minutes), which the
-  runner takes as "wait and try again", not a failure. A failed reinstall
-  isn't tried again by itself until main's launcher changes. `--uninstall` leaves the app
+  `src/update.ts`). The Updates panel's Update it (`runner.reinstall`)
+  has the runner run `install-runner.sh --stage` itself, or it does so by
+  itself with the `selfReinstall` experiment (`src/reinstall.ts`).
+  `--stage` rebuilds the app in place and puts launch.mjs and the plist in
+  place without stopping or loading anything, so it never waits for an
+  idle moment; launchd picks them up the next time it starts the job (the
+  Mac restarting, logging in again). A full reinstall stops every runner
+  at once, handovers and all, and on Mike's Mac there was never a moment
+  with nothing busy (15 Nov). install-runner.sh refuses to run inside the
+  runner's process tree, so the script runs as a launchd job of its own,
+  `<label>.reinstall`, from a one-shot plist in `<home>/runner/reinstall/`
+  (a transient `systemd-run --user` unit on Linux), from the checkout the
+  release was built from. Its output goes to `<home>/runner/reinstall.log`
+  and its exit code to `<home>/runner/reinstall/result`. A failed one
+  isn't tried again by itself until main's launcher changes. Run by hand
+  without `--stage`, `install-runner.sh` exits 75 when threads are busy
+  (asked again right before it stops anything, as building can take
+  minutes). `--uninstall` leaves the app
   where it is. `--from-source` keeps today's run-from-the-checkout mode for
   debugging. `--home`, `--label` and `--port` allow a sandbox install next
   to the real one (the plist then sets `THREADBEAR_HOME` and

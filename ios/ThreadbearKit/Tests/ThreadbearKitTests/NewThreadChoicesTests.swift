@@ -38,13 +38,13 @@ import Testing
     /// the picker starts on the first runner online in Mike's order.
     @Test func runnerIsTheFirstOnlineInOrder() {
         let now = Date(timeIntervalSince1970: 1_000_000)
-        let asleep = PhoneRunner(runnerId: "m5", name: "M5", lastSeenAt: now.addingTimeInterval(-600), placed: true, main: true)
-        let draining = PhoneRunner(runnerId: "tinker", name: "Tinker", lastSeenAt: now, draining: true, placed: true)
-        let bruce = PhoneRunner(runnerId: "bruce", name: "Bruce", lastSeenAt: now, placed: true)
-        #expect(NewThreadChoices.runner([asleep, draining, bruce], now: now)?.runnerId == "bruce")
-        #expect(NewThreadChoices.runner([bruce, asleep], now: now)?.runnerId == "bruce")
+        let asleep = PhoneRunner(runnerId: "laptop", name: "Laptop", lastSeenAt: now.addingTimeInterval(-600), placed: true, main: true)
+        let draining = PhoneRunner(runnerId: "build-box", name: "Build box", lastSeenAt: now, draining: true, placed: true)
+        let mini = PhoneRunner(runnerId: "mac-mini", name: "Mac mini", lastSeenAt: now, placed: true)
+        #expect(NewThreadChoices.runner([asleep, draining, mini], now: now)?.runnerId == "mac-mini")
+        #expect(NewThreadChoices.runner([mini, asleep], now: now)?.runnerId == "mac-mini")
         // None online: the first, to wait for.
-        #expect(NewThreadChoices.runner([asleep, draining], now: now)?.runnerId == "m5")
+        #expect(NewThreadChoices.runner([asleep, draining], now: now)?.runnerId == "laptop")
         #expect(NewThreadChoices.runner([], now: now) == nil)
     }
 
@@ -52,19 +52,19 @@ import Testing
     /// order (Codex's review): with no order, the main Mac, asleep or not.
     @Test func anUnplacedRunnerIsNeverPickedForHim() {
         let now = Date(timeIntervalSince1970: 1_000_000)
-        let asleep = PhoneRunner(runnerId: "m5", name: "M5", lastSeenAt: now.addingTimeInterval(-600), main: true)
-        let bruce = PhoneRunner(runnerId: "bruce", name: "Bruce", lastSeenAt: now)
-        #expect(NewThreadChoices.runner([bruce, asleep], now: now)?.runnerId == "m5")
+        let asleep = PhoneRunner(runnerId: "laptop", name: "Laptop", lastSeenAt: now.addingTimeInterval(-600), main: true)
+        let mini = PhoneRunner(runnerId: "mac-mini", name: "Mac mini", lastSeenAt: now)
+        #expect(NewThreadChoices.runner([mini, asleep], now: now)?.runnerId == "laptop")
         // No main Mac known: nothing picked, so the backend decides.
-        #expect(NewThreadChoices.runner([bruce, PhoneRunner(runnerId: "m5", name: "M5", lastSeenAt: now)], now: now) == nil)
+        #expect(NewThreadChoices.runner([mini, PhoneRunner(runnerId: "laptop", name: "Laptop", lastSeenAt: now)], now: now) == nil)
     }
 
     @Test func modelsFollowTheRunner() {
         let accounts = [
-            PhoneAccount(id: "claude-m5", runnerId: "m5", provider: "claude", title: "1", models: [PhoneModelChoice(id: "opus", title: "Opus")]),
-            PhoneAccount(id: "codex-bruce", runnerId: "bruce", provider: "codex", title: "C", models: [PhoneModelChoice(id: "astra", title: "Astra")]),
+            PhoneAccount(id: "claude-laptop", runnerId: "laptop", provider: "claude", title: "1", models: [PhoneModelChoice(id: "opus", title: "Opus")]),
+            PhoneAccount(id: "codex-mini", runnerId: "mac-mini", provider: "codex", title: "C", models: [PhoneModelChoice(id: "astra", title: "Astra")]),
         ]
-        #expect(NewThreadChoices.models(accounts, runnerId: "bruce").map(\.id) == ["astra"])
+        #expect(NewThreadChoices.models(accounts, runnerId: "mac-mini").map(\.id) == ["astra"])
         #expect(NewThreadChoices.models(accounts, runnerId: nil).map(\.id) == ["opus", "astra"])
         // A runner with no logins mirrored yet offers none, rather than another Mac's.
         #expect(NewThreadChoices.models(accounts, runnerId: "cloud").isEmpty)

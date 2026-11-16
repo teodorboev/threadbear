@@ -120,8 +120,12 @@ export function runningCheckFile(home: string, scheduleId: string): string {
 
 // limitMs: its time limit, so another process knows when the marker has
 // gone stale. A marker without one (an older release's) had a minute.
-export function markCheckRunning(home: string, scheduleId: string, at: number, limitMs = CHECK_TIMEOUT_MS): void {
-  atomicWriteFileSync(runningCheckFile(home, scheduleId), JSON.stringify({ pid: process.pid, at, limitMs }));
+// `command` and `cwd`: what's running and where, so the runner on the
+// other side of a handover keeps an edit of its scripts asking until it
+// ends, though the schedule was changed or deleted there meanwhile
+// (writeRunsAsCode; verify-fix on Daybreak 126).
+export function markCheckRunning(home: string, scheduleId: string, at: number, limitMs = CHECK_TIMEOUT_MS, run?: { command: string; cwd: string }): void {
+  atomicWriteFileSync(runningCheckFile(home, scheduleId), JSON.stringify({ pid: process.pid, at, limitMs, ...(run ? { command: run.command, cwd: run.cwd } : {}) }), 0o600);
 }
 
 // A schedule's own time limit for its check, in ms.
@@ -136,13 +140,19 @@ export function clearCheckRunning(home: string, scheduleId: string): void {
   fs.rmSync(runningCheckFile(home, scheduleId), { force: true });
 }
 
-export function checkRunningElsewhere(home: string, scheduleId: string, now: number): boolean {
-  let m: { pid?: unknown; at?: unknown; limitMs?: unknown };
+type RunningMarker = { pid?: unknown; at?: unknown; limitMs?: unknown; command?: unknown; cwd?: unknown };
+
+function readMarker(file: string): RunningMarker | undefined {
   try {
-    m = JSON.parse(fs.readFileSync(runningCheckFile(home, scheduleId), 'utf8'));
+    const m = JSON.parse(fs.readFileSync(file, 'utf8'));
+    return m && typeof m === 'object' ? m : undefined;
   } catch {
-    return false;
+    return undefined;
   }
+}
+
+// Whether a marker is another live process's check, under its time limit.
+function liveElsewhere(m: RunningMarker | undefined, now: number): boolean {
   if (typeof m?.pid !== 'number' || typeof m.at !== 'number' || m.pid === process.pid) return false;
   const limit = typeof m.limitMs === 'number' && m.limitMs > 0 ? Math.min(m.limitMs, MAX_CHECK_TIMEOUT_SECS * 1000) : CHECK_TIMEOUT_MS;
   if (now - m.at > limit * 2) return false;
@@ -153,6 +163,32 @@ export function checkRunningElsewhere(home: string, scheduleId: string, now: num
     // EPERM: it's there, just not ours to signal.
     return (e as NodeJS.ErrnoException).code === 'EPERM';
   }
+}
+
+export function checkRunningElsewhere(home: string, scheduleId: string, now: number): boolean {
+  return liveElsewhere(readMarker(runningCheckFile(home, scheduleId)), now);
+}
+
+// The checks another runner process (the old release, in a handover) is
+// running now, with where. `unknown`: one is running whose marker doesn't
+// say what (an older release's), so what it may open can't be told.
+export function checksRunningElsewhere(home: string, now: number): { checks: { command: string; cwd: string }[]; unknown: boolean } {
+  const dir = path.join(home, 'schedule-checks');
+  const out = { checks: [] as { command: string; cwd: string }[], unknown: false };
+  let names: string[];
+  try {
+    names = fs.readdirSync(dir);
+  } catch {
+    return out;
+  }
+  for (const n of names) {
+    if (!n.endsWith('.running.json')) continue;
+    const m = readMarker(path.join(dir, n));
+    if (!liveElsewhere(m, now)) continue;
+    if (typeof m!.command === 'string' && typeof m!.cwd === 'string') out.checks.push({ command: m!.command, cwd: m!.cwd });
+    else out.unknown = true;
+  }
+  return out;
 }
 
 export function runCheck(p: { command: string; cwd: string; home: string; scheduleId: string; timeoutMs?: number }): Promise<CheckResult> {

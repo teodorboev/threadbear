@@ -844,9 +844,9 @@ mod tests {
     fn logins(pools: Value, cwd: &str) -> RunnerLogins {
         RunnerLogins::from_hello(&json!({
             "accounts": [
-                { "id": "claude-main", "provider": "claude", "email": "mike@gmail.com", "usage": usage(52.0, 67.0) },
-                { "id": "claude-2", "provider": "claude", "email": "mike@work.example", "note": "Convex work only", "usage": usage(90.0, 90.0) },
-                { "id": "claude-3", "provider": "claude", "email": "mike@bearworks.io", "usage": usage(20.0, 88.0) },
+                { "id": "claude-main", "provider": "claude", "email": "alex@home.example", "usage": usage(52.0, 67.0) },
+                { "id": "claude-2", "provider": "claude", "email": "alex@work.example", "note": "Work only", "usage": usage(90.0, 90.0) },
+                { "id": "claude-3", "provider": "claude", "email": "alex@studio.example", "usage": usage(20.0, 88.0) },
                 { "id": "codex-main", "provider": "codex", "title": "Codex · sam@example.com" }
             ],
             "pools": pools,
@@ -861,10 +861,10 @@ mod tests {
         let target = switch_target(&l.accounts, "claude-3").expect("somewhere to go");
         assert_eq!(target.id, "claude-main");
         // Three Claude logins share "mike", so the whole address (AccountName.short).
-        assert_eq!(switch_title(target, &l.accounts), "Switch to mike@gmail.com (52% left)");
+        assert_eq!(switch_title(target, &l.accounts), "Switch to alex@home.example (52% left)");
         // The noted one is never offered, and codex has no room known.
         assert_eq!(switch_target(&l.accounts, "claude-main").map(|a| a.id.as_str()), Some("claude-3"));
-        assert_eq!(continue_title(target, &l.accounts), "mike@gmail.com (52% left)");
+        assert_eq!(continue_title(target, &l.accounts), "alex@home.example (52% left)");
         // The Continue now on menu: the same choice first, then the rest.
         let ids: Vec<&str> = switch_targets(&l.accounts, "claude-3").into_iter().map(|a| a.id.as_str()).collect();
         assert_eq!(ids, vec!["claude-main"]);
@@ -892,16 +892,16 @@ mod tests {
     fn with_pools() -> RunnerLogins {
         logins(json!([
             { "id": "claude", "title": "Claude", "accountIds": ["claude-main", "claude-3"] },
-            { "id": "convex", "title": "Convex", "accountIds": ["claude-2"], "folders": ["~/dev/convex"] }
-        ]), "/Users/mike/dev/me/misc")
+            { "id": "work", "title": "Work", "accountIds": ["claude-2"], "folders": ["~/dev/work"] }
+        ]), "/Users/alex/code/misc")
     }
 
     fn no_pools() -> RunnerLogins {
-        logins(json!([]), "/Users/mike/dev/me/misc")
+        logins(json!([]), "/Users/alex/code/misc")
     }
 
     fn draft<'a>(l: &'a RunnerLogins, picks: &'a NewThreadPicks, mem: &'a Remembered) -> Draft<'a> {
-        Draft { logins: l, picks, mem, home: "/Users/mike", now_ms: 1_762_600_000_000 }
+        Draft { logins: l, picks, mem, home: "/Users/alex", now_ms: 1_762_600_000_000 }
     }
 
     #[test]
@@ -914,11 +914,11 @@ mod tests {
     #[test]
     fn the_folder_decides_the_pool() {
         let l = with_pools();
-        let picks = NewThreadPicks { cwd: Some("/Users/mike/dev/convex/app".into()), ..Default::default() };
+        let picks = NewThreadPicks { cwd: Some("/Users/alex/dev/work/app".into()), ..Default::default() };
         let mem = Remembered::default();
         let d = draft(&l, &picks, &mem);
-        assert_eq!(d.pool_id().as_deref(), Some("convex"));
-        assert_eq!(d.note(None, true), "Starts in app on the Convex pool");
+        assert_eq!(d.pool_id().as_deref(), Some("work"));
+        assert_eq!(d.note(None, true), "Starts in app on the Work pool");
     }
 
     #[test]
@@ -929,8 +929,8 @@ mod tests {
         let d = draft(&l, &picks, &mem);
         assert_eq!(d.pool_id(), None);
         assert_eq!(d.account_id(), "claude-3");
-        assert_eq!(d.note(None, true), "Starts in misc on bearworks");
-        assert_eq!(d.note_tip(None), "~/dev/me/misc on mike@bearworks.io");
+        assert_eq!(d.note(None, true), "Starts in misc on studio");
+        assert_eq!(d.note_tip(None), "~/code/misc on alex@studio.example");
     }
 
     #[test]
@@ -941,7 +941,7 @@ mod tests {
         // claude-3 has the least room (20), so the note follows the picked
         // account: claude-main (67) wins, and its email's local part is shared.
         assert_eq!(d.account_id(), "claude-main");
-        assert_eq!(d.note(None, true), "Starts in misc on mike@gmail.com");
+        assert_eq!(d.note(None, true), "Starts in misc on alex@home.example");
     }
 
     #[test]
@@ -950,8 +950,8 @@ mod tests {
         let picks = NewThreadPicks { runner: Some("r".into()), ..Default::default() };
         let mem = Remembered::default();
         let d = draft(&l, &picks, &mem);
-        assert_eq!(d.note(Some("bruce"), false), "Starts on bruce");
-        assert!(d.note(Some("bruce"), true).starts_with("Starts in misc on bruce, with "));
+        assert_eq!(d.note(Some("mac-mini"), false), "Starts on mac-mini");
+        assert!(d.note(Some("mac-mini"), true).starts_with("Starts in misc on mac-mini, with "));
     }
 
     #[test]
@@ -962,16 +962,16 @@ mod tests {
         let cards = draft(&l, &picks, &mem).room_cards(&now);
         let lines: Vec<(&str, &str, bool)> = cards.iter().map(|c| (c.label.as_str(), c.line.as_str(), c.selected)).collect();
         // In a pool none is ringed: the pool picks.
-        assert_eq!(lines, vec![("gmail", "5h 52% · week 67% left", false), ("bearworks", "5h 20% · week 88% left", false)]);
+        assert_eq!(lines, vec![("home", "5h 52% · week 67% left", false), ("studio", "5h 20% · week 88% left", false)]);
         assert_eq!(cards[1].look, RoomLook::Low);
         assert_eq!(cards[0].fraction, Some(0.52));
-        assert_eq!(cards[0].tooltip, "mike@gmail.com: 5-hour 52% left, Weekly 67% left, resets 6 pm.");
+        assert_eq!(cards[0].tooltip, "alex@home.example: 5-hour 52% left, Weekly 67% left, resets 6 pm.");
     }
 
     #[test]
     fn one_account_has_nothing_to_compare() {
         let l = RunnerLogins::from_hello(&json!({
-            "accounts": [{ "id": "claude-main", "provider": "claude", "email": "mike@gmail.com", "usage": usage(52.0, 67.0) }],
+            "accounts": [{ "id": "claude-main", "provider": "claude", "email": "alex@home.example", "usage": usage(52.0, 67.0) }],
             "pools": [], "defaults": { "cwd": "/x", "accountId": "claude-main" }
         }));
         let (picks, mem) = (NewThreadPicks::default(), Remembered::default());
@@ -1021,16 +1021,16 @@ mod tests {
     #[test]
     fn folders_win_over_the_last_pool() {
         let l = with_pools();
-        assert_eq!(pool_for_folder(&l.pools, "/Users/mike/dev/convex/x", "/Users/mike").as_deref(), Some("convex"));
-        assert_eq!(pool_for_folder(&l.pools, "/Users/mike/dev/me", "/Users/mike"), None);
+        assert_eq!(pool_for_folder(&l.pools, "/Users/alex/dev/work/x", "/Users/alex").as_deref(), Some("work"));
+        assert_eq!(pool_for_folder(&l.pools, "/Users/alex/code", "/Users/alex"), None);
     }
 
     #[test]
     fn new_thread_pool_order() {
         let l = with_pools();
-        assert_eq!(new_thread_pool(&l.pools, Some("convex"), "/x", "/h", None, None).as_deref(), Some("convex"));
+        assert_eq!(new_thread_pool(&l.pools, Some("work"), "/x", "/h", None, None).as_deref(), Some("work"));
         assert_eq!(new_thread_pool(&l.pools, Some("gone"), "/x", "/h", Some("claude"), None).as_deref(), Some("claude"));
-        assert_eq!(new_thread_pool(&l.pools, None, "/x", "/h", Some("gone"), Some("convex")).as_deref(), Some("convex"));
+        assert_eq!(new_thread_pool(&l.pools, None, "/x", "/h", Some("gone"), Some("work")).as_deref(), Some("work"));
         assert_eq!(new_thread_pool(&l.pools, None, "/x", "/h", None, None).as_deref(), Some("claude"));
         assert_eq!(new_thread_pool(&[], None, "/x", "/h", None, None), None);
     }
@@ -1045,7 +1045,7 @@ mod tests {
         let d = draft(&l, &picks, &mem);
         let params = d.create_params("hello", vec![], false);
         assert_eq!(params["poolId"], "claude");
-        assert_eq!(params["cwd"], "/Users/mike/dev/me/misc");
+        assert_eq!(params["cwd"], "/Users/alex/code/misc");
         assert_eq!(params["model"], "claude-opus-5-5");
         assert_eq!(params["effort"], "high");
         assert_eq!(params["permissionMode"], "auto");
@@ -1103,8 +1103,8 @@ mod tests {
     #[test]
     fn labels_tell_the_logins_apart() {
         let l = no_pools();
-        assert_eq!(account_label("claude-main", &l.accounts), "gmail");
-        assert_eq!(account_label("claude-3", &l.accounts), "bearworks");
+        assert_eq!(account_label("claude-main", &l.accounts), "home");
+        assert_eq!(account_label("claude-3", &l.accounts), "studio");
         assert_eq!(account_label("codex-main", &l.accounts), "Codex");
         assert_eq!(login_name("claude-2", &l.accounts), "work");
     }
@@ -1131,9 +1131,9 @@ mod tests {
 
     #[test]
     fn folder_names_and_home() {
-        assert_eq!(short_folder("/Users/mike/dev/me/misc"), "misc");
+        assert_eq!(short_folder("/Users/alex/code/misc"), "misc");
         assert_eq!(short_folder("/"), "/");
-        assert_eq!(abbreviate_home("/Users/mike/dev", "/Users/mike"), "~/dev");
-        assert_eq!(abbreviate_home("/opt", "/Users/mike"), "/opt");
+        assert_eq!(abbreviate_home("/Users/alex/dev", "/Users/alex"), "~/dev");
+        assert_eq!(abbreviate_home("/opt", "/Users/alex"), "/opt");
     }
 }

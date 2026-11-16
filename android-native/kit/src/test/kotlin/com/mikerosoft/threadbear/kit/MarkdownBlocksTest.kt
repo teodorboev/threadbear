@@ -290,4 +290,21 @@ class MarkdownBlocksTest {
             assertTrue(tables.all { t -> t.rows.all { it.size == t.header.size } })
         }
     }
+
+    // Daybreak finding 130: one reply can't ask for hundreds of downloads.
+    @Test fun aMessageDrawsTenPicturesAtMost() {
+        val text = (1..300).joinToString("\n\n") { "![p$it](https://x$it.example/a.png)" }
+        val blocks = parse(text)
+        assertEquals(MarkdownBlock.MAX_PICTURES, blocks.count { it is MarkdownBlock.Image })
+        assertEquals(p("[p11]"), blocks[MarkdownBlock.MAX_PICTURES])
+        assertEquals(300, blocks.size)
+    }
+
+    @Test fun picturesInQuotesCountTowardTheSameTen() {
+        val text = (1..8).joinToString("\n\n") { "![a$it](/a$it.png)" } +
+            "\n\n> ![q1](/q1.png)\n>\n> ![q2](/q2.png)\n>\n> ![q3](/q3.png)\n\n![](/last.png)"
+        val blocks = parse(text)
+        assertEquals(MarkdownBlock.Quote(listOf(img("q1", "/q1.png"), img("q2", "/q2.png"), p("[q3]"))), blocks[8])
+        assertEquals(p("[picture]"), blocks[9])
+    }
 }

@@ -24,6 +24,10 @@ for (const home of [...homes]) {
 }
 process.env.THREADBEAR_TEST_GUARDED_HOMES = JSON.stringify([...homes]);
 const codeRoot = resolve(path.join(import.meta.dirname, '../../..'));
+// Folders tests and their scripts make are the usual 755, whatever the
+// machine's umask: the cloud box's 002 made them group-writable, and the
+// checks for a shared folder (private-dir.mjs, dev-app.ts) refused them.
+if (process.platform !== 'win32') process.umask(0o022);
 const testHome = resolve(fs.mkdtempSync(path.join(os.tmpdir(), 'tb-unit-home-')));
 process.env.HOME = testHome;
 process.env.USERPROFILE = testHome;

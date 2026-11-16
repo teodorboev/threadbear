@@ -93,7 +93,10 @@ preview. With Mike's token it also answers while the
 thread isn't shared, with `manage`, so his page keeps its controls.
 
 Pictures are in file storage (`shareImages`), uploaded by the runner only
-while the thread is shared and dropped when it stops, and only real
+while the thread is shared and dropped when it stops, and served to
+anyone with the link through `/share/image/<slug>/<id>` (`convex/http.ts`),
+which checks at every request that the thread is still shared under that
+link, so a saved picture URL stops with the share, and only real
 pictures from the thread's media folder (attachments, tool pictures, and
 what the agent copies into `THREADBEAR_MEDIA_DIR`), never its working
 folder or a temp folder (docs/protocol.md, "Sharing"). A picture written in

@@ -74,9 +74,11 @@ between headings (RowFlight), the demo's sample data beyond what tests need.
 
 ## Screens
 
-1. Pair: Scan the code (camera, ML Kit barcode) and Paste a pairing link,
-   both asking "Pair with <server>?" before keeping anything, checked with
-   `phone:me`. `threadbear://pair?...` links open the app too.
+1. Pair: Scan the code (camera, ML Kit barcode) and Paste a pairing code,
+   both asking "Pair with <server>?" before keeping anything, trading the
+   Mac's one-use code for a token (`tokens:claim`) and checking it with
+   `phone:me`. No `threadbear://pair` link opens the app: any app can
+   claim the scheme (Daybreak 127), so one sent to it outright is refused.
 2. Inbox: Starred, Inbox, Running, Hibernating, Archived headings (the last
    three folded at first), rows like the iPhone's: project tile, title,
    place, status word or time, unread dot. Swipe to archive, long-press for
@@ -140,6 +142,14 @@ the job doesn't run (no secrets there). The same workflow builds and tests
 the app on every push to main and on PRs that touch it, so each commit has
 an Android verdict for the daily tag to wait on.
 
+- The release is two jobs, so the key never meets the build (Daybreak 123,
+  15 Nov 2026): `apk` builds an unsigned APK (Gradle, with the Firebase
+  config and a read-only token) and hands it on with its SHA-256;
+  `release` checks those exact bytes, signs them with `apksigner` and
+  publishes, with no actions, nothing checked out and no Gradle (the Gradle
+  wrapper's download is pinned by its SHA-256 too). Every action in every
+  workflow is pinned to a full commit SHA, with its tag in a comment;
+  `runner/test/unit/workflow-pins.test.ts` fails on a tag or branch.
 - The version is the tag's date (`versionName` 2026-11-12, `versionCode`
   20261112), so each release installs over the last. A local build is
   `dev`, version code 1, and never offers itself an update.

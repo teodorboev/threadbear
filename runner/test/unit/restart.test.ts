@@ -116,7 +116,7 @@ test('a background subagent asking for approval after its turn ended keeps the r
   void s.sink.requestApproval({ name: 'Write', title: 'Write x', input: {}, canAlwaysAllow: false, signal: new AbortController().signal });
   assert.equal(h.runner.get(thread.id).status, 'waiting');
   assert.deepEqual(r.request({}).waitingFor, [thread.id]);
-  // It waits on Mike, not on the thread finishing, and says so.
+  // It waits on Alex, not on the thread finishing, and says so.
   assert.deepEqual(notices(h), ['The runner will restart when you answer 1 thread.']);
   assert.deepEqual(r.helloNotices(), [{ level: 'info', message: 'The runner will restart when you answer 1 thread.' }]);
   await tick();
@@ -716,7 +716,7 @@ test('a runner stopped some other way while a restart waits counts as restarted 
   // T deploys at 0 and its restart waits for A's long turn.
   r.request({ resume: { threadId: t.id, text: 'check it' } });
   h.clock.advance(20 * MIN);
-  // Mike stops waiting: launchctl kickstart sends SIGTERM, and main.ts's stop.
+  // Alex stops waiting: launchctl kickstart sends SIGTERM, and main.ts's stop.
   r.stopping();
   assert.equal(saved(h).shutdownAt, new Date(h.clock.now()).toISOString());
   await h.runner.shutdown();
@@ -805,7 +805,7 @@ test('a thread someone has written in since it asked is not resumed over them', 
   s.init();
   r.request({ resume: { threadId: thread.id, text: 'Check that your change works, then carry on.' } });
   s.result();
-  // Mike: "stop, don't carry on". The restart still waits for the other thread.
+  // Alex: "stop, don't carry on". The restart still waits for the other thread.
   h.runner.send(thread.id, "stop, don't carry on");
   s.result();
   so.result();

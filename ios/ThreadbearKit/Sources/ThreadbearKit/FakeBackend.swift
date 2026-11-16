@@ -209,7 +209,7 @@ public final class FakeBackend: Backend, @unchecked Sendable {
             PhoneMessage(seq: 2, role: .tool, text: "Land the fix on main", toolKind: "command", turn: "aaaa1111", at: ago(29)),
             PhoneMessage(seq: 3, role: .assistant, text: "The landing is running, behind two others in the queue.", turn: "aaaa1111", at: ago(28)),
             PhoneMessage(seq: 4, role: .assistant, text: "You've hit your 5-hour limit · resets 11:30am", turn: "bbbb2222", at: ago(7)),
-            PhoneMessage(seq: 5, role: .note, text: "Moved to mike@home.example: mike@work.example hit its 5-hour limit, back at 11:30 am.", at: ago(7)),
+            PhoneMessage(seq: 5, role: .note, text: "Moved to alex@home.example: alex@work.example hit its 5-hour limit, back at 11:30 am.", at: ago(7)),
             PhoneMessage(seq: 6, role: .user, text: "Your last login hit its usage limit partway through that turn, so this thread has moved to another one. Carry on from where you left off.", origin: "runner", turn: "cccc3333", at: ago(7)),
             PhoneMessage(seq: 7, role: .tool, text: "Push main", toolKind: "command", turn: "cccc3333", at: ago(6)),
             PhoneMessage(seq: 8, role: .assistant, text: "The fix is on main now.\n\n- **What changed:** a failed action shows in the bar over the thread, which has Dismiss.\n- **Checks:** they passed in 267 s.", turn: "cccc3333", at: ago(5)),

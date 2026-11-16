@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.join(here, 'fixtures');
-const home = '/Users/mike';
+const home = '/Users/alex';
 const now = Date.now();
 const minutes = (n) => new Date(now - n * 60_000).toISOString();
 
@@ -180,7 +180,7 @@ function smallThread({ name, title, minutesAgo, status = 'idle', needsYou = fals
   const last = [...events].reverse().find((e) => e.type === 'assistant.text');
   const lastDone = [...events].reverse().find((e) => e.type === 'turn.completed');
   const summary = {
-    id, title, cwd: `${home}/dev/me/misc`, accountId, provider: 'claude', permissionMode: 'full', status, live: false, needsYou,
+    id, title, cwd: `${home}/code/misc`, accountId, provider: 'claude', permissionMode: 'full', status, live: false, needsYou,
     createdAt: minutes(minutesAgo + 60), updatedAt: minutes(minutesAgo), lastActivityAt: minutes(minutesAgo),
     preview: last ? last.text.replace(/\s+/g, ' ').slice(0, 140) : '', lastSeq: seq, lastSeenSeq: unread ? seq - 1 : seq,
     ...(lastDone?.needs ? { needs: lastDone.needs } : {}),
@@ -203,7 +203,7 @@ function others() {
         { label: 'Accent blue', description: 'Matches the other toolbar buttons' }, { label: 'Green', description: 'Stands out as the main action' }, { label: 'Plain grey' }] }] },
   ] });
   smallThread({ name: 'keep-awake', title: 'Stop Keep Awake asking for my password', minutesAgo: 9, status: 'waiting', needsYou: true, turns: [
-    { user: 'My Raycast Keep Awake toggle asks for my password every time. Can you make it stop asking?', tools: [{ id: 'read', name: 'Read', kind: 'read', title: 'Read ~/dev/me/raycast-scripts/keep-awake.sh', input: { file_path: `${home}/dev/me/raycast-scripts/keep-awake.sh` }, output: 'sudo pmset -a disablesleep "$1"' }],
+    { user: 'My Raycast Keep Awake toggle asks for my password every time. Can you make it stop asking?', tools: [{ id: 'read', name: 'Read', kind: 'read', title: 'Read ~/code/raycast-scripts/keep-awake.sh', input: { file_path: `${home}/code/raycast-scripts/keep-awake.sh` }, output: 'sudo pmset -a disablesleep "$1"' }],
       secret: { label: 'Mac administrator password', reason: 'Install the Keep Awake rule that allows only the two fixed pmset sleep-toggle commands, so Raycast toggles work without repeated prompts.' } },
   ] });
   runningThread();
@@ -280,7 +280,7 @@ function runningThread() {
   push({ type: 'tool.result', itemId: 'read2', ok: true, text: 'Restoring cache... miss\nBuilding... done in 13m 10s', truncated: false, images: [] });
   push({ type: 'tool.call', itemId: 'cmp', name: 'Bash', kind: 'command', title: 'Compare the cache keys', input: { command: 'grep "cache key" run-812.log run-845.log', description: 'Compare the cache keys' } });
   const summary = {
-    id, title: 'Why is the build slow on CI?', cwd: `${home}/dev/me/misc`, accountId: 'claude-main', provider: 'claude', permissionMode: 'full',
+    id, title: 'Why is the build slow on CI?', cwd: `${home}/code/misc`, accountId: 'claude-main', provider: 'claude', permissionMode: 'full',
     status: 'running', live: false, needsYou: false, createdAt: minutes(61), updatedAt: minutes(1), lastActivityAt: minutes(1),
     preview: 'Looking at the two logs now.', lastSeq: seq, lastSeenSeq: seq,
   };
@@ -316,12 +316,12 @@ function toolDetailsThread() {
   push({ type: 'tool.call', itemId: 'ls', name: 'Bash', kind: 'command', title: 'List the build scripts', input: { command: 'ls -l scripts/', description: 'List the build scripts' } });
   push({ type: 'tool.result', itemId: 'ls', ok: true, text: [
     'total 24',
-    '-rwxr-xr-x  1 mike  staff   412 Oct 12 09:14 build.sh',
-    '-rwxr-xr-x  1 mike  staff   398 Oct 12 09:14 build-old.sh',
-    '-rwxr-xr-x  1 mike  staff   655 Oct 20 17:02 release.sh',
+    '-rwxr-xr-x  1 alex  staff   412 Oct 12 09:14 build.sh',
+    '-rwxr-xr-x  1 alex  staff   398 Oct 12 09:14 build-old.sh',
+    '-rwxr-xr-x  1 alex  staff   655 Oct 20 17:02 release.sh',
   ].join('\n'), truncated: false, images: [] });
   push({ type: 'tool.call', itemId: 'pr', name: 'mcp__github__get_pull_request', kind: 'mcp', title: 'Get pull request #48',
-    input: { owner: 'mike', repo: 'photo-sync', pullNumber: 48 } });
+    input: { owner: 'alex', repo: 'photo-sync', pullNumber: 48 } });
   push({ type: 'tool.result', itemId: 'pr', ok: true, text: '#48 Move signing into release.sh (merged 20 Oct)\nFiles: scripts/release.sh, scripts/build-old.sh', truncated: false, images: [] });
   push({ type: 'tool.call', itemId: 'rel', name: 'Bash', kind: 'command', title: 'Run the release build', input: { command: './scripts/release.sh', description: 'Run the release build' } });
   push({ type: 'tool.result', itemId: 'rel', ok: false, text: 'Building for production...\nerror: SIGNING_IDENTITY is not set', truncated: false, images: [] });

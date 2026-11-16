@@ -3,7 +3,7 @@
 //
 //   desktop/scripts/dev-app.sh start [--mock [--fixtures DIR]...] [--home DIR] [--live]
 //                                    [--appearance light|dark] [--size WxH] [--id NAME]
-//                                    [--no-build] [--build-here]
+//                                    [--no-build] [--build-here] [--visible]
 //   desktop/scripts/dev-app.sh do '<json>'... [--timeout S]
 //   desktop/scripts/dev-app.sh dump [--json]
 //   desktop/scripts/dev-app.sh shot <file.png>
@@ -17,9 +17,17 @@
 //          the mock runner (its demo threads, or only the --fixtures folders:
 //          `tb export` puts a thread in app/.fixtures/threads/<id>) or points at
 //          a dev runner's --home (runner/scripts/dev-runner.sh), launches the
-//          app with its window behind everything, out of the Dock and the app
-//          switcher, waits until it's connected with its thread list, and
-//          prints the id.
+//          app headless: out of the Dock and the app switcher, its windows
+//          fully transparent, letting clicks through and at the back, so
+//          nobody sees one (a fork's owner found one behind their windows
+//          and took the demo threads for a leak, 15 Nov). It still draws, so
+//          dump and shot work. --visible is for a test that needs the window
+//          on screen: behind everything, with "test copy" in its title and an
+//          orange strip across its top saying what it is (not in shots). It
+//          waits until the app's connected with its thread list, and prints
+//          the id. In ps and Activity Monitor the app is "Threadbear Headless
+//          Tester" (a clone of the build in the instance's folder) and the
+//          mock "threadbear-test-mock-runner".
 //          The build is heavy, so it goes to the first of runner.json's
 //          updateBuildHosts that's a Mac and answers (remote.sh; those are
 //          the Macs trusted with what this one runs, so checkHosts don't
@@ -118,6 +126,8 @@ export type Instance = {
   live: boolean;
   appearance?: string;
   size?: string;
+  /** --visible: the window on screen (behind everything, labelled), for a test that needs it seen. */
+  visible?: boolean;
   binary: string;
   supervisor?: number;
   app?: number;
@@ -447,15 +457,17 @@ async function supervise(id: string): Promise<void> {
     const current = readInstance(id) ?? i;
     fs.rmSync(path.join(dir, 'automation.json'), { force: true });
     const out = fs.openSync(path.join(dir, 'app.stderr'), 'a');
-    app = spawn(current.binary, [], {
+    app = spawn(namedCopy(current.binary, dir), [], {
       stdio: ['ignore', out, out],
       detached: true,
       env: {
         ...process.env,
         THREADBEAR_HOME: current.home,
         THREADBEAR_AUTOMATION: path.join(dir, 'automation.json'),
-        // Behind everything, out of the Dock and the app switcher (scripted.rs).
+        // Out of the Dock and the app switcher, and no window anyone can see
+        // unless --visible (scripted.rs).
         THREADBEAR_KEEP_BEHIND: '1',
+        ...(current.visible ? { THREADBEAR_SHOW_WINDOW: '1' } : {}),
         THREADBEAR_PASTEBOARD: `com.mikerosoft.threadbear.automation.gpui-${id}`,
         // Not the machine's web runtime in the real data folder, whose
         // Chromium profile has Mike's sign-ins and whose helpers the installed
@@ -561,6 +573,33 @@ function reap(): void {
   }
 }
 
+/** What the app runs as (`ps`, Activity Monitor): anyone wondering what this
+ * process is sees it's a test copy, not their own Threadbear. */
+export const APP_PROCESS_NAME = 'Threadbear Headless Tester';
+
+/** The build, as a copy named APP_PROCESS_NAME in the instance's folder (a
+ * clone on APFS, so no space or time), with the web helper it looks for
+ * beside itself. The build itself if copying fails. */
+export function namedCopy(binary: string, dir: string): string {
+  try {
+    const bin = path.join(dir, 'bin');
+    fs.mkdirSync(bin, { recursive: true });
+    const named = path.join(bin, process.platform === 'win32' ? `${APP_PROCESS_NAME}.exe` : APP_PROCESS_NAME);
+    fs.rmSync(named, { force: true });
+    fs.copyFileSync(binary, named, fs.constants.COPYFILE_FICLONE);
+    fs.chmodSync(named, 0o755);
+    const helper = path.join(path.dirname(binary), 'threadbear-web-helper');
+    if (fs.existsSync(helper)) {
+      fs.rmSync(path.join(bin, 'threadbear-web-helper'), { force: true });
+      fs.copyFileSync(helper, path.join(bin, 'threadbear-web-helper'), fs.constants.COPYFILE_FICLONE);
+      fs.chmodSync(path.join(bin, 'threadbear-web-helper'), 0o755);
+    }
+    return named;
+  } catch {
+    return binary;
+  }
+}
+
 async function start(a: Args): Promise<void> {
   const who = me();
   reap();
@@ -602,6 +641,7 @@ async function start(a: Args): Promise<void> {
     live,
     appearance,
     size,
+    visible: has(a, '--visible'),
     binary,
   };
   if (useMock) fs.mkdirSync(i.home, { recursive: true, mode: 0o700 });

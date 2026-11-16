@@ -27,7 +27,7 @@ function rig(follows = false) {
     },
     unqueue: (_threadId, turnId) => queued.delete(turnId),
     followsOrigin: () => follows,
-    checkout: '/home/mike/dev/me/threadbear',
+    checkout: '/home/alex/code/threadbear',
   });
   return { f, home, started, sent, queued, archived };
 }
@@ -84,10 +84,10 @@ test('on a machine that follows GitHub the thread is told not to land, and to ha
   f.failed(failure('c2'));
   const text = started[0].text;
   assert.match(text, /Never commit on main/);
-  assert.match(text, /\/home\/mike\/dev\/me\/threadbear/);
+  assert.match(text, /\/home\/alex\/code\/threadbear/);
   assert.match(text, /tb land refuses/);
   assert.match(text, /runner: "main"/);
-  // The branch name isn't ours to pick: Mike's cloud box may push only
+  // The branch name isn't ours to pick: Alex's cloud box may push only
   // cloud/** (AGENTS.md says so), and a fork has no cloud box.
   assert.match(text, /HEAD:<branch>/);
   assert.doesNotMatch(text, /cloud\//);

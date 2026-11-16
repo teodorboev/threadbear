@@ -182,7 +182,7 @@ import Testing
 /// web/src/turns.test.ts.
 @Suite struct LoginNoteTests {
     let t0 = Date(timeIntervalSince1970: 1_800_000_000)
-    let moved = "Moved to mike@example.org: mike@example.net hit its 5-hour limit, back at 11:30 am."
+    let moved = "Moved to alex@example.org: alex@example.net hit its 5-hour limit, back at 11:30 am."
     func m(_ seq: Int, _ role: PhoneMessage.Role, _ text: String, at: Double, origin: String? = nil, turn: String? = nil) -> PhoneMessage {
         PhoneMessage(seq: seq, role: role, text: text, origin: origin, toolKind: role == .tool ? "command" : nil, turn: turn, at: t0.addingTimeInterval(at))
     }

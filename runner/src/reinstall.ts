@@ -1,21 +1,23 @@
-// The runner reinstalling its own LaunchAgent: install-runner.sh, run for
-// it, when launch.mjs, the plist or Threadbear Runner.app is behind main's
-// (launchAgentBehind in update.ts). Releases never change those, so until
-// 14 Nov 2026 the Updates panel showed the command for Mike to copy into a
-// terminal, with a path that wasn't even his checkout's. Now the Updates
-// panel's Reinstall now (runner.reinstall) does it, and with the
-// selfReinstall experiment on, the runner does it by itself once no
-// thread is busy.
+// The runner updating its own LaunchAgent: install-runner.sh --stage, run
+// for it, when launch.mjs, the plist or Threadbear Runner.app is behind
+// main's (launchAgentBehind in update.ts). Releases never change those, so
+// until 14 Nov 2026 the Updates panel showed the command for Mike to copy
+// into a terminal, with a path that wasn't even his checkout's. Now the
+// Updates panel's Update it (runner.reinstall) does it, and with the
+// selfReinstall experiment the runner does it by itself.
 //
-// install-runner.sh stops this runner's launchd job, and launchd stops the
-// job's whole process group with it, so the script can't run as a child of
-// the runner. It runs as a launchd job of its own instead (a one-shot
-// plist under <home>/runner/reinstall, bootstrapped into the same GUI
-// domain), or a transient systemd unit on Linux. Its output goes to
-// reinstall.log and its exit code to `result`, which this runner (or the
-// one it started) reads. The script does its own checks: busy threads
-// (exit 75, tried again once they finish), main's tip, the new runner
-// coming up, and putting the old setup back if it doesn't.
+// It stages rather than reinstalls (15 Nov): the new app, launch.mjs and
+// plist go in place without stopping anything, and take over the next time
+// launchd starts the job (the Mac restarting, logging in again). A full
+// reinstall stops every runner at once, handovers and all, so it needs a
+// moment with nothing busy, and Mike's Mac never had one: a day and a night
+// of the log never showed fewer than one live CLI.
+//
+// install-runner.sh refuses to run from inside the runner's own process
+// tree (it's how an agent would stop its own turn), so it runs as a
+// launchd job of its own (a one-shot plist under <home>/runner/reinstall,
+// bootstrapped into the same GUI domain), or a transient systemd unit on
+// Linux. Its output goes to reinstall.log and its exit code to `result`.
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -24,8 +26,12 @@ import type { Clock, TimerHandle } from './clock.ts';
 import type { Logger } from './log.ts';
 
 export const DEFAULT_LABEL = 'com.mikerosoft.threadbear.runner';
-// install-runner.sh's exit for "threads are busy, nothing changed".
-export const BUSY_EXIT = 75;
+// launchAgentBehind's one reason about what's running rather than what's on
+// disk: only launchd starting the job again fixes it, so after staging it's
+// `staged`. Every other reason is about files, and still being behind on
+// those after a stage that said it worked is a failure (it staged from a
+// checkout that isn't at main, say).
+export const RUNS_NODE_REASON = 'The LaunchAgent still runs node, not Threadbear Runner.app, so privacy prompts say "node".';
 // How long a reinstall with no result yet counts as running when whether
 // its job is still going can't be asked (jobAlive). Otherwise it runs as
 // long as it runs: a check host can take hours, and a Mac asleep halfway
@@ -33,16 +39,17 @@ export const BUSY_EXIT = 75;
 export const RUNNING_LIMIT_MS = 30 * 60_000;
 // Right after it's started, launchd may not say it's running yet.
 export const START_GRACE_MS = 15_000;
-// How often a running reinstall's result is looked for, and how often one
-// waiting for busy threads checks whether they've finished.
+// How often a running one's result is looked for.
 export const POLL_MS = 5_000;
-export const WAIT_POLL_MS = 60_000;
 
 // runner.updates' `reinstall` (docs/protocol.md, "Runner updates").
 export type ReinstallStatus = {
-  // waiting: for busy threads to finish; running: install-runner.sh is
-  // going; failed: it stopped, `reason` says why.
-  state: 'waiting' | 'running' | 'failed';
+  // waiting: about to start (or, from a runner before 15 Nov, for busy
+  // threads); running: install-runner.sh --stage is going; staged: it's in
+  // place and takes over when launchd next starts the job, though the job
+  // running now is still behind (one still running node, say); failed: it
+  // stopped, `reason` says why.
+  state: 'waiting' | 'running' | 'staged' | 'failed';
   reason?: string;
   logFile?: string;
   // The runner does it by itself (the selfReinstall experiment), rather
@@ -86,8 +93,6 @@ export type ReinstallDeps = {
   // Why the LaunchAgent is behind main, and a key for what main has
   // (updater.status()), or undefined when it isn't.
   behind: () => { reason: string; key: string } | undefined;
-  // No thread busy, as a restart would wait for (Restarter.busyThreads).
-  idle: () => boolean;
   // The selfReinstall experiment.
   auto: () => boolean;
   onChange?: () => void;
@@ -95,6 +100,9 @@ export type ReinstallDeps = {
   platform?: NodeJS.Platform;
   // Starts the job; an error message when it couldn't.
   spawnJob?: (job: JobSpec) => string | undefined;
+  // Compares the installed launcher with main again (updater.recheckLauncher),
+  // so a stage's result is judged on the files as they are now.
+  recheck?: () => void;
   // Whether the job is still going; undefined when it can't be told.
   jobAlive?: (label: string) => boolean | undefined;
 };
@@ -131,6 +139,7 @@ export function installArgs(checkout: string, home: string, env: NodeJS.ProcessE
   if (path.resolve(home) !== path.resolve(defaultHome) || label !== DEFAULT_LABEL) args.push('--home', home, '--label', label);
   if (env.THREADBEAR_RUNNER_APP) args.push('--runner-app', env.THREADBEAR_RUNNER_APP);
   if (env.THREADBEAR_PORT) args.push('--port', env.THREADBEAR_PORT);
+  args.push('--stage');
   return args;
 }
 
@@ -362,12 +371,6 @@ export class Reinstaller {
     if (code === undefined) code = this.readResult();
     if (code === undefined) {
       s.finished = { code: -1, at: new Date(this.deps.clock.now()).toISOString(), reason: `install-runner.sh stopped without finishing: ${lastWords(log) ?? 'it said nothing'}` };
-    } else if (code === BUSY_EXIT) {
-      // Threads got busy: nothing changed, so it goes again once they're
-      // done (requested stays as it was; the experiment tries again anyway).
-      this.deps.log.info('reinstall waited for busy threads');
-      s.startedAt = undefined;
-      s.finished = undefined;
     } else {
       s.finished = { code, at: new Date(this.deps.clock.now()).toISOString(), reason: code === 0 ? undefined : (lastWords(log) ?? `install-runner.sh exited ${code}`) };
       this.deps.log[code === 0 ? 'info' : 'error']('reinstall finished', { code, reason: s.finished.reason });
@@ -376,6 +379,7 @@ export class Reinstaller {
     // launcher changing) rather than going round again.
     if (s.finished) s.requested = false;
     this.write();
+    if (s.finished?.code === 0) this.deps.recheck?.();
     this.changed();
   }
 
@@ -385,18 +389,20 @@ export class Reinstaller {
     const s = this.saved;
     const logFile = reinstallLogPath(this.deps.home);
     if (this.running()) return { state: 'running', logFile };
-    if (s.finished && s.key === behind.key) {
-      // It ran for what main has now and it's still behind.
-      const reason = s.finished.code === 0 ? `install-runner.sh finished, but ${behind.reason.charAt(0).toLowerCase()}${behind.reason.slice(1)}` : s.finished.reason;
-      if (!s.requested) return { state: 'failed', reason, logFile };
+    if (s.finished && s.key === behind.key && !s.requested) {
+      // It ran for what main has now. Staged and still behind: what's
+      // running is the old job, until launchd next starts it.
+      if (s.finished.code === 0 && behind.reason === RUNS_NODE_REASON) return { state: 'staged', logFile };
+      const reason = s.finished.code === 0 ? `It finished, but this is still so: ${behind.reason}` : s.finished.reason;
+      return { state: 'failed', reason, logFile };
     }
     if (s.requested) return { state: 'waiting' };
     if (this.deps.auto()) return { state: 'waiting', auto: true };
     return undefined;
   }
 
-  // Reinstall now (runner.reinstall): straight away when no thread is busy,
-  // else once they've finished.
+  // Update it (runner.reinstall): stages it straight away. Nothing stops,
+  // so nothing waits for busy threads.
   request(): ReinstallStatus | undefined {
     if (!this.deps.checkout) throw new Error("This runner isn't running a release, so there's no LaunchAgent to reinstall.");
     if (!this.deps.behind()) return undefined;
@@ -411,17 +417,15 @@ export class Reinstaller {
     return this.status();
   }
 
-  // Starts a reinstall when one is due and nothing is busy, and keeps
-  // looking while one is running or waiting. Called after each update
-  // check, and by its own timer.
+  // Starts one when it's due, and keeps looking while one is running.
+  // Called after each update check, and by its own timer.
   consider(): void {
     if (this.stopped) return;
     this.collect();
     this.timer?.cancel();
     this.timer = undefined;
-    // Before anything else: the runner a reinstall started comes up before
-    // the script has finished (it waits for this one to be marked good),
-    // and before its updater has looked at main.
+    // Before anything else: a runner started while one was going (a
+    // release restart) picks it up before its updater has looked at main.
     if (this.running()) {
       this.timer = this.deps.clock.setTimeout(() => this.consider(), POLL_MS);
       return;
@@ -436,10 +440,6 @@ export class Reinstaller {
     const triedThis = s.key === behind.key && s.finished !== undefined;
     const due = s.requested || (this.deps.auto() && !triedThis);
     if (!due) return;
-    if (!this.deps.idle()) {
-      this.timer = this.deps.clock.setTimeout(() => this.consider(), WAIT_POLL_MS);
-      return;
-    }
     this.begin(behind.key);
     this.timer = this.deps.clock.setTimeout(() => this.consider(), POLL_MS);
   }
@@ -452,7 +452,7 @@ export class Reinstaller {
     fs.mkdirSync(this.dir, { recursive: true });
     fs.rmSync(this.resultFile, { force: true });
     const logFile = reinstallLogPath(home);
-    fs.appendFileSync(logFile, `\n--- ${new Date(this.deps.clock.now()).toISOString()} reinstalling the LaunchAgent\n`);
+    fs.appendFileSync(logFile, `\n--- ${new Date(this.deps.clock.now()).toISOString()} staging the LaunchAgent\n`);
     const job: JobSpec = { label: `${jobLabel(env, platform)}.reinstall`, args: installArgs(checkout, home, env, platform), env: jobEnv(env, this.resultFile), logFile, resultFile: this.resultFile, dir: this.dir };
     this.saved = { key, requested: this.saved.requested, startedAt: new Date(this.deps.clock.now()).toISOString(), label: job.label };
     this.aliveCache = undefined;
@@ -462,7 +462,7 @@ export class Reinstaller {
       this.saved.requested = false;
       log.error('could not start the reinstall', { error: err });
     } else {
-      log.info('reinstalling the LaunchAgent', { label: job.label, args: job.args });
+      log.info('staging the LaunchAgent', { label: job.label, args: job.args });
     }
     this.write();
     this.changed();

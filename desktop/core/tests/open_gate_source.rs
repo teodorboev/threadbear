@@ -326,3 +326,23 @@ fn a_function_body_ends_at_its_own_brace_with_either_line_ending() {
         assert!(!body.contains("signed_as"), "a check in a later function counts for this one");
     }
 }
+
+/// Daybreak 125 (15 Nov 2026): a file the gate checked went to the system by
+/// its path, which the system looked up again after the check, so a swap in
+/// between launched an app. Every file open goes through `open_checked`, and
+/// on a Mac it opens a reference to the checked inode, never the path.
+#[test]
+fn checked_files_open_by_reference_not_by_path() {
+    let gate = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../gpui/src/open_gate.rs")).unwrap().replace("\r\n", "\n");
+    let open_file = fn_body(&gate, "pub(crate) fn open_file(");
+    assert!(!open_file.contains("system_open("), "open_file opens without open_checked:\n{open_file}");
+    assert_eq!(open_file.matches("open_checked(").count(), 2, "both the document and the yes go through open_checked:\n{open_file}");
+    let checked = fn_body(&gate, "fn open_checked(");
+    assert!(checked.contains("still_same("), "open_checked doesn't look again");
+    let mac = gate.split("#[cfg(target_os = \"macos\")]\nfn open_the_file(").nth(1).expect("the Mac's open_the_file");
+    let mac = fn_body(&format!("fn open_the_file({mac}"), "fn open_the_file(");
+    assert!(mac.contains("fileReferenceURL()") && mac.contains("reference_id("), "the Mac opens the path, not the checked inode");
+    // Only a private copy (a disk with no file references) goes by its path.
+    let without_copies = mac.replace("system_open(&copy_url, cx)", "");
+    assert!(!without_copies.contains("system_open(") && !mac.contains("fileURLWithPath(&NSString::from_str(url"), "the Mac hands a path to the system:\n{mac}");
+}

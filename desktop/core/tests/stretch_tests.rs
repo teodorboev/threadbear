@@ -219,13 +219,13 @@ fn testAWorkLinkCanPointIntoTheTurnBefore() {
 /// that, and the last turn ends with a summary and a reply.
 fn research() -> Vec<Event> {
     let mut events = vec![
-        mike(1, "Technical Convex video", "t1"),
+        mike(1, "Technical explainer video", "t1"),
         at(event_turn(2, "turn.started", json!({}), Some("t1")), "06:16:00"),
         call_with(3, "c1", "Agent", "task", "Mine the repo", json!({})).with_turn("t1"),
         result(4, "c1").with_turn("t1"),
         turn_text(5, "m1", "The two researchers are still running.", "t1"),
         at(done_turn(6, "t1"), "06:17:23"),
-        woke(7, "t2", "06:23:00", json!([{"kind": "agent", "description": "Mine LBI repo for video stories"}, {"kind": "shell", "description": "Scrape YouTube"}])),
+        woke(7, "t2", "06:23:00", json!([{"kind": "agent", "description": "Mine the repo for video stories"}, {"kind": "shell", "description": "Scrape YouTube"}])),
         note(8, "I read origin/main").with_turn("t2"),
         turn_text(9, "m2", "The repo research is back.", "t2"),
         at(done_turn(10, "t2"), "06:23:14"),
@@ -250,7 +250,7 @@ fn gap_label(model: &TranscriptModel, id: &str) -> String {
 fn testAFinishedStretchMarksEachWaitBetweenReplies() {
     let model = from_events(research());
     assert_eq!(ids(&model), ["u:1", "g:t:c1", "a:m1", "gap:t2", "a:m2", "gap:t3", "a:m4", "f:t3"]);
-    assert_eq!(gap_label(&model, "gap:t2"), "6 min later · Mine LBI repo for video stories finished");
+    assert_eq!(gap_label(&model, "gap:t2"), "6 min later · Mine the repo for video stories finished");
     assert_eq!(gap_label(&model, "gap:t3"), "33s later · Prior art and demand research finished");
 }
 
@@ -434,15 +434,15 @@ fn testAMessageSentIntoTheTurnStartsAFreshAnswer() {
         result(3, "c1"),
         event(4, "assistant.text", json!({"itemId": "m1", "text": "Added an end-to-end test that walks all 14 tour steps on a real runner.", "narration": true})),
         e1_end_turn(5),
-        result_text(6, "e1", "Noted. Mike got only a short summary"),
+        result_text(6, "e1", "Noted. Alex got only a short summary"),
         event(7, "user.message", json!({"text": "The app has restarted onto 062f66a", "images": [], "origin": "runner"})),
         text(8, "m2", "The tour now has an end-to-end test against a real runner, and the fixes are on main."),
         call_input(9, "c2", json!({"command": "tb status"})),
         result(10, "c2"),
-        event(11, "assistant.text", json!({"itemId": "m3", "text": "M5 is updated with the fixes and Tinker Desk is still building.", "narration": true})),
+        event(11, "assistant.text", json!({"itemId": "m3", "text": "The laptop is updated with the fixes and build-box is still building.", "narration": true})),
         call_with(12, "e2", "mcp__threadbear__end_turn", "mcp", "end_turn", json!({})),
         result_with(13, "e2", false, "Already ended", json!([])),
-        text(14, "m4", "Your M5 app is now on 062f66a, with the fixes the end-to-end test found. Tinker Desk is still building."),
+        text(14, "m4", "Your laptop app is now on 062f66a, with the fixes the end-to-end test found. build-box is still building."),
         done(15),
     ]);
     let shown: Vec<String> = model.rows().iter().filter(|r| matches!(r.content, RowContent::Assistant(_))).map(|r| r.id.clone()).collect();

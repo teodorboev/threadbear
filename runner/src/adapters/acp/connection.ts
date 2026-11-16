@@ -39,6 +39,8 @@ export type InitializeResult = {
   };
   agentInfo?: { name?: string; version?: string } | null;
   authMethods?: { id?: string; name?: string }[];
+  // Grok says who it is here: grokShell, and agentVersion for want of agentInfo.
+  _meta?: { grokShell?: unknown; agentVersion?: unknown } | null;
 };
 
 export type AcpTimings = {
@@ -152,6 +154,7 @@ export class AcpProcess {
             throw new Error(`This agent speaks ACP version ${String(init?.protocolVersion)}, and Threadbear speaks ${ACP_VERSION}.`);
           }
           if (typeof init?.agentInfo?.version === 'string') this.version = init.agentInfo.version;
+          else if (typeof init?._meta?.agentVersion === 'string') this.version = init._meta.agentVersion;
           settled = true;
           resolve(init ?? {});
         })

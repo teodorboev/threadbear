@@ -65,7 +65,7 @@ test("the backend's real functions are checked end to end: a card field the sche
   delete process.env.RUNNER_KEY_NEXT;
   const sync = load('sync');
   const b = memoryBackend();
-  const row = { ...THREAD_BASICS, threadId: 'T', runnerId: 'm5runner0001', title: 'T', view: 'inbox', needsYou: true };
+  const row = { ...THREAD_BASICS, threadId: 'T', runnerId: 'laptop000001', title: 'T', view: 'inbox', needsYou: true };
   await call(b.ctx, sync.upsertThreads, { key: 'owner-key', threads: [{ ...row, asks: [{ action: 'Ship it?', options: ['Yes', 'No'], optionNotes: ['I land it', 'Nothing'] }] }] });
   await assert.rejects(call(b.ctx, sync.upsertThreads, { key: 'owner-key', threads: [{ ...row, asks: [{ action: 'Ship it?', fieldTheSchemaLacks: 1 }] }] }), /threads\[0\]\.asks\[0\]\.fieldTheSchemaLacks: not in the validator/);
 });

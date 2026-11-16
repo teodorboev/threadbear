@@ -92,8 +92,9 @@ export function requestPaths(call: AcpToolCall): string[] {
 
 // The arguments of the plain file tools the agents have, where what's named
 // is all there is. Any other shape might write somewhere nobody has found:
-// such a call can't be covered by "Always allow".
-const PLAIN_EDIT_KEYS = new Set(['filepath', 'file_path', 'path', 'content', 'oldstring', 'newstring', 'old_string', 'new_string', 'diff', 'replaceall', 'replace_all', 'description']);
+// such a call can't be covered by "Always allow". Grok's requests say which
+// of its tools as `variant` ("Write"), which names no place.
+const PLAIN_EDIT_KEYS = new Set(['filepath', 'file_path', 'path', 'content', 'oldstring', 'newstring', 'old_string', 'new_string', 'diff', 'replaceall', 'replace_all', 'description', 'variant']);
 
 export function isPlainEdit(input: Record<string, unknown>): boolean {
   return Object.entries(input).every(([k, v]) => PLAIN_EDIT_KEYS.has(k.toLowerCase()) && (typeof v === 'string' || typeof v === 'boolean'));

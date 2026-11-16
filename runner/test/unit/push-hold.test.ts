@@ -14,7 +14,7 @@ const { PRESENCE_FRESH_MS } = load('lib') as { PRESENCE_FRESH_MS: number };
 async function world(lastSeenAgo: number) {
   const b = memoryBackend();
   const now = Date.now();
-  await b.ctx.db.insert('runners', { runnerId: 'mac1', name: 'M5', version: '1', lastSeenAt: now - lastSeenAgo, startedAt: new Date().toISOString(), draining: false, threadCount: 2, atMac: true, atMacAt: now - lastSeenAgo });
+  await b.ctx.db.insert('runners', { runnerId: 'mac1', name: 'Laptop', version: '1', lastSeenAt: now - lastSeenAgo, startedAt: new Date().toISOString(), draining: false, threadCount: 2, atMac: true, atMacAt: now - lastSeenAgo });
   await b.ctx.db.insert('threads', { threadId: 'needs', runnerId: 'mac1', ...THREAD_BASICS, title: 'Needs him', view: 'inbox', needsYou: true, pushHeldAt: now - lastSeenAgo });
   await b.ctx.db.insert('threads', { threadId: 'seen', runnerId: 'mac1', ...THREAD_BASICS, title: 'Seen since', view: 'inbox', needsYou: false, pushHeldAt: now - lastSeenAgo });
   return b;
@@ -32,7 +32,7 @@ async function cron(b: ReturnType<typeof memoryBackend>) {
   }
 }
 
-test("a held push goes once its Mac has stopped checking in, as one whose lid closed with Mike at it", async () => {
+test("a held push goes once its Mac has stopped checking in, as one whose lid closed with Alex at it", async () => {
   const b = await world(PRESENCE_FRESH_MS + 60_000);
   await cron(b);
   assert.deepEqual(notified(b), [{ threadId: 'needs', held: true }]);
@@ -42,7 +42,7 @@ test("a held push goes once its Mac has stopped checking in, as one whose lid cl
   assert.equal(notified(b).length, 1, 'once');
 });
 
-test('a Mac still checking in with Mike at it keeps its pushes held', async () => {
+test('a Mac still checking in with Alex at it keeps its pushes held', async () => {
   const b = await world(30_000);
   await cron(b);
   assert.deepEqual(notified(b), []);

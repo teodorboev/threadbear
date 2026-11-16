@@ -54,7 +54,7 @@ function toolResult(s: ReturnType<typeof makeHarness>['adapter']['last'], itemId
 // ------------------------------------------------------------ transcripts
 
 test('projectDirName matches how the CLI names folders', () => {
-  assert.equal(projectDirName('/Users/m5-mike/dev/me/misc'), '-Users-m5-mike-dev-me-misc');
+  assert.equal(projectDirName('/Users/alex/code/misc'), '-Users-alex-code-misc');
   assert.equal(projectDirName('/Users/x/.agents/a_b c'), '-Users-x--agents-a-b-c');
 });
 
@@ -218,7 +218,7 @@ test('list, read and account tools', async () => {
   const self = await t.call('read_thread');
   assert.match(self.text, /User \(.*\):\nFirst thread/);
   assert.match(self.text, /Agent \(.*\):\nHello from the agent/);
-  // The runner's resume after a restart isn't Mike's.
+  // The runner's resume after a restart isn't Alex's.
   h.runner.send(a.id, 'The runner restarted on release R. Check your change.', [], { origin: 'runner' });
   const resumed = await t.call('read_thread');
   assert.match(resumed.text, /Runner \(.*\):\nThe runner restarted on release R/);
@@ -295,14 +295,14 @@ test('move_thread on itself switches folder after the turn and carries on with `
   assert.equal((await t.call('move_thread', { folder: '/definitely/not/here' })).error, true);
 });
 
-test("move_thread's `then` to another login isn't taken for Mike: the turn finishes, then it carries on there", async () => {
+test("move_thread's `then` to another login isn't taken for Alex: the turn finishes, then it carries on there", async () => {
   const h = makeHarness(undefined, {}, { accounts: new FakeAccounts(withCodex()) });
   const { thread: me, s } = start(h, 'Move me');
   const t = tools(h, me.id);
   const r = await t.call('move_thread', { folder: '.', account: 'codex-main', then: 'Carry on with the tests' });
   assert.equal(r.error, false, r.text);
   await tick();
-  // As Mike's message it stopped the turn that sent it ("Stopped here so … can take over").
+  // As Alex's message it stopped the turn that sent it ("Stopped here so … can take over").
   assert.equal(s.interrupts, 0, 'the running turn is left alone');
   s.result();
   await tick();
@@ -339,7 +339,7 @@ test('`id` works as a thread id, and a missing one is an error rather than "this
   assert.equal(h.runner.list().length, 2);
 });
 
-test("update_thread leaves a title Mike gave alone unless he asked for the new one", async () => {
+test("update_thread leaves a title Alex gave alone unless he asked for the new one", async () => {
   const h = makeHarness();
   const { thread: me } = start(h, 'Me');
   const { thread: other } = start(h, 'Other');
@@ -348,15 +348,15 @@ test("update_thread leaves a title Mike gave alone unless he asked for the new o
   await t.call('update_thread', { id: other.id, title: 'Agent name' });
   await t.call('update_thread', { id: other.id, title: 'Better agent name' });
   assert.equal(h.runner.get(other.id).title, 'Better agent name');
-  // Mike renames it in the app (threads.update, no titleBy).
-  h.runner.update({ threadId: other.id, title: 'Mike name' });
+  // Alex renames it in the app (threads.update, no titleBy).
+  h.runner.update({ threadId: other.id, title: 'Alex name' });
   const refused = await t.call('update_thread', { id: other.id, title: 'Agent again', snooze: '2h' });
   assert.equal(refused.error, true);
-  assert.match(refused.text, /The user named this thread "Mike name" themselves/);
-  assert.equal(h.runner.get(other.id).title, 'Mike name');
+  assert.match(refused.text, /The user named this thread "Alex name" themselves/);
+  assert.equal(h.runner.get(other.id).title, 'Alex name');
   assert.equal(h.runner.get(other.id).snoozedUntil, undefined, 'nothing else in the refused call changed');
   // The same title, or one Mike asked for, goes through.
-  assert.equal((await t.call('update_thread', { id: other.id, title: 'Mike name', snooze: 'off' })).error, false);
+  assert.equal((await t.call('update_thread', { id: other.id, title: 'Alex name', snooze: 'off' })).error, false);
   assert.equal((await t.call('update_thread', { id: other.id, title: 'Asked for', mikeAsked: true })).error, false);
   assert.equal(h.runner.get(other.id).title, 'Asked for');
   assert.equal((await t.call('update_thread', { id: other.id, title: 'Sneaky' })).error, true, 'still his');
@@ -392,7 +392,7 @@ test('parseWhen and tool titles', () => {
 test('list_accounts shows each login\'s provider, note, room left and models; create and move take Codex accounts', async () => {
   const usage = { windows: [{ kind: 'five_hour' as const, title: '5-hour', remainingPercent: 89 }, { kind: 'weekly' as const, title: 'Weekly', remainingPercent: 78 }], readAt: '2026-10-26T12:00:00Z', source: 'tokenStats' as const };
   const accounts = withCodex().map((a) =>
-    a.id === 'claude-3' ? { ...a, note: 'Convex work only', email: 'three@example.com', usage } : a.id === 'claude-main' ? { ...a, email: 'main@example.com' } : a,
+    a.id === 'claude-3' ? { ...a, note: 'Work only', email: 'three@example.com', usage } : a.id === 'claude-main' ? { ...a, email: 'main@example.com' } : a,
   );
   const h = makeHarness(undefined, { defaults: { cwd: '', models: { codex: 'gpt-6-luna' } } }, { accounts: new FakeAccounts(accounts) });
   h.cfg.defaults.cwd = path.join(h.home, 'work');
@@ -401,7 +401,7 @@ test('list_accounts shows each login\'s provider, note, room left and models; cr
   const t = tools(h, me.id);
   const list = (await t.call('list_accounts')).text;
   assert.match(list, /claude-main {2}main@example\.com {2}\[Claude; usage unknown; default for new threads\]/);
-  assert.match(list, /claude-3 {2}three@example\.com {2}\[Claude; Convex work only; 5-hour 89% left, weekly 78% left\]/);
+  assert.match(list, /claude-3 {2}three@example\.com {2}\[Claude; Work only; 5-hour 89% left, weekly 78% left\]/);
   assert.match(list, /codex-main {2}Codex · main@example\.com {2}\[Codex; usage unknown\]\n {4}models: gpt-6\.1-sol \(default\), gpt-6-luna/);
 
   // claude-main and codex-main share an email: that's refused, not guessed.
@@ -486,11 +486,11 @@ test('end_turn only acknowledges; its description says when to call it', async (
 
 // An agent drafted its answer in thinking, ran two commands and called
 // end_turn; Mike saw a folded work group and a card, twice (28 Oct 2026).
-test('end_turn is refused until the turn has replied to Mike in text', async () => {
+test('end_turn is refused until the turn has replied to Alex in text', async () => {
   const h = makeHarness();
   const { thread, s } = start(h);
   const { call, slept } = tools(h, thread.id);
-  toolCall(s, 'b1', 'Bash', { command: 'grep sammy' });
+  toolCall(s, 'b1', 'Bash', { command: 'grep garden' });
   toolResult(s, 'b1');
   toolCall(s, 'e1', END_TURN, { needs: 'nothing' });
   let r = await call('end_turn', { needs: 'nothing' });
@@ -761,7 +761,7 @@ test('one reply: a reply in two blocks is written whole under the corrected card
   assert.equal(copy?.type === 'assistant.text' && copy.text, 'There are two ways: the quick one and the thorough one, and here is each in full.\n\nWhich should we use?');
 });
 
-// ...and a message Mike sends between the nudge and the card gets its own
+// ...and a message Alex sends between the nudge and the card gets its own
 // answer and card: the reply from before it isn't written again as if it
 // answered him.
 test('one reply: a message sent after the nudge takes over from the card it asked for', async () => {
@@ -1021,7 +1021,7 @@ test('one reply: a reply that writes its card out again keeps the card and loses
   const h = makeHarness();
   const { thread, s } = start(h);
   const { call } = tools(h, thread.id, undefined, () => true);
-  const input = { headline: 'Ready', asks: [{ question: 'Press Bring Them In on Tinker Desk.' }] };
+  const input = { headline: 'Ready', asks: [{ question: 'Press Bring Them In on build-box.' }] };
   toolCall(s, 'e1', END_TURN, input);
   const r = await call('end_turn', input);
   s.out({ kind: 'event', event: { type: 'tool.result', itemId: 'e1', ok: !r.error, text: r.text, truncated: false, images: [] } });
@@ -1032,7 +1032,7 @@ test('one reply: a reply that writes its card out again keeps the card and loses
   assert.equal(reply.final, true);
   const t = h.runner.get(thread.id);
   assert.equal(t.needs, 'you');
-  assert.deepEqual(t.asks?.map((a: { action: string }) => a.action), ['Press Bring Them In on Tinker Desk.']);
+  assert.deepEqual(t.asks?.map((a: { action: string }) => a.action), ['Press Bring Them In on build-box.']);
   assert.equal(h.events(thread.id).at(-1).needsFrom, 'tool');
 });
 
@@ -1124,7 +1124,7 @@ test('end_turn refuses snooze "off" and over-long words, in both forms, so the a
   }
 });
 
-test('a repeat end_turn cannot archive a turn that is waiting on Mike', async () => {
+test('a repeat end_turn cannot archive a turn that is waiting on Alex', async () => {
   const h = makeHarness();
   const { thread, s } = start(h);
   const { call } = tools(h, thread.id, undefined, () => true);
@@ -1307,7 +1307,7 @@ test('bullets with no message since the last step: end_turn says stop without as
   // Thinking, as Opus did, then the details, streamed then whole.
   s.out({ kind: 'event', event: { type: 'reasoning', itemId: 'm2:0', text: 'The user has not got the details yet.' } });
   s.out({ kind: 'delta', delta: { type: 'assistant.text.delta', itemId: 'm2:1', text: '**Phone:**' } });
-  s.text('m2:1', '**Phone:** 13 13 13\n\n**Bookings:** EXBEEI (you), E9SMYP (Kelsie and Joshua), last name CANN');
+  s.text('m2:1', '**Phone:** 13 13 13\n\n**Bookings:** ABC123 (you), XYZ789 (Sam and Jo), last name EXAMPLE');
   // Anything after that is a repeat again.
   s.text('m3:0', 'Over to you. ' + 'x'.repeat(100));
   const texts = h.events(thread.id).filter((e) => e.type === 'assistant.text');
@@ -1315,7 +1315,7 @@ test('bullets with no message since the last step: end_turn says stop without as
     texts.map((e) => [e.itemId, e.text]),
     [
       ['e1.summary', "- Put together the details you'll need for the Qantas call."],
-      ['m2:1', '**Phone:** 13 13 13\n\n**Bookings:** EXBEEI (you), E9SMYP (Kelsie and Joshua), last name CANN'],
+      ['m2:1', '**Phone:** 13 13 13\n\n**Bookings:** ABC123 (you), XYZ789 (Sam and Jo), last name EXAMPLE'],
     ],
   );
   assert.ok(!h.events(thread.id).some((e) => e.type === 'reasoning' && e.itemId === 'm2:0'), 'thinking after end_turn still goes');
@@ -1593,7 +1593,7 @@ test("end_turn waits for its own call to land, and takes a call that never lands
 // The CLI defers MCP tools (an agent sees only their names), so the server's
 // instructions are the one place sure to tell an agent when to reach for
 // show_options and pin. Without them an agent pinned three mockups and asked
-// Mike to choose in chat.
+// Alex to choose in chat.
 test('both instruction texts say when to use show_options and pin', async () => {
   const { threadbearMcpServer } = await import('../../src/threadbear-mcp.ts');
   const { TOOL_GUIDANCE } = await import('../../src/adapters/codex/tools.ts');
@@ -1686,7 +1686,7 @@ test('one reply: an end_turn the Stop hook asked for keeps the message already w
   assert.match(r.text, /^Noted: this thread is done/);
   s.out({ kind: 'event', event: { type: 'tool.result', itemId: 'e1', ok: true, text: r.text, truncated: false, images: [] } });
   assert.equal(h.runner.get(thread.id).preview, 'Tests pass');
-  // Anything it writes anyway is a repeat, and doesn't reach Mike.
+  // Anything it writes anyway is a repeat, and doesn't reach Alex.
   s.text('m2', 'All done.');
   assert.ok(!h.events(thread.id).some((e) => e.type === 'assistant.text' && e.itemId === 'm2'));
   assert.ok(!h.events(thread.id).some((e) => e.type === 'assistant.text' && e.final));
@@ -1738,13 +1738,13 @@ test('one reply: a nudged end_turn with no message to keep still asks for the re
 test('one reply: after hidden text, end_turn asks for the answer and evidence, including drafts', async () => {
   const h = makeHarness();
   const again = /self-contained answer with the result and supporting evidence/;
-  const input = { headline: 'Draft update for Jamie ready to send', asks: [{ question: 'Send the Hetzner update to Jamie in your Slack DM?', options: [{ label: 'Send it' }, { label: "I'll edit and send" }] }] };
+  const input = { headline: 'Draft update for Jamie ready to send', asks: [{ question: 'Send the Cloud box update to Jamie in your Slack DM?', options: [{ label: 'Send it' }, { label: "I'll edit and send" }] }] };
   // The draft as narration, straight before the call.
   const first = start(h);
   const one = tools(h, first.thread.id, undefined, () => true);
   toolCall(first.s, 'b1', 'Bash', { command: 'slack-read D081T2X5SG6' });
   toolResult(first.s, 'b1');
-  first.s.out({ kind: 'event', event: { type: 'assistant.text', itemId: 'n1', text: 'The Hetzner Linux runner is up and sits in threadbear beside your Mac and Bruce.', narration: true } });
+  first.s.out({ kind: 'event', event: { type: 'assistant.text', itemId: 'n1', text: 'The Cloud box Linux runner is up and sits in threadbear beside your Mac and Mac mini.', narration: true } });
   toolCall(first.s, 'e1', END_TURN, input);
   let r = await one.call('end_turn', input);
   assert.equal(r.error, false, r.text);
@@ -2043,19 +2043,19 @@ test('move_thread with a runner asks the main Mac to move the thread whole, and 
     list: async () => ({ runners: [], threads: [] }),
     call: async () => undefined,
     runners: async () => [
-      { id: 'm5runner0001', name: 'M5' },
-      { id: 'legitcloud01', name: 'Hetzner Cloud' },
+      { id: 'laptop000001', name: 'Laptop' },
+      { id: 'legitcloud01', name: 'Cloud box' },
     ],
     move: async (p) => {
       asked.push(p);
-      return 'Moving it to Hetzner Cloud.';
+      return 'Moving it to Cloud box.';
     },
   };
   const call = toolsWith(h, me.id, control);
-  const r = await call('move_thread', { runner: 'cloud', folder: '/home/mike/x' });
+  const r = await call('move_thread', { runner: 'cloud', folder: '/home/alex/x' });
   assert.equal(r.error, false, r.text);
-  assert.match(r.text, /Moving it to Hetzner Cloud/);
-  assert.deepEqual(asked, [{ threadId: me.id, runnerId: 'legitcloud01', runnerName: 'Hetzner Cloud', cwd: '/home/mike/x' }]);
+  assert.match(r.text, /Moving it to Cloud box/);
+  assert.deepEqual(asked, [{ threadId: me.id, runnerId: 'legitcloud01', runnerName: 'Cloud box', cwd: '/home/alex/x' }]);
   // `then` is for folder moves; neither folder nor runner is an error.
   assert.equal((await call('move_thread', { runner: 'cloud', then: 'go' })).error, true);
   assert.equal((await call('move_thread', {})).error, true);

@@ -72,7 +72,7 @@ test('show_panel puts a request on the thread, and says it waits when the app do
   assert.equal(rec.panelRequest.panel, 'convex.dashboard');
 });
 
-test('the app showing it clears the request and the tool says Mike has it in front of him', async () => {
+test('the app showing it clears the request and the tool says Alex has it in front of him', async () => {
   const h = makeHarness();
   const { thread } = h.runner.create({ text: 'hi', accountId: 'claude-3', cwd: tmpDir() });
   const pending = showTool(h, thread.id)({ panel: 'Highlights' });
@@ -97,7 +97,7 @@ test('an unknown panel is an error that lists the thread\'s', async () => {
   assert.equal(h.runner.get(thread.id).panelRequest, undefined);
 });
 
-test('a newer request replaces the waiting one; Mike\'s own message clears it, an agent\'s does not', async () => {
+test('a newer request replaces the waiting one; Alex\'s own message clears it, an agent\'s does not', async () => {
   const h = makeHarness();
   const { thread } = h.runner.create({ text: 'hi', accountId: 'claude-3', cwd: tmpDir() });
   h.adapter.last.init();
@@ -114,7 +114,7 @@ test('a newer request replaces the waiting one; Mike\'s own message clears it, a
   h.runner.send(thread.id, 'carry on', [], { origin: 'runner' });
   assert.ok(h.runner.get(thread.id).panelRequest, 'a runner message leaves it');
   h.runner.send(thread.id, 'thanks, looks good');
-  assert.equal(h.runner.get(thread.id).panelRequest, undefined, 'Mike has seen the reply it went with');
+  assert.equal(h.runner.get(thread.id).panelRequest, undefined, 'Alex has seen the reply it went with');
   assert.equal((await second).shown, false);
 });
 

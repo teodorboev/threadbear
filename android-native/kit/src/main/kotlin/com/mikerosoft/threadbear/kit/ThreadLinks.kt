@@ -159,7 +159,7 @@ object ThreadLinks {
 
     /**
      * Lowercase, one space, and home as the runner's step lines write it, so
-     * `/Users/mike/a.md` finds "Edited ~/a.md".
+     * `/Users/alex/a.md` finds "Edited ~/a.md".
      */
     private fun normal(text: String): String =
         home.replace(text, "~").lowercase().split(space).filter { it.isNotEmpty() }.joinToString(" ")

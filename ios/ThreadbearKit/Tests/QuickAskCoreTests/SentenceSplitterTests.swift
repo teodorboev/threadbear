@@ -16,15 +16,15 @@ struct SentenceSplitterTests {
     }
 
     @Test func chunkBoundaryMidWord() {
-        #expect(split(["Yesterday you wor", "ked on Walk", "ies. Then St", "ash It."]) ==
-            ["Yesterday you worked on Walkies.", "Then Stash It."])
+        #expect(split(["Yesterday you wor", "ked on Peb", "ble. Then Re", "cipe Box."]) ==
+            ["Yesterday you worked on Pebble.", "Then Recipe Box."])
     }
 
     @Test func chunkBoundaryRightAfterTheFullStop() {
-        // "on Walkies." could still become "on Walkies.com", so it waits for the next character
+        // "on Pebble." could still become "on Pebble.com", so it waits for the next character
         var splitter = SentenceSplitter(eagerFirstClauseLength: nil)
-        #expect(splitter.append("You worked on Walkies.") == [])
-        #expect(splitter.append(" Then") == ["You worked on Walkies."])
+        #expect(splitter.append("You worked on Pebble.") == [])
+        #expect(splitter.append(" Then") == ["You worked on Pebble."])
         #expect(splitter.finish() == "Then")
     }
 

@@ -11,7 +11,7 @@ struct AskAPITests {
     }
 
     @Test func bodyMatchesTheContract() throws {
-        let history = [Exchange(question: "What did I do yesterday?", answer: "You worked on Walkies.")]
+        let history = [Exchange(question: "What did I do yesterday?", answer: "You worked on Pebble.")]
         let body = AskAPI.body(question: "  And the day before?  ", history: history, timeZone: perth, now: now)
         let object = try json(try AskAPI.encode(body))
 
@@ -19,7 +19,7 @@ struct AskAPITests {
         #expect(object["timezone"] as? String == "Australia/Perth")
         #expect(object["clientTime"] as? String == "2026-10-23T14:06:00+08:00")
         let sent = try #require(object["history"] as? [[String: String]])
-        #expect(sent == [["question": "What did I do yesterday?", "answer": "You worked on Walkies."]])
+        #expect(sent == [["question": "What did I do yesterday?", "answer": "You worked on Pebble."]])
         #expect(Set(object.keys) == ["question", "history", "timezone", "clientTime"])
     }
 
@@ -42,9 +42,9 @@ struct AskAPITests {
 
     @Test func askRequestHeaders() throws {
         let body = AskAPI.body(question: "Hi there", history: [], timeZone: perth, now: now)
-        let request = try AskAPI.askRequest(baseURL: URL(string: "https://greedy-octopus-740.convex.site")!,
+        let request = try AskAPI.askRequest(baseURL: URL(string: "https://happy-bear-123.convex.site")!,
                                             token: "aa_0123456789abcdef_secret", body: body)
-        #expect(request.url?.absoluteString == "https://greedy-octopus-740.convex.site/api/quick/ask")
+        #expect(request.url?.absoluteString == "https://happy-bear-123.convex.site/api/quick/ask")
         #expect(request.httpMethod == "POST")
         #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer aa_0123456789abcdef_secret")
         #expect(request.value(forHTTPHeaderField: "Content-Type") == "application/json")
@@ -61,8 +61,8 @@ struct AskAPITests {
     }
 
     @Test func baseURLNormalising() {
-        #expect(AskAPI.normalizeBaseURL(" https://notable-orca-910.convex.site/ ")?.absoluteString == "https://notable-orca-910.convex.site")
-        #expect(AskAPI.normalizeBaseURL("notable-orca-910.convex.site")?.absoluteString == "https://notable-orca-910.convex.site")
+        #expect(AskAPI.normalizeBaseURL(" https://calm-otter-456.convex.site/ ")?.absoluteString == "https://calm-otter-456.convex.site")
+        #expect(AskAPI.normalizeBaseURL("calm-otter-456.convex.site")?.absoluteString == "https://calm-otter-456.convex.site")
         #expect(AskAPI.normalizeBaseURL("http://127.0.0.1:8787")?.absoluteString == "http://127.0.0.1:8787")
         #expect(AskAPI.normalizeBaseURL("") == nil)
         #expect(AskAPI.normalizeBaseURL("ftp://example.com") == nil)
@@ -100,12 +100,12 @@ struct QuickAskLinkTests {
     }
 
     @Test func anHttpsLinkIsTaken() throws {
-        let parsed = try link("threadbear://quickask?url=https%3A%2F%2Fbruce.tail9ef766.ts.net%3A9443&token=aa_0123456789abcdef_x").get()
-        #expect(parsed.server == "https://bruce.tail9ef766.ts.net:9443")
+        let parsed = try link("threadbear://quickask?url=https%3A%2F%2Fmac-mini.tail1234.ts.net%3A9443&token=aa_0123456789abcdef_x").get()
+        #expect(parsed.server == "https://mac-mini.tail1234.ts.net:9443")
         #expect(parsed.token == "aa_0123456789abcdef_x")
-        #expect(parsed.hostName == "bruce.tail9ef766.ts.net:9443")
+        #expect(parsed.hostName == "mac-mini.tail1234.ts.net:9443")
         // No scheme is https.
-        #expect(try link("threadbear://quickask?url=bruce.example.ts.net&token=t").get().server == "bruce.example.ts.net")
+        #expect(try link("threadbear://quickask?url=mac-mini.example.ts.net&token=t").get().server == "mac-mini.example.ts.net")
     }
 
     @Test func plainHttpAndBrokenLinksAreRefused() {
@@ -116,11 +116,11 @@ struct QuickAskLinkTests {
     }
 
     @Test func onlyAnotherHostCountsAsAChange() throws {
-        let parsed = try link("threadbear://quickask?url=https%3A%2F%2Fbruce.example.ts.net%3A9443&token=t").get()
+        let parsed = try link("threadbear://quickask?url=https%3A%2F%2Fmac-mini.example.ts.net%3A9443&token=t").get()
         // The first link counts as a change: it's asked about like any other.
         #expect(parsed.changesServer(from: nil))
-        #expect(!parsed.changesServer(from: URL(string: "https://Bruce.example.ts.net:9443/")!))
-        #expect(parsed.changesServer(from: URL(string: "https://bruce.example.ts.net")!))
+        #expect(!parsed.changesServer(from: URL(string: "https://Mac-Mini.example.ts.net:9443/")!))
+        #expect(parsed.changesServer(from: URL(string: "https://mac-mini.example.ts.net")!))
         #expect(parsed.changesServer(from: URL(string: "https://evil.example:9443")!))
     }
 }

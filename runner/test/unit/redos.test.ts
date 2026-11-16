@@ -54,7 +54,7 @@ const noFiles = { cwd: '/', home: '/Users/x', isFile: () => false };
 
 test('F9: a .env value for the Convex panel reads as before', () => {
   const v = (text: string) => parseEnvValue(text, 'CONVEX_DEPLOYMENT');
-  assert.equal(v('CONVEX_DEPLOYMENT=dev:abc # team: mike, project: walkies'), 'dev:abc');
+  assert.equal(v('CONVEX_DEPLOYMENT=dev:abc # team: alex, project: walkies'), 'dev:abc');
   assert.equal(v('CONVEX_DEPLOYMENT=dev:abc#not-a-comment'), 'dev:abc#not-a-comment');
   assert.equal(v('  export CONVEX_DEPLOYMENT =\tdev:abc  '), 'dev:abc');
   assert.equal(v('CONVEX_DEPLOYMENT="dev:quoted # kept"'), 'dev:quoted # kept');
@@ -580,7 +580,7 @@ test('url() captures and namedFiles give what the regexes they replaced gave', (
 
 test("a review page's long runs are read in linear time", () => {
   // Each took seconds or more as the old regexes (url( and 5,000 spaces
-  // took 24 s on tinker-desk's M2), and the page or stylesheet can be as
+  // took 24 s on build-box's M2), and the page or stylesheet can be as
   // big as the agent made it.
   const size = 1024 * 1024;
   const texts = [

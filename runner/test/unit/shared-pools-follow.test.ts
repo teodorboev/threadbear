@@ -10,8 +10,8 @@ import type { SharedPool } from '../../src/pools.ts';
 import { SharedPools, type PoolBackend } from '../../src/shared-pools.ts';
 
 const login = (id: string, email?: string, provider: 'claude' | 'codex' = 'claude'): Account => ({ id, provider, title: id, configDir: `/tmp/${id}`, ...(email ? { email } : {}) });
-const MAC = [login('claude-main', 'mike@studio.example'), login('claude-1', 'mike@example.net'), login('codex-main', 'mike@example.net', 'codex')];
-const BOX = [login('claude-main', 'mike@example.net'), login('codex-main', 'mike@example.net', 'codex')];
+const MAC = [login('claude-main', 'alex@studio.example'), login('claude-1', 'alex@example.net'), login('codex-main', 'alex@example.net', 'codex')];
+const BOX = [login('claude-main', 'alex@example.net'), login('codex-main', 'alex@example.net', 'codex')];
 const MAC_POOLS: Pool[] = [{ id: 'claude', title: 'Claude', accountIds: ['claude-main', 'claude-1'] }, { id: 'codex', title: 'Codex', accountIds: ['codex-main'] }];
 
 // A backend with one list that pushes to every subscriber, like Convex.
@@ -60,7 +60,7 @@ const settle = () => new Promise((r) => setTimeout(r, 10));
 
 test("the Mac's pools go up into an empty list, and the box follows them", async () => {
   const b = fakeBackend();
-  const mac = follower(MAC, 'm5', MAC_POOLS);
+  const mac = follower(MAC, 'laptop', MAC_POOLS);
   const box = follower(BOX, 'hz');
   assert.equal(box.sp.pools(BOX), undefined, 'its own pools until there is a shared list');
   box.sp.attach(b.backend);
@@ -78,7 +78,7 @@ test("the Mac's pools go up into an empty list, and the box follows them", async
 
 test("a save on the box keeps the Mac's logins it can't see", async () => {
   const b = fakeBackend();
-  const mac = follower(MAC, 'm5', MAC_POOLS);
+  const mac = follower(MAC, 'laptop', MAC_POOLS);
   const box = follower(BOX, 'hz');
   mac.sp.attach(b.backend);
   box.sp.attach(b.backend);
@@ -91,7 +91,7 @@ test("a save on the box keeps the Mac's logins it can't see", async () => {
 test('nothing goes up while a login has no email yet, or when runner.json has no pools', async () => {
   const b = fakeBackend();
   const noEmail = [login('claude-main'), ...MAC.slice(1)];
-  const early = follower(noEmail, 'm5', MAC_POOLS);
+  const early = follower(noEmail, 'laptop', MAC_POOLS);
   early.sp.attach(b.backend);
   await settle();
   assert.deepEqual(b.calls, []);
@@ -105,7 +105,7 @@ test('nothing goes up while a login has no email yet, or when runner.json has no
 
 test("a runner with none of the shared pools' logins keeps its own", async () => {
   const b = fakeBackend();
-  const mac = follower(MAC, 'm5', [{ id: 'cann', title: 'Cann', accountIds: ['claude-main'] }]);
+  const mac = follower(MAC, 'laptop', [{ id: 'home', title: 'Home', accountIds: ['claude-main'] }]);
   mac.sp.attach(b.backend);
   const other = follower([login('claude-main', 'someone@else.com')], 'x');
   other.sp.attach(b.backend);

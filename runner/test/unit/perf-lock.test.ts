@@ -344,7 +344,7 @@ while True: time.sleep(1)
   const clean = path.join(h.home, 'clean-terminal.pl');
   fs.writeFileSync(clean, `$SIG{HUP} = $SIG{TERM} = 'IGNORE'; open(my $f, '>', $ARGV[0]); print {$f} $$; close $f; sleep 1 while 1;`);
   // Like forkpty: a child in a different session, ignoring the signals an
-  // app's exit normally sends. Sleeping keeps the regression off Mike's CPU.
+  // app's exit normally sends. Sleeping keeps the regression off Alex's CPU.
   fs.writeFileSync(app, `use POSIX qw(setsid);
     open(my $app, '>', "$ENV{HOME}/app.pid"); print {$app} $$; close $app;
     my $pid = fork() // die $!;

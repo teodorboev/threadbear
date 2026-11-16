@@ -1,8 +1,11 @@
-// Shows a pairing QR code for the phone, without the token ever being
-// printed or going near the clipboard. Issues a phone token with
-// `npx convex run tokens:issue`, makes the threadbear://pair link, draws it
-// as a QR code into a temp PNG, opens it in Preview, and deletes the file
-// once Preview has it. Scan it with Threadbear's Scan the code (or the Camera).
+// Shows a pairing QR code for the phone, as the Mac app's Settings › Phone &
+// browser does, without the code ever being printed or going near the
+// clipboard. Makes a one-use pairing code with `npx convex run
+// tokens:issueCode`, draws the pairing text (runner/src/devices.ts,
+// pairingText) as a QR code into a temp PNG, opens it in Preview, and deletes
+// the file once Preview has it. Scan it with Threadbear's Scan the code. The
+// code holds no token and isn't a link (Daybreak 127): the phone trades it for
+// its token, once, within ten minutes.
 //
 //   swift ios/scripts/pair-qr.swift [--prod --url https://….convex.cloud] [--name iphone] [--days 90]
 //
@@ -47,23 +50,23 @@ if prod && !args.contains("--url") {
 }
 guard !deployment.isEmpty else { FileHandle.standardError.write("No CONVEX_URL in .env.local\n".data(using: .utf8)!); exit(1) }
 
-var issue = ["npx", "convex", "run", "tokens:issue", "{\"name\":\"\(name)\",\"days\":\(days)}"]
+var issue = ["npx", "convex", "run", "tokens:issueCode", "{\"name\":\"\(name)\",\"days\":\(days)}"]
 if prod { issue.append("--prod") }
 let output = run(issue)
 guard let json = output.range(of: #"\{[\s\S]*\}"#, options: .regularExpression).map({ String(output[$0]) }),
       let object = try? JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any],
-      let token = object["token"] as? String else {
-    FileHandle.standardError.write("Couldn't read the token from tokens:issue\n".data(using: .utf8)!)
+      let code = object["code"] as? String else {
+    FileHandle.standardError.write("Couldn't read the code from tokens:issueCode\n".data(using: .utf8)!)
     exit(1)
 }
 
-var link = URLComponents()
-link.scheme = "threadbear"
-link.host = "pair"
-link.queryItems = [.init(name: "url", value: deployment), .init(name: "token", value: token)]
+var query = URLComponents()
+query.queryItems = [.init(name: "url", value: deployment), .init(name: "code", value: code)]
+let text = "TBPAIR1_" + Data((query.percentEncodedQuery ?? "").utf8).base64EncodedString()
+    .replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "=", with: "")
 
 let filter = CIFilter(name: "CIQRCodeGenerator")!
-filter.setValue(Data(link.url!.absoluteString.utf8), forKey: "inputMessage")
+filter.setValue(Data(text.utf8), forKey: "inputMessage")
 filter.setValue("M", forKey: "inputCorrectionLevel")
 let qr = filter.outputImage!.transformed(by: CGAffineTransform(scaleX: 12, y: 12))
 let rep = NSBitmapImageRep(ciImage: qr)
@@ -73,9 +76,9 @@ try! rep.representation(using: .png, properties: [:])!.write(to: file)
 try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
 NSWorkspace.shared.open(file)
 // Preview holds the picture once it has opened it, so the file can go
-// straight away and no copy of the token stays on disk. (A delayed delete
+// straight away and no copy of the code stays on disk. (A delayed delete
 // from a detached shell didn't survive the script's process group ending.)
 Thread.sleep(forTimeInterval: 3)
 try? FileManager.default.removeItem(at: file)
-print("Showing the pairing QR for \"\(name)\" (\(prod ? "prod" : "dev"), expires in \(days) days). In Threadbear, tap Scan the code.")
+print("Showing the pairing QR for \"\(name)\" (\(prod ? "prod" : "dev")). It works once, for ten minutes; the phone's token lasts \(days) days. In Threadbear, tap Scan the code.")
 print("Close the Preview window once the phone has paired. Revoke with: npx convex run tokens:revoke '{\"name\":\"\(name)\"}'\(prod ? " --prod" : "")")

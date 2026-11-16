@@ -1,5 +1,5 @@
 // Settings › Runners (features/settings-runners.feature). Each runner is a
-// line as both apps' dumps give it: "bruce: Online", with " *" after the name
+// line as both apps' dumps give it: "mac-mini: Online", with " *" after the name
 // where new threads start, in the order the section lists them.
 import { Then, When } from '@cucumber/cucumber';
 import type { ThreadbearWorld } from '../support/world.ts';

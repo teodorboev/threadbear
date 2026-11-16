@@ -218,7 +218,7 @@ test('runner: a thread in an untrusted folder gets no actions until patches.trus
 });
 
 // Plays a Claude Edit through the real normalizer, as the CLI sends it:
-// the call, the approval preview (beforeApproval), then Mike's answer. On
+// the call, the approval preview (beforeApproval), then Alex's answer. On
 // approval `apply` makes the CLI's write, and `meanwhile` anything that
 // runs before the runner reads the result (a command straight after).
 // `mode`: what the adapter recorded the call as going through on (its
@@ -269,7 +269,7 @@ test('runner: a denied edit of an untrusted patch leaves it untrusted, from Clau
   s.init();
   const ctx = fileContext(project, tmpDir(), tmpDir());
 
-  // Claude: the preview's edit.diff names the file, then Mike says no.
+  // Claude: the preview's edit.diff names the file, then Alex says no.
   claudeEdit(s, new ClaudeNormalizer(ctx), { id: 'tu1', file: v.file, old: '"Deploy"', new: '"Ship"', deny: true });
   assert.ok(h.events(thread.id).some((e) => e.type === 'edit.diff' && e.path === v.file), 'the preview was shown');
   // Codex: a proposed patch (started, then updated), declined.
@@ -327,7 +327,7 @@ test('runner: a successful edit trusts only the bytes it wrote, not the file cha
   assert.equal(t.patches?.[0].untrusted, 'new');
   assert.equal(fs.existsSync(evil), false);
 
-  // Left as the edit wrote it, from a version Mike trusted (an Edit only
+  // Left as the edit wrote it, from a version Alex trusted (an Edit only
   // vouches for what it changed): trusted, by that file's hash alone.
   const fresh = writePatch(project, 'tools', 'Deploy');
   const trusted = patchHash(fresh.file).hash;
@@ -371,7 +371,7 @@ test('runner: a successful edit trusts only the bytes it wrote, not the file cha
   assert.equal(t.patches?.[0].untrusted, 'changed');
   assert.equal(t.actions, undefined);
   assert.equal(fs.existsSync(evil), false);
-  // Even left as Codex wrote it: Mike trusts it.
+  // Even left as Codex wrote it: Alex trusts it.
   const codexPatch = writePatch(project, 'tools', 'Codex');
   send(codex.handle('item/started', { threadId: 'th', item: { type: 'fileChange', id: 'p2', changes: [change], status: 'inProgress' } }));
   send(codex.handle('item/completed', { threadId: 'th', item: { type: 'fileChange', id: 'p2', changes: [change], status: 'completed' } }));

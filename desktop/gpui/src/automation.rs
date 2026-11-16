@@ -456,7 +456,7 @@ fn step(app: &Entity<Threadbear>, cmd: &Value, window: &mut Window, cx: &mut App
         "shortcuts" => crate::settings_window::keyboard_automation(app, cmd, cx),
         // The sidebar's commands (sidebar.rs). Guarded ones only take the forms
         // that name a section, a row or a tip; the others fall through below.
-        "hover" | "sort" | "archive-more" | "star" | "unstar" | "unarchive" | "realMenu" | "menu-popover" => crate::sidebar::automation(app, cmd, window, cx),
+        "hover" | "sort" | "archive-more" | "star" | "unstar" | "unarchive" | "realMenu" | "menu-popover" | "group" => crate::sidebar::automation(app, cmd, window, cx),
         "new" | "options" => crate::new_thread::automation(app, cmd, window, cx),
         // A threadbear:// link handed over as macOS hands one (deep_links.rs).
         "open-url" => crate::deep_links::automation(app, cmd, window.window_handle(), cx),

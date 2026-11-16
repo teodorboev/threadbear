@@ -10,35 +10,35 @@ const login = (id: string, email: string | undefined, provider: 'claude' | 'code
   id, provider, title: email ?? id, configDir: `/tmp/${id}`, ...(email ? { email } : {}),
 });
 
-// Mike's Mac (runner m5) and the Hetzner box (runner hz), whose
+// Alex's Mac (runner laptop) and the Cloud box (runner hz), whose
 // claude-main is a different login from the Mac's.
-const M5 = [login('claude-main', 'mike@studio.example'), login('claude-1', 'Mike@Example.net'), login('claude-2', 'mike@work.example'), login('claude-3', 'mike@example.org'), login('codex-main', 'mike@example.net', 'codex')];
-const HZ = [login('claude-main', 'mike@example.net'), login('codex-main', 'mike@example.net', 'codex')];
+const LAPTOP = [login('claude-main', 'alex@studio.example'), login('claude-1', 'Alex@Example.net'), login('claude-2', 'alex@work.example'), login('claude-3', 'alex@example.org'), login('codex-main', 'alex@example.net', 'codex')];
+const HZ = [login('claude-main', 'alex@example.net'), login('codex-main', 'alex@example.net', 'codex')];
 
 const MAC_POOLS: Pool[] = [
   { id: 'claude', title: 'Claude', accountIds: ['claude-main', 'claude-1', 'claude-3'] },
-  { id: 'convex', title: 'ConvexClaude', accountIds: ['claude-2'], folders: ['~/dev/convex'] },
+  { id: 'convex', title: 'ConvexClaude', accountIds: ['claude-2'], folders: ['~/dev/work'] },
   { id: 'codex', title: 'Codex', accountIds: ['codex-main'] },
 ];
 
 test('memberOf: a login by provider and lower-case email, or by runner and id with none', () => {
-  assert.deepEqual(memberOf(M5[1]!, 'm5'), { provider: 'claude', email: 'mike@example.net' });
-  assert.deepEqual(memberOf(login('claude-9', undefined), 'm5'), { provider: 'claude', runnerId: 'm5', accountId: 'claude-9' });
+  assert.deepEqual(memberOf(LAPTOP[1]!, 'laptop'), { provider: 'claude', email: 'alex@example.net' });
+  assert.deepEqual(memberOf(login('claude-9', undefined), 'laptop'), { provider: 'claude', runnerId: 'laptop', accountId: 'claude-9' });
 });
 
 test("the Mac's pools go up by email and come back as they were", () => {
-  const shared = toShared(MAC_POOLS, [], M5, 'm5');
+  const shared = toShared(MAC_POOLS, [], LAPTOP, 'laptop');
   assert.deepEqual(shared[0]!.members, [
-    { provider: 'claude', email: 'mike@studio.example' },
-    { provider: 'claude', email: 'mike@example.net' },
-    { provider: 'claude', email: 'mike@example.org' },
+    { provider: 'claude', email: 'alex@studio.example' },
+    { provider: 'claude', email: 'alex@example.net' },
+    { provider: 'claude', email: 'alex@example.org' },
   ]);
-  assert.deepEqual(shared[1]!.folders, ['~/dev/convex']);
-  assert.deepEqual(fromShared(shared, M5, 'm5'), MAC_POOLS);
+  assert.deepEqual(shared[1]!.folders, ['~/dev/work']);
+  assert.deepEqual(fromShared(shared, LAPTOP, 'laptop'), MAC_POOLS);
 });
 
 test('on another runner each pool is the logins it has, and a pool with none is left out', () => {
-  const shared = toShared(MAC_POOLS, [], M5, 'm5');
+  const shared = toShared(MAC_POOLS, [], LAPTOP, 'laptop');
   assert.deepEqual(fromShared(shared, HZ, 'hz'), [
     { id: 'claude', title: 'Claude', accountIds: ['claude-main'] },
     { id: 'codex', title: 'Codex', accountIds: ['codex-main'] },
@@ -46,7 +46,7 @@ test('on another runner each pool is the logins it has, and a pool with none is 
 });
 
 test('a save on a runner that sees less keeps what it cannot see', () => {
-  const before = toShared(MAC_POOLS, [], M5, 'm5');
+  const before = toShared(MAC_POOLS, [], LAPTOP, 'laptop');
   // The box renames Claude and changes nothing else it can see.
   const seen = fromShared(before, HZ, 'hz');
   seen[0]!.title = 'Claude subs';
@@ -58,31 +58,31 @@ test('a save on a runner that sees less keeps what it cannot see', () => {
 });
 
 test('a login taken out on one runner goes; one added joins after the kept ones', () => {
-  const before = toShared(MAC_POOLS, [], M5, 'm5');
-  const seen = fromShared(before, M5, 'm5');
+  const before = toShared(MAC_POOLS, [], LAPTOP, 'laptop');
+  const seen = fromShared(before, LAPTOP, 'laptop');
   seen[0]!.accountIds = ['claude-1', 'claude-3'];
-  assert.deepEqual(toShared(seen, before, M5, 'm5')[0]!.members.map((m) => m.email), ['mike@example.net', 'mike@example.org']);
+  assert.deepEqual(toShared(seen, before, LAPTOP, 'laptop')[0]!.members.map((m) => m.email), ['alex@example.net', 'alex@example.org']);
   // The box adds a Codex login to Claude: it joins the end.
   const box = fromShared(before, HZ, 'hz');
   box[0]!.accountIds = ['claude-main', 'codex-main'];
   const after = toShared(box, before, HZ, 'hz');
-  assert.deepEqual(after[0]!.members.map((m) => `${m.provider}:${m.email}`), ['claude:mike@studio.example', 'claude:mike@example.net', 'claude:mike@example.org', 'codex:mike@example.net']);
+  assert.deepEqual(after[0]!.members.map((m) => `${m.provider}:${m.email}`), ['claude:alex@studio.example', 'claude:alex@example.net', 'claude:alex@example.org', 'codex:alex@example.net']);
 });
 
 test('a pool deleted where it was seen goes; a login with no email only counts on its own runner', () => {
-  const before = toShared(MAC_POOLS, [], M5, 'm5');
+  const before = toShared(MAC_POOLS, [], LAPTOP, 'laptop');
   const seen = fromShared(before, HZ, 'hz').filter((p) => p.id !== 'codex');
   assert.deepEqual(toShared(seen, before, HZ, 'hz').map((p) => p.id), ['claude', 'convex']);
 
   const odd = login('claude-9', undefined);
-  const shared: SharedPool[] = toShared([{ id: 'x', title: 'X', accountIds: ['claude-9'] }], [], [odd], 'm5');
-  assert.deepEqual(fromShared(shared, [odd], 'm5')[0]!.accountIds, ['claude-9']);
+  const shared: SharedPool[] = toShared([{ id: 'x', title: 'X', accountIds: ['claude-9'] }], [], [odd], 'laptop');
+  assert.deepEqual(fromShared(shared, [odd], 'laptop')[0]!.accountIds, ['claude-9']);
   assert.deepEqual(fromShared(shared, [odd], 'hz'), [], 'claude-9 on another runner is some other login');
 });
 
 // Issue 18: two config folders on one Mac signed in to the same account.
 // Email alone can't tell them apart, so the pool member carries the id too.
-const TWIN = [login('claude-main', 'mike@example.net'), login('claude-2', 'Mike@Example.net'), login('claude-3', 'mike@example.org')];
+const TWIN = [login('claude-main', 'alex@example.net'), login('claude-2', 'Alex@Example.net'), login('claude-3', 'alex@example.org')];
 const TWIN_POOLS: Pool[] = [
   { id: 'claude', title: 'Claude', accountIds: ['claude-main', 'claude-3'] },
   { id: 'hooks', title: 'Hooks', accountIds: ['claude-2'] },
@@ -94,21 +94,21 @@ const roundTrip = (list: SharedPool[]) => readShared(JSON.parse(JSON.stringify(l
 test('sameEmail: the other logins of the provider here with the address, ignoring case', () => {
   assert.deepEqual(sameEmail(TWIN[0]!, TWIN).map((a) => a.id), ['claude-2']);
   assert.deepEqual(sameEmail(TWIN[2]!, TWIN), []);
-  assert.deepEqual(sameEmail(login('codex-main', 'mike@example.net', 'codex'), TWIN), [], 'another provider is another subscription');
+  assert.deepEqual(sameEmail(login('codex-main', 'alex@example.net', 'codex'), TWIN), [], 'another provider is another subscription');
 });
 
 test('two logins sharing an email go up with their ids and come back as they were on their runner', () => {
-  const shared = roundTrip(toShared(TWIN_POOLS, [], TWIN, 'm5'));
-  assert.deepEqual(shared[1]!.members, [{ provider: 'claude', email: 'mike@example.net', runnerId: 'm5', accountId: 'claude-2' }]);
+  const shared = roundTrip(toShared(TWIN_POOLS, [], TWIN, 'laptop'));
+  assert.deepEqual(shared[1]!.members, [{ provider: 'claude', email: 'alex@example.net', runnerId: 'laptop', accountId: 'claude-2' }]);
   assert.deepEqual(shared[2]!.members.map((m) => m.accountId), ['claude-2', 'claude-main'], 'both kept, not merged');
-  assert.deepEqual(shared[0]!.members[1], { provider: 'claude', email: 'mike@example.org' }, 'an email only one login has goes up as before');
-  assert.deepEqual(fromShared(shared, TWIN, 'm5'), TWIN_POOLS);
+  assert.deepEqual(shared[0]!.members[1], { provider: 'claude', email: 'alex@example.org' }, 'an email only one login has goes up as before');
+  assert.deepEqual(fromShared(shared, TWIN, 'laptop'), TWIN_POOLS);
   // Saving the same again changes nothing.
-  assert.deepEqual(toShared(fromShared(shared, TWIN, 'm5'), shared, TWIN, 'm5'), shared);
+  assert.deepEqual(toShared(fromShared(shared, TWIN, 'laptop'), shared, TWIN, 'laptop'), shared);
 });
 
 test('on another runner a pinned member is matched by email', () => {
-  const shared = roundTrip(toShared(TWIN_POOLS, [], TWIN, 'm5'));
+  const shared = roundTrip(toShared(TWIN_POOLS, [], TWIN, 'laptop'));
   assert.deepEqual(fromShared(shared, HZ, 'hz'), [
     { id: 'claude', title: 'Claude', accountIds: ['claude-main'] },
     { id: 'hooks', title: 'Hooks', accountIds: ['claude-main'] },
@@ -120,45 +120,45 @@ test('on another runner a pinned member is matched by email', () => {
 });
 
 test("a save on another runner keeps the Mac's pinned members, and drops them with the login", () => {
-  const shared = roundTrip(toShared(TWIN_POOLS, [], TWIN, 'm5'));
+  const shared = roundTrip(toShared(TWIN_POOLS, [], TWIN, 'laptop'));
   const box = fromShared(shared, HZ, 'hz');
   box[1]!.title = 'Hook work';
   const after = roundTrip(toShared(box, shared, HZ, 'hz'));
   assert.equal(after[1]!.title, 'Hook work');
   assert.deepEqual(after.map((p) => p.members), shared.map((p) => p.members), 'the ids the Mac saved stay');
-  assert.deepEqual(fromShared(after, TWIN, 'm5').map((p) => p.accountIds), TWIN_POOLS.map((p) => p.accountIds));
+  assert.deepEqual(fromShared(after, TWIN, 'laptop').map((p) => p.accountIds), TWIN_POOLS.map((p) => p.accountIds));
   // The box takes its login out of Both: the Mac's two go with it, as an email member would.
   box[2]!.accountIds = ['codex-main'];
-  assert.deepEqual(roundTrip(toShared(box, shared, HZ, 'hz'))[2]!.members, [{ provider: 'codex', email: 'mike@example.net' }]);
+  assert.deepEqual(roundTrip(toShared(box, shared, HZ, 'hz'))[2]!.members, [{ provider: 'codex', email: 'alex@example.net' }]);
 });
 
 test('a pinned login that has gone from its runner falls back to its email there', () => {
-  const shared = roundTrip(toShared(TWIN_POOLS, [], TWIN, 'm5'));
+  const shared = roundTrip(toShared(TWIN_POOLS, [], TWIN, 'laptop'));
   const gone = TWIN.filter((a) => a.id !== 'claude-2');
-  assert.deepEqual(fromShared(shared, gone, 'm5')[1]!.accountIds, ['claude-main']);
+  assert.deepEqual(fromShared(shared, gone, 'laptop')[1]!.accountIds, ['claude-main']);
 });
 
 test('a list saved before ids were carried still reads, by email as before', () => {
-  const old = roundTrip([{ id: 'hooks', title: 'Hooks', members: [{ provider: 'claude', email: 'mike@example.net' }] }]);
-  assert.deepEqual(old[0]!.members, [{ provider: 'claude', email: 'mike@example.net' }]);
-  assert.deepEqual(fromShared(old, TWIN, 'm5')[0]!.accountIds, ['claude-main']);
+  const old = roundTrip([{ id: 'hooks', title: 'Hooks', members: [{ provider: 'claude', email: 'alex@example.net' }] }]);
+  assert.deepEqual(old[0]!.members, [{ provider: 'claude', email: 'alex@example.net' }]);
+  assert.deepEqual(fromShared(old, TWIN, 'laptop')[0]!.accountIds, ['claude-main']);
   // Saved again on the Mac with claude-2 picked, it now goes up pinned.
-  const again = toShared([{ id: 'hooks', title: 'Hooks', accountIds: ['claude-2'] }], old, TWIN, 'm5');
-  assert.deepEqual(fromShared(again, TWIN, 'm5')[0]!.accountIds, ['claude-2']);
+  const again = toShared([{ id: 'hooks', title: 'Hooks', accountIds: ['claude-2'] }], old, TWIN, 'laptop');
+  assert.deepEqual(fromShared(again, TWIN, 'laptop')[0]!.accountIds, ['claude-2']);
 });
 
 test('pin false (a backend before API 75) sends the email alone, as before', () => {
-  assert.deepEqual(memberOf(TWIN[1]!, 'm5', TWIN, false), { provider: 'claude', email: 'mike@example.net' });
-  assert.deepEqual(toShared([TWIN_POOLS[2]!], [], TWIN, 'm5', false)[0]!.members, [{ provider: 'claude', email: 'mike@example.net' }]);
+  assert.deepEqual(memberOf(TWIN[1]!, 'laptop', TWIN, false), { provider: 'claude', email: 'alex@example.net' });
+  assert.deepEqual(toShared([TWIN_POOLS[2]!], [], TWIN, 'laptop', false)[0]!.members, [{ provider: 'claude', email: 'alex@example.net' }]);
 });
 
 test('sameEmailWarnings: one line per shared address, for tb accounts', () => {
   assert.deepEqual(sameEmailWarnings(TWIN), ["claude-main and claude-2 share an email, so they share one usage limit, and other runners can't tell them apart in a shared pool."]);
-  assert.deepEqual(sameEmailWarnings(M5), [], 'claude-1 and codex-main are different providers');
+  assert.deepEqual(sameEmailWarnings(LAPTOP), [], 'claude-1 and codex-main are different providers');
 });
 
 test("a reorder on another runner moves the Mac's pinned member too", () => {
-  const shared = roundTrip(toShared([{ id: 'mix', title: 'Mix', accountIds: ['claude-2', 'codex-main'] }], [], [...TWIN, login('codex-main', 'mike@example.net', 'codex')], 'm5'));
+  const shared = roundTrip(toShared([{ id: 'mix', title: 'Mix', accountIds: ['claude-2', 'codex-main'] }], [], [...TWIN, login('codex-main', 'alex@example.net', 'codex')], 'laptop'));
   const after = toShared([{ id: 'mix', title: 'Mix', accountIds: ['codex-main', 'claude-main'] }], shared, HZ, 'hz');
-  assert.deepEqual(after[0]!.members, [{ provider: 'codex', email: 'mike@example.net' }, { provider: 'claude', email: 'mike@example.net', runnerId: 'm5', accountId: 'claude-2' }]);
+  assert.deepEqual(after[0]!.members, [{ provider: 'codex', email: 'alex@example.net' }, { provider: 'claude', email: 'alex@example.net', runnerId: 'laptop', accountId: 'claude-2' }]);
 });

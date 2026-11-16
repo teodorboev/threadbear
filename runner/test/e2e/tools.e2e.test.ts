@@ -111,7 +111,7 @@ describe('threadbear tools end to end (real Claude CLI)', { concurrency: false }
       const seen = new Set(s.events.map((e: Ev) => e.seq));
       events.set(id, [...s.events, ...live.filter((e) => isTransient(e) || !seen.has(e.seq))]);
     });
-    // Two turns: the one Mike started, and the one the move queued.
+    // Two turns: the one Alex started, and the one the move queued.
     await waitFor('two finished turns', () => persisted(id).filter((e) => e.type === 'turn.completed').length >= 2 && true);
     const evs = persisted(id);
     const call = evs.find((e) => e.type === 'tool.call' && e.name === 'mcp__threadbear__move_thread');

@@ -236,7 +236,7 @@ mod tests {
             "https://auth.convex.dev/device/../x",
             "https://auth.convex.dev/device//x",
             "https://auth.convex.dev/device/a b",
-            "file:///Users/mike/.ssh/id_rsa",
+            "file:///Users/alex/.ssh/id_rsa",
             "javascript:alert(1)",
             "https://AUTH.convex.dev/device",
         ] {
@@ -290,7 +290,7 @@ mod tests {
         assert_eq!(browser_url("../../evil"), None);
         assert_eq!(browser_url(""), None);
         assert_eq!(origin_of("http://127.0.0.1:4000/dash?x=1"), "http://127.0.0.1:4000");
-        let deployment = Deployment { project: Some("walkies".into()), team: Some("mike".into()), ..Default::default() };
-        assert_eq!(deployment.project_tip().as_deref(), Some("Convex project walkies, team mike"));
+        let deployment = Deployment { project: Some("walkies".into()), team: Some("alex".into()), ..Default::default() };
+        assert_eq!(deployment.project_tip().as_deref(), Some("Convex project walkies, team alex"));
     }
 }

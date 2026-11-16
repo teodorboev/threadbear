@@ -19,6 +19,124 @@ pub(crate) fn keep_behind() -> bool {
     scripted() && std::env::var("THREADBEAR_KEEP_BEHIND").as_deref() == Ok("1")
 }
 
+/// dev-app.sh's instances draw no window anyone can see: it's on screen to
+/// the window server (so GPUI keeps drawing it, and `shot` and `dump` work,
+/// both of them the app's own drawing), but fully transparent and letting
+/// clicks through, and every other window it opens (Settings, an alert) is
+/// made the same as it's ordered in. People running a fork found one behind
+/// their windows, showing the mock's demo threads, and took it for a leak of
+/// someone's real setup (15 Nov). THREADBEAR_SHOW_WINDOW=1 (dev-app.sh's
+/// --visible) is for a test that needs it on screen, and labels it.
+pub(crate) fn unseen() -> bool {
+    keep_behind() && std::env::var("THREADBEAR_SHOW_WINDOW").as_deref() != Ok("1")
+}
+
+/// A scripted window anyone could see: its title says it's a test copy.
+pub(crate) fn labelled() -> bool {
+    scripted() && !unseen()
+}
+
+/// What the window's title ends with when `labelled`.
+pub(crate) const TITLE_LABEL: &str = " (test copy started by an agent)";
+
+/// The main window, as it opens: unseen, or behind everything with the
+/// banner that says what it is.
+pub(crate) fn place(window: &Window) {
+    #[cfg(target_os = "macos")]
+    {
+        use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+        let Ok(handle) = HasWindowHandle::window_handle(window) else { return };
+        let RawWindowHandle::AppKit(h) = handle.as_raw() else { return };
+        // SAFETY: the window's own NSView, alive while the window is.
+        let view: &objc2_app_kit::NSView = unsafe { &*h.ns_view.as_ptr().cast() };
+        let Some(ns_window) = view.window() else { return };
+        if unseen() {
+            hide(&ns_window);
+        } else {
+            banner::attach(&ns_window);
+        }
+        ns_window.orderBack(None);
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = window;
+}
+
+#[cfg(target_os = "macos")]
+fn hide(window: &objc2_app_kit::NSWindow) {
+    window.setAlphaValue(0.);
+    window.setIgnoresMouseEvents(true);
+    // NSWindowAnimationBehaviorNone: no zoom as it's ordered in.
+    let _: () = unsafe { objc2::msg_send![window, setAnimationBehavior: 2isize] };
+}
+
+/// Every window this process orders onto the screen goes in unseen and at
+/// the back: `-[NSWindow orderWindow:relativeTo:]`, which orderFront:,
+/// makeKeyAndOrderFront: and orderBack: all come through, swapped once at
+/// launch, before any window opens, as the pasteboard is.
+#[cfg(target_os = "macos")]
+mod unseen_windows {
+    use objc2::runtime::{Imp, Sel};
+    use objc2::{sel, ClassType as _};
+    use objc2_app_kit::NSWindow;
+    use std::sync::OnceLock;
+
+    static ORIGINAL: OnceLock<usize> = OnceLock::new();
+
+    extern "C-unwind" fn order(this: &NSWindow, sel: Sel, place: isize, relative: isize) {
+        super::hide(this);
+        // NSWindowAbove (1) becomes NSWindowBelow (-1) relative to nothing:
+        // at the back, never over anyone's work.
+        let (place, relative) = if place == 1 { (-1, 0) } else { (place, relative) };
+        let original = *ORIGINAL.get().expect("installed before it's called");
+        // SAFETY: the method's own implementation, of this same signature.
+        let original: extern "C-unwind" fn(&NSWindow, Sel, isize, isize) = unsafe { std::mem::transmute(original) };
+        original(this, sel, place, relative);
+    }
+
+    pub(super) fn install() {
+        let Some(method) = NSWindow::class().instance_method(sel!(orderWindow:relativeTo:)) else { return };
+        // SAFETY: the same signature as the method it replaces, set once at
+        // launch on the main thread before any window exists.
+        let old = unsafe { method.set_implementation(std::mem::transmute::<extern "C-unwind" fn(&NSWindow, Sel, isize, isize), Imp>(order)) };
+        let _ = ORIGINAL.set(old as usize);
+    }
+}
+
+/// The opted-in visible window's label: a strip along its top, in a child
+/// window of its own so the app's `shot` (its own drawing of the main
+/// window) never has it, and clicks go through it.
+#[cfg(target_os = "macos")]
+mod banner {
+    use objc2::rc::Retained;
+    use objc2::{MainThreadMarker, MainThreadOnly as _};
+    use objc2_app_kit::{NSBackingStoreType, NSColor, NSTextField, NSWindow, NSWindowOrderingMode, NSWindowStyleMask};
+    use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
+
+    pub(super) const TEXT: &str = "Test copy of Threadbear, started by an agent with demo data. Safe to ignore or close.";
+
+    pub(super) fn attach(parent: &NSWindow) {
+        let Some(mtm) = MainThreadMarker::new() else { return };
+        let frame = parent.frame();
+        let height = 24.;
+        let rect = NSRect::new(NSPoint::new(frame.origin.x, frame.origin.y + frame.size.height - height), NSSize::new(frame.size.width, height));
+        // SAFETY: a plain borderless window, kept alive by its parent.
+        let strip: Retained<NSWindow> = unsafe {
+            NSWindow::initWithContentRect_styleMask_backing_defer(NSWindow::alloc(mtm), rect, NSWindowStyleMask::Borderless, NSBackingStoreType::Buffered, false)
+        };
+        unsafe { strip.setReleasedWhenClosed(false) };
+        strip.setIgnoresMouseEvents(true);
+        strip.setBackgroundColor(Some(&NSColor::systemOrangeColor()));
+        let label = NSTextField::labelWithString(&NSString::from_str(TEXT), mtm);
+        label.setTextColor(Some(&NSColor::blackColor()));
+        label.setFrame(NSRect::new(NSPoint::new(10., 4.), NSSize::new(frame.size.width - 20., height - 8.)));
+        if let Some(content) = strip.contentView() {
+            content.addSubview(&label);
+        }
+        // SAFETY: both windows alive; the parent keeps the strip.
+        unsafe { parent.addChildWindow_ordered(&strip, NSWindowOrderingMode::Above) };
+    }
+}
+
 /// First thing in `main`, before the platform reads the pasteboard: a
 /// scripted app pointed at the real data folder says why and quits, and one
 /// that isn't gets its own pasteboard.
@@ -59,6 +177,10 @@ pub(crate) fn guard() {
     }
     #[cfg(target_os = "macos")]
     pasteboard::install();
+    #[cfg(target_os = "macos")]
+    if unseen() {
+        unseen_windows::install();
+    }
 }
 
 /// The application, out of the Dock and the app switcher from launch when
@@ -71,23 +193,6 @@ pub(crate) fn application(app: Application) -> Application {
         return app.with_windowing(WindowingRequest::Headless);
     }
     app
-}
-
-/// The window behind every other app's, as soon as it's open.
-pub(crate) fn send_behind(window: &Window) {
-    #[cfg(target_os = "macos")]
-    {
-        use raw_window_handle::{HasWindowHandle, RawWindowHandle};
-        let Ok(handle) = HasWindowHandle::window_handle(window) else { return };
-        let RawWindowHandle::AppKit(h) = handle.as_raw() else { return };
-        // SAFETY: the window's own NSView, alive while the window is.
-        let view: &objc2_app_kit::NSView = unsafe { &*h.ns_view.as_ptr().cast() };
-        if let Some(ns_window) = view.window() {
-            ns_window.orderBack(None);
-        }
-    }
-    #[cfg(not(target_os = "macos"))]
-    let _ = window;
 }
 
 /// The private pasteboard: `+[NSPasteboard generalPasteboard]` answers with

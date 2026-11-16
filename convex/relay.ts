@@ -11,12 +11,13 @@
 // a command's state is one get by id.
 import { ConvexError, v } from 'convex/values';
 import type { OrderedQuery } from 'convex/server';
-import { internalMutation, internalQuery, mutation, query, type MutationCtx, type QueryCtx } from './_generated/server';
+import { internalMutation, mutation, query, type MutationCtx, type QueryCtx } from './_generated/server';
 import type { DataModel, Doc, Id } from './_generated/dataModel';
-import { checkRunnerId, forbidden, pageLimit, runnerAuth, sha256, withoutCredentials } from './lib';
+import { checkRunnerId, forbidden, isSeq, MAX_SEQ, pageLimit, runnerAuth, sha256, withoutCredentials } from './lib';
 import { docBytes, isThreadId } from './runnerAccess';
 import { messageButton } from './schema';
 import { deleteIfUnused, MAX_COMMAND_FILES, MAX_RUNNER_UPLOAD_BYTES, storageInUse } from './sync';
+import { UPLOAD_CLAIM_MS, newClaim } from './uploads';
 
 // The live tail: enough for a message or two of tool rows between texts.
 export const TAIL_MAX = 15;
@@ -76,15 +77,16 @@ const NOTES_SKIPPED = 500;
  * review, 13 Nov).
  */
 async function pageOf(q: OrderedQuery<DataModel['messages']>, want: number, notes: boolean | undefined): Promise<{ rows: Doc<'messages'>[]; hasMore: boolean }> {
-  if (notes) {
-    const rows = await q.take(want + 1);
-    return { rows: rows.slice(0, want), hasMore: rows.length > want };
-  }
   const rows: Doc<'messages'>[] = [];
   let read = 0;
   for await (const m of q) {
     if (++read > want + 1 + NOTES_SKIPPED) return { rows, hasMore: true };
-    if (m.role === 'note') continue;
+    // A row from before seqs were checked (lib.ts isSeq) is left out, not
+    // let break the rest of the thread on the main Mac. The pages read only
+    // 0 to MAX_SEQ of the index, so the infinities, negatives and huge ones
+    // are never read at all (a run of them would use up NOTES_SKIPPED and
+    // leave the page empty, Grok's review); fractions and NaN are skipped here.
+    if ((!notes && m.role === 'note') || !isSeq(m.seq)) continue;
     if (rows.length >= want) return { rows, hasMore: true };
     rows.push(m);
   }
@@ -98,7 +100,7 @@ export const remoteTail = query({
   handler: async (ctx, { key, threadId, limit, notes }) => {
     await runnerAuth(ctx, key, 'remoteTail');
     const want = pageLimit(limit, TAIL_MAX, TAIL_MAX);
-    const { rows, hasMore } = await pageOf(ctx.db.query('messages').withIndex('by_thread_seq', (q) => q.eq('threadId', threadId)).order('desc'), want, notes);
+    const { rows, hasMore } = await pageOf(ctx.db.query('messages').withIndex('by_thread_seq', (q) => q.eq('threadId', threadId).gte('seq', 0).lte('seq', MAX_SEQ)).order('desc'), want, notes);
     return { messages: rows.reverse().map(toRow), hasMore };
   },
 });
@@ -114,13 +116,14 @@ export const remoteMessages = query({
     await runnerAuth(ctx, key, 'remoteMessages');
     const want = pageLimit(limit, PAGE_DEFAULT, PAGE_MAX);
     if (afterSeq !== undefined) {
-      const { rows, hasMore } = await pageOf(ctx.db.query('messages').withIndex('by_thread_seq', (q) => q.eq('threadId', threadId).gt('seq', afterSeq)).order('asc'), want, notes);
+      const after = Number.isFinite(afterSeq) ? afterSeq : -1;
+      const { rows, hasMore } = await pageOf(ctx.db.query('messages').withIndex('by_thread_seq', (q) => q.eq('threadId', threadId).gt('seq', after).lte('seq', MAX_SEQ)).order('asc'), want, notes);
       return { messages: rows.map(toRow), hasMore };
     }
     const { rows, hasMore } = await pageOf(
       ctx.db
         .query('messages')
-        .withIndex('by_thread_seq', (q) => (beforeSeq === undefined ? q.eq('threadId', threadId) : q.eq('threadId', threadId).lt('seq', beforeSeq)))
+        .withIndex('by_thread_seq', (q) => q.eq('threadId', threadId).gte('seq', 0).lt('seq', beforeSeq !== undefined && Number.isFinite(beforeSeq) ? Math.min(beforeSeq, MAX_SEQ + 1) : MAX_SEQ + 1))
         .order('desc'),
       want,
       notes,
@@ -349,23 +352,34 @@ async function liveRelayTicket(ctx: QueryCtx | MutationCtx, ticket: string) {
   return row && !row.usedAt && row.issuedAt > Date.now() - RELAY_TICKET_MS ? row : null;
 }
 
-// For /relay/upload, before it stores anything.
-export const relayTicketOk = internalQuery({
+// /relay/upload's first step, before it reads the body (uploads.ts
+// takeUpload): the ticket is spent here, so of many requests with one
+// ticket only the first reads anything.
+export const claimRelayUpload = internalMutation({
   args: { ticket: v.string() },
-  returns: v.boolean(),
-  handler: async (ctx, { ticket }) => (await liveRelayTicket(ctx, ticket)) !== null,
-});
-
-// The stored file is this upload's. False (the route then deletes the file):
-// a dead or used ticket, or a file over the cap. Spent whatever happens.
-export const redeemRelayUpload = internalMutation({
-  args: { ticket: v.string(), storageId: v.id('_storage'), bytes: v.number() },
-  returns: v.boolean(),
-  handler: async (ctx, { ticket, storageId, bytes }) => {
+  returns: v.union(v.object({ claim: v.string() }), v.literal(false), v.literal('later')),
+  handler: async (ctx, { ticket }) => {
     const row = await liveRelayTicket(ctx, ticket);
     if (!row) return false;
-    const ok = bytes >= 0 && bytes <= MAX_RUNNER_UPLOAD_BYTES;
-    await ctx.db.patch(row._id, { usedAt: Date.now(), ...(ok ? { storageId } : {}) });
+    const claim = newClaim();
+    await ctx.db.patch(row._id, { usedAt: Date.now(), claim });
+    return { claim };
+  },
+});
+
+// /relay/upload's last step: the stored file is this upload's. False (the
+// route then deletes the file): not this request's claim, or no file or one
+// over the cap.
+export const finishRelayUpload = internalMutation({
+  args: { ticket: v.string(), claim: v.string(), storageId: v.optional(v.id('_storage')), bytes: v.number() },
+  returns: v.boolean(),
+  handler: async (ctx, { ticket, claim, storageId, bytes }) => {
+    if (!/^[0-9a-f]{48}$/.test(ticket) || !claim) return false;
+    const hash = await sha256(ticket);
+    const row = await ctx.db.query('relayUploads').withIndex('by_hash', (q) => q.eq('ticketHash', hash)).first();
+    if (!row || row.claim !== claim || !row.usedAt || row.usedAt <= Date.now() - UPLOAD_CLAIM_MS) return false;
+    const ok = !!storageId && bytes >= 0 && bytes <= MAX_RUNNER_UPLOAD_BYTES;
+    await ctx.db.patch(row._id, { claim: undefined, ...(ok ? { storageId } : {}) });
     return ok;
   },
 });

@@ -70,7 +70,7 @@ import Testing
         #expect(ThreadLinks.find(quote: "Run the tests", from: nil, in: items) == .init(turn: second, step: 5))
         // A line the agent wrote, and a path as it wrote it.
         #expect(ThreadLinks.find(quote: "risky part", from: 9, in: items) == .init(turn: second, step: 6))
-        #expect(ThreadLinks.find(quote: "/Users/mike/dev/a.swift", from: 9, in: items) == .init(turn: second, step: 8))
+        #expect(ThreadLinks.find(quote: "/Users/alex/dev/a.swift", from: 9, in: items) == .init(turn: second, step: 8))
     }
 
     @Test func wordsFoundNowhereStillOpenTheWorking() {

@@ -47,6 +47,14 @@ public indirect enum MarkdownBlock: Sendable, Hashable {
     /// 2026). A real table is tens of rows of a few columns.
     public static let maxTableCells = 2_000
 
+    /// The pictures one message may draw; `![alt](src)`s past it are their
+    /// alt text, in brackets. Each drawn picture is a download and a decoded
+    /// bitmap, and a secondary runner's 8,000-character reply could ask for
+    /// hundreds (Daybreak finding 130, 15 Nov 2026). The runner sends at
+    /// most six pictures a message from another Mac (relay.ts MAX_PICTURES),
+    /// and an agent's reply rarely shows more than a few.
+    public static let maxPictures = 10
+
     public enum RichKind: String, Sendable, Hashable {
         case mermaid, html
 
@@ -59,7 +67,25 @@ public indirect enum MarkdownBlock: Sendable, Hashable {
 
     public static func parse(_ text: String) -> [MarkdownBlock] {
         var cellsLeft = maxTableCells
-        return parse(text, depth: 0, cellsLeft: &cellsLeft)
+        var picturesLeft = maxPictures
+        return capPictures(parse(text, depth: 0, cellsLeft: &cellsLeft), left: &picturesLeft)
+    }
+
+    /// The first `left` pictures in reading order, quotes included, stay
+    /// pictures; the rest become words.
+    static func capPictures(_ blocks: [MarkdownBlock], left: inout Int) -> [MarkdownBlock] {
+        blocks.map { block in
+            switch block {
+            case let .image(alt, _):
+                guard left > 0 else { return .paragraph("[\(alt.isEmpty ? "picture" : alt)]") }
+                left -= 1
+                return block
+            case let .quote(inner):
+                return .quote(capPictures(inner, left: &left))
+            default:
+                return block
+            }
+        }
     }
 
     /// `depth` is how many quotes this text is inside; `cellsLeft` is shared

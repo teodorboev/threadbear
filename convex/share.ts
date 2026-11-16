@@ -73,14 +73,28 @@ async function isMike(ctx: QueryCtx, token?: string): Promise<boolean> {
 // many from its oldest shown row shows the newest of them.
 export const IMAGES_MAX = 300;
 
+// Where a shared page's picture is fetched: this deployment's
+// /share/image/<slug>/<row id> (http.ts), which answers only while the
+// thread is shared under that link (shareImageFile). Its own storage URL
+// would keep working for anyone who had it until the runner's cleanup
+// deleted the file, after sharing stopped (Daybreak, 15 Nov 2026). Null
+// without the site's address, so a picture is left out rather than handed
+// out raw.
+export function sharedImageUrl(slug: string, id: string): string | null {
+  const site = process.env.CONVEX_SITE_URL;
+  return site ? `${site.replace(/\/+$/, '')}/share/image/${encodeURIComponent(slug)}/${encodeURIComponent(id)}` : null;
+}
+
 // A thread's uploaded pictures from seq `from` on (before `before`, when it's a
-// page with newer ones after it), with their URLs.
-export async function imagesFrom(ctx: QueryCtx, threadId: string, from: number, before?: number) {
+// page with newer ones after it), with their URLs: the files' own for Mike's
+// phone and browser token, or through /share/image under `slug` for anyone
+// with the link.
+export async function imagesFrom(ctx: QueryCtx, threadId: string, from: number, before?: number, slug?: string) {
   const out: { seq: number; src?: string; url: string; width?: number; height?: number }[] = [];
   const rows = await ctx.db.query('shareImages').withIndex('by_thread_seq', (q) => (before === undefined ? q.eq('threadId', threadId).gte('seq', from) : q.eq('threadId', threadId).gte('seq', from).lt('seq', before))).order('desc').take(IMAGES_MAX);
   rows.reverse();
   for (const img of rows) {
-    const url = await ctx.storage.getUrl(img.storageId);
+    const url = slug === undefined ? await ctx.storage.getUrl(img.storageId) : sharedImageUrl(slug, img._id);
     if (!url) continue;
     out.push({ seq: img.seq, ...(img.src ? { src: img.src } : {}), url, ...(img.width ? { width: img.width } : {}), ...(img.height ? { height: img.height } : {}) });
   }
@@ -196,7 +210,8 @@ export const view = query({
       lastActivityAt: t.lastActivityAt,
       messages: out,
       // The page's pictures only: an older page's stop where the next begins.
-      images: await imagesFrom(ctx, t.threadId, hasMore ? (out[0]?.seq ?? 0) : 0, beforeSeq),
+      // Anyone but Mike gets them through /share/image, which stops with the share.
+      images: await imagesFrom(ctx, t.threadId, hasMore ? (out[0]?.seq ?? 0) : 0, beforeSeq, mike ? undefined : t.share.slug),
       hasMore,
       ...(mike ? { manage: { threadId: t.threadId, shared } } : {}),
     };
@@ -226,7 +241,7 @@ export const preview = internalQuery({
       .query('shareImages')
       .withIndex('by_thread_seq', (q) => q.eq('threadId', t.threadId))
       .first();
-    const image = first ? await ctx.storage.getUrl(first.storageId) : null;
+    const image = first ? sharedImageUrl(slug, first._id) : null;
     return { title: t.title || 'Untitled', description, ...(image ? { image } : {}) };
   },
 });
@@ -248,3 +263,27 @@ export function plainText(md: string): string {
   const cut = flat.slice(0, 200);
   return `${cut.slice(0, Math.max(cut.lastIndexOf(' '), 150))}…`;
 }
+
+// The types a shared picture is served as (sync.ts PICTURE_TYPES, less
+// video, which the page doesn't show); anything else goes as plain bytes.
+const IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
+
+/**
+ * The file /share/image/<slug>/<id> serves (http.ts), checked at every
+ * request: only while the thread is shared under that very link, and only
+ * one of that thread's pictures. Stopping sharing, or Share again with a
+ * new link, ends it at once, whether or not the runner has dropped the
+ * pictures yet (sync:dropShareImages).
+ */
+export const shareImageFile = internalQuery({
+  args: { slug: v.string(), id: v.string() },
+  returns: v.union(v.null(), v.object({ storageId: v.id('_storage'), mediaType: v.string() })),
+  handler: async (ctx, { slug, id }) => {
+    const t = await threadBySlug(ctx, slug);
+    if (t?.share?.access !== 'link') return null;
+    const rowId = ctx.db.normalizeId('shareImages', id);
+    const img = rowId ? await ctx.db.get(rowId) : null;
+    if (!img || img.threadId !== t.threadId) return null;
+    return { storageId: img.storageId, mediaType: IMAGE_TYPES.has(img.mediaType) ? img.mediaType : 'application/octet-stream' };
+  },
+});

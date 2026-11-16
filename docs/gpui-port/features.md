@@ -105,6 +105,7 @@ It comes from reading code, not from running anything, so "(unverified)" means n
 | `sidebar.row.hoverbuttons` | Hover buttons | Star, Hibernate, Archive or Unarchive, Trash | Drawn on hover, with the busy pattern. | build | S | `SidebarView` |
 | `sidebar.row.menu` | Row context menu | Star, Hibernate, Archive, Move to, Projects, Rename, Open in New Panel, Copy thread id, Ask the librarian to look, Delete… | gpui-kit menu with submenus, in-window. | kit | M | `SidebarView` |
 | `sidebar.subagents` | Sub-agent tree | Indented sub-agents with a drawn trunk, click to read | Custom rows with a drawn trunk. | build | M | `SubagentViews`, `SubagentRows` |
+| `sidebar.nested` | Nested threads | Experiment `nestedThreads`: threads another thread started sit indented under it (one level, a grandchild under the top), in the section of the group's most urgent member; open by itself while one waits on Mike, folded otherwise, the starter's count ("1 needs you · 5 working") opening or folding it; a child's question in orange or where it's up to; archived ones as "N finished"; Move Out From Under and Put Back Under in the row menu; the Projects view nests the same way. Dragging rows in or out is planned, after a motion mockup | Rules in `core/src/nested.rs`; rows drawn as the inbox's own, indented with a guide line. | build | M | none (GPUI only) |
 | `sidebar.archived.paging` | Archived paging | Recent few, then Show more; the open thread is always included | Port the rule and draw a Show more row. | build | S | `SidebarView` (`ArchiveRows`) |
 | `sidebar.archived.foot` | Archived pinned to foot | Not present: tried 8 Nov, undone 9 Nov (cfbf3cb3); Archived sits directly under the other sections | Not ported: the Swift app no longer has it. | drop | none | none |
 | `sidebar.skeleton` | Loading skeleton | Pulsing grey rows until the first list lands | Drawn rows with `Animation`. | build | S | `SidebarView` (`LoadingRows`) |
@@ -123,6 +124,7 @@ It comes from reading code, not from running anything, so "(unverified)" means n
 | ID | Feature | What it does | How in GPUI | Route | Size | Swift |
 |---|---|---|---|---|---|---|
 | `header.title` | Title line | Title in the panel bar, click to rename inline | Text that becomes an `Input` on click. | build | S | `DetailView` (`HeaderTitle`, `ThreadTitleField`) |
+| `thread.startedby` | Started by | Experiment `nestedThreads`: a thread another thread started opens with one quiet line above its transcript, "Started by <starter>" (a link that opens it) and its `startedBy.why` | A line over the transcript in `thread.rs`. | build | S | none (GPUI only) |
 | `header.projectchip` | Project chip menu | In a project, take out, keep, add to another | gpui-kit menu. | kit | S | `DetailView` |
 | `header.schedulechip` | Schedule chip | Booked message in the header | Drawn chip. | build | S | `DetailView` (`ScheduleChip`) |
 | `header.backforward` | Back and forward | ‹ › with hover destination | Drawn buttons with `Tooltip`. | build | S | `HistoryButtons`, `Navigation`, `NavigationHistory` |

@@ -175,7 +175,7 @@ function withoutWorkLinks(text: string): string {
 }
 
 // Lowercase, one space, and home as the runner's step lines write it, so
-// `/Users/mike/a.md` finds "Edited ~/a.md".
+// `/Users/alex/a.md` finds "Edited ~/a.md".
 function normal(text: string): string {
   return text
     .replace(/\/Users\/[^/\s]+/g, '~')

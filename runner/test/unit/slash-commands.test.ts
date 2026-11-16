@@ -25,7 +25,7 @@ test('parseCommand reads a command and its arguments, and leaves paths alone', (
   assert.deepEqual(parseCommand('  /model opus  '), { name: 'model', args: 'opus' });
   assert.deepEqual(parseCommand('/code-review high\nthe auth bit'), { name: 'code-review', args: 'high\nthe auth bit' });
   assert.deepEqual(parseCommand('/plugin:skill x'), { name: 'plugin:skill', args: 'x' });
-  assert.equal(parseCommand('/Users/mike/notes.md'), undefined);
+  assert.equal(parseCommand('/Users/alex/notes.md'), undefined);
   assert.equal(parseCommand('/tmp/x is full'), undefined);
   assert.equal(parseCommand('compact /now'), undefined);
   assert.equal(parseCommand('/'), undefined);
@@ -365,7 +365,7 @@ test('words go into a skill\'s turn, as into any other', async () => {
 });
 
 test('commandScope takes the CLI\'s tag off a description and says where it came from', () => {
-  assert.deepEqual(commandScope('Mike voice. (user)'), { text: 'Mike voice.', scope: 'user' });
+  assert.deepEqual(commandScope('Alex voice. (user)'), { text: 'Alex voice.', scope: 'user' });
   assert.deepEqual(commandScope('Docs (claude.ai sync)'), { text: 'Docs', scope: 'claude.ai' });
   assert.deepEqual(commandScope('Ship it (ship-tools)'), { text: 'Ship it', scope: 'plugin', plugin: 'ship-tools' });
   assert.deepEqual(commandScope('Read it (see below)'), { text: 'Read it (see below)' }, 'words in brackets stay');
@@ -381,12 +381,12 @@ test('claudeCommands finds a user skill\'s file and a project command\'s, and ke
   fs.writeFileSync(path.join(cwd, '.claude', 'commands', 'ops', 'deploy.md'), 'x');
   const out = claudeCommands([
     { name: 'usage', description: 'Usage', argumentHint: '', builtin: true, aliases: ['cost', 'stats'] },
-    { name: 'voice', description: 'Write as Mike (user)', argumentHint: '' },
+    { name: 'voice', description: 'Write as Alex (user)', argumentHint: '' },
     { name: 'ops:deploy', description: 'Deploy (project)', argumentHint: '' },
     { name: 'gone', description: 'Missing (user)', argumentHint: '' },
   ], { cwd, configDir: home });
   assert.deepEqual(out[0], { name: 'usage', source: 'cli', description: 'Usage', aliases: ['cost', 'stats'], scope: 'system' });
-  assert.deepEqual(out[1], { name: 'voice', source: 'skill', description: 'Write as Mike', scope: 'user', path: path.join(home, 'skills', 'voice', 'SKILL.md') });
+  assert.deepEqual(out[1], { name: 'voice', source: 'skill', description: 'Write as Alex', scope: 'user', path: path.join(home, 'skills', 'voice', 'SKILL.md') });
   assert.equal(out[2].path, path.join(cwd, '.claude', 'commands', 'ops', 'deploy.md'));
   assert.equal(out[3].path, undefined);
   fs.rmSync(home, { recursive: true, force: true });

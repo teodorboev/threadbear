@@ -31,7 +31,7 @@ Feature: Projects: the list, the page of cards and a project's own page
   @projects.page
   Scenario: A project's page has its folders and threads
     When I open the project "Walkies"
-    Then the project page lists the folders "/Users/mike/dev/walkies, /Users/mike/dev/walkies-backend"
+    Then the project page lists the folders "/Users/alex/dev/walkies, /Users/alex/dev/walkies-backend"
     And the project page lists 2 threads
 
   @header.projectchip @projects.page

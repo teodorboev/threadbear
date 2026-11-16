@@ -66,7 +66,7 @@ Feature: Links in a reply
   @highlights.rowmenus
   Scenario: A link row's menu sets what a click on a web link does
     When I open the thread "Rebuild the three landing pages"
-    And I right-click the highlight "mikecann/site#48"
+    And I right-click the highlight "alex-example/site#48"
     Then its menu offers "Open in Panel | Copy link | Default | Remove"
 
   # A link that can't go anywhere says so, rather than looking like a

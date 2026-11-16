@@ -12,7 +12,7 @@
 // disk for when the backend can't be reached), and sends only its own,
 // each run taken with a claim first so it's sent once.
 import type { CheckCard } from './patch-trust.ts';
-import { type KeptCheck, CHECK_TIMEOUT_MS, checkLimitMs, checkOutcome, checkRunningElsewhere, clearCheckRunning, dropKeptCheck, HELD_EXTRA, HELD_SKIP, heldToldAbout, keepCheck, markCheckRunning, MAX_CHECK_CHARS, MAX_CHECK_TIMEOUT_SECS, noteHeldTold, readKeptCheck, runCheck, type CheckResult } from './schedule-check.ts';
+import { type KeptCheck, CHECK_TIMEOUT_MS, checkLimitMs, checkOutcome, checkRunningElsewhere, checksRunningElsewhere, clearCheckRunning, dropKeptCheck, HELD_EXTRA, HELD_SKIP, heldToldAbout, keepCheck, markCheckRunning, MAX_CHECK_CHARS, MAX_CHECK_TIMEOUT_SECS, noteHeldTold, readKeptCheck, runCheck, type CheckResult } from './schedule-check.ts';
 import { forbiddenText } from './sync.ts';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -188,6 +188,8 @@ export class Scheduler {
   private log: Logger;
   private zone: () => string;
   private items = new Map<string, ScheduleRecord>();
+  // Checks under way in this process, with where they run (localChecks).
+  private runningChecks = new Map<string, { command: string; cwd: string }>();
   private timer?: TimerHandle;
   private saveRetry?: TimerHandle;
   private saveFailed = false;
@@ -216,7 +218,7 @@ export class Scheduler {
   // they're real threads, just not loaded here yet.
   private elsewhere: (threadId: string) => boolean;
   private folderElsewhere?: (threadId: string) => string | undefined;
-  private sendElsewhere?: (threadId: string, text: string, scheduleId: string, run: string, since: number) => Promise<{ turnId: string }>;
+  private sendElsewhere?: (threadId: string, text: string, scheduleId: string, run: string, since: number, preserve?: boolean) => Promise<{ turnId: string }>;
   // Schedule checks (schedule-check.ts).
   private home: string;
   private check: (p: { command: string; cwd: string; home: string; scheduleId: string; timeoutMs?: number }) => Promise<CheckResult>;
@@ -260,7 +262,7 @@ export class Scheduler {
     zone?: () => string;
     elsewhere?: (threadId: string) => boolean;
     folderElsewhere?: (threadId: string) => string | undefined;
-    sendElsewhere?: (threadId: string, text: string, scheduleId: string, run: string, since: number) => Promise<{ turnId: string }>;
+    sendElsewhere?: (threadId: string, text: string, scheduleId: string, run: string, since: number, preserve?: boolean) => Promise<{ turnId: string }>;
     self?: SelfRunner;
     syncOn?: boolean;
     runCheck?: (p: { command: string; cwd: string; home: string; scheduleId: string; timeoutMs?: number }) => Promise<CheckResult>;
@@ -558,6 +560,29 @@ export class Scheduler {
   }
 
   // ---------------------------------------------------------------- reads
+
+  // Every check this runner may run by itself, with the folder it runs in,
+  // for writeRunsAsCode: an edit of what one reaches asks outside Full
+  // access (Daybreak 126). Paused and finished ones too, as Resume and Run
+  // now run them again without a new approval. One whose thread is on
+  // another runner isn't ours to run.
+  // `unknown`: another runner process is running a check whose marker
+  // doesn't say what (an older release's, in a handover).
+  localChecks(): { command: string; cwd: string }[] & { unknown?: boolean } {
+    // And every check still running, though its schedule was changed or
+    // deleted since it started, here or in the runner handing over: its
+    // shell can still open a script, and a delete mid-run doesn't stop it
+    // (verify-fix on Daybreak 126).
+    const elsewhere = checksRunningElsewhere(this.home, this.clock.now());
+    const out: { command: string; cwd: string }[] & { unknown?: boolean } = [...this.runningChecks.values(), ...elsewhere.checks];
+    if (elsewhere.unknown) out.unknown = true;
+    for (const rec of this.items.values()) {
+      if (!rec.check || !this.mine(rec)) continue;
+      const cwd = this.checkFolder(rec);
+      if (cwd) out.push({ command: rec.check, cwd });
+    }
+    return out;
+  }
 
   list(threadId?: string): Schedule[] {
     return this.listRecords(threadId).map((s) => this.view(s));
@@ -1198,8 +1223,10 @@ export class Scheduler {
     // says what to run but only this runner's own store says it was approved.
     const hold = this.heldCheck(command, cwd, id);
     if (hold) return hold;
+    const runKey = `${id}\n${this.clock.now()}\n${Math.random()}`;
+    this.runningChecks.set(runKey, { command, cwd });
     try {
-      markCheckRunning(this.home, id, this.clock.now(), timeoutMs);
+      markCheckRunning(this.home, id, this.clock.now(), timeoutMs, { command, cwd });
     } catch {
       // It still runs; another process just can't see it is.
     }
@@ -1229,6 +1256,7 @@ export class Scheduler {
         return res;
       })
       .finally(() => {
+        this.runningChecks.delete(runKey);
         try {
           clearCheckRunning(this.home, id);
         } catch {
@@ -1327,6 +1355,9 @@ export class Scheduler {
     const run = rec.at && !rec.finishedAt ? `due:${rec.at}#${rec.runs}` : requestedRun ?? (manual ? `manual:${crypto.randomUUID()}` : `due:${rec.nextRunAt}`);
     const since = rec.at ? Date.parse(rec.createdAt) : requestedRun ? Date.parse(requestedRun.slice('request:'.length)) : manual ? this.clock.now() : Date.parse(rec.nextRunAt!);
     const at = this.iso();
+    // Only the generated suffix carries new check data, never quoted text
+    // in the reminder body. Held notices are delivered only once as well.
+    const preserve = Boolean(checked && 'extra' in checked && (checked.held || checked.extra.endsWith('\n```')));
     const text = `[Scheduled: "${rec.title}", ${this.whenText(rec)}]\n\n${rec.text}${checked && 'extra' in checked ? checked.extra : ''}`;
     const record = (outcome: 'sent' | 'skipped' | 'failed', threadId?: string, note?: string) => {
       rec.lastRun = { at, outcome, ...(threadId ? { threadId } : {}), ...(note ? { note } : {}) };
@@ -1361,12 +1392,12 @@ export class Scheduler {
           if (!this.sendElsewhere) throw new RpcError(ErrorCode.busy, 'That thread is finishing on the old runner.');
           this.sending.add(rec.id);
           try {
-            ({ turnId } = await this.sendElsewhere(rec.threadId, text, rec.id, run, since));
+            ({ turnId } = await this.sendElsewhere(rec.threadId, text, rec.id, run, since, preserve));
           } finally {
             this.sending.delete(rec.id);
           }
         } else {
-          ({ turnId } = this.runner.sendScheduled(rec.threadId, text, rec.id, run, since));
+          ({ turnId } = this.runner.sendScheduled(rec.threadId, text, rec.id, run, since, preserve));
         }
         record('sent', rec.threadId);
         return { outcome: 'sent', threadId: rec.threadId, turnId };

@@ -983,7 +983,7 @@ test('in ask mode every threadbear tool that changes something asks first; read-
   assert.equal(ok(await call('list_threads')), true);
   assert.equal(ok(await call('read_thread')), true);
   assert.equal(h.rec.approvals.length, 0);
-  // An ask-mode thread can't give itself full access without Mike.
+  // An ask-mode thread can't give itself full access without Alex.
   h.rec.state.approve = async () => ({ decision: 'deny' });
   assert.equal(ok(await call('update_thread', { permissionMode: 'full' })), false);
   assert.equal(h.rec.approvals.at(-1)!.name, 'mcp__threadbear__update_thread');
@@ -1135,9 +1135,9 @@ test('/<skill> adds the skill to the turn; other commands and paths go as words'
   ]);
   complete(h, 'u1');
   await waitFor(() => h.rec.results().length === 1);
-  h.session.send({ id: 'm2', text: '/Users/mike/x.md looks off', images: [] });
+  h.session.send({ id: 'm2', text: '/Users/alex/x.md looks off', images: [] });
   const words = await h.conn.request('turn/start');
-  assert.deepEqual(words.params.input, [{ type: 'text', text: '/Users/mike/x.md looks off', text_elements: [] }]);
+  assert.deepEqual(words.params.input, [{ type: 'text', text: '/Users/alex/x.md looks off', text_elements: [] }]);
   await h.session.end();
 });
 

@@ -136,16 +136,17 @@ test('Stop before the CLI is ready preserves the request even if interrupt fails
   assert.match(h.adapter.last.sent.at(-1)!.text, /unread request[\s\S]*new request/);
 });
 
-test('slash commands and scheduled messages leave the saved request for the user', () => {
+test('slash commands leave saved input alone and automatic messages wait for the user', async () => {
   const h = makeHarness();
   const { thread } = h.runner.create({ text: 'unread request', accountId: 'claude-3' });
   stop(h, thread.id);
   h.runner.send(thread.id, '/model');
   h.adapter.last.result();
   h.runner.send(thread.id, 'scheduled check', [], { origin: 'schedule' });
-  assert.equal(h.adapter.last.sent.at(-1)!.text, 'scheduled check');
-  h.adapter.last.result();
+  assert.equal(h.runner.mustGet(thread.id).rt.turn, undefined);
+  assert.equal(h.runner.mustGet(thread.id).rec.queue[0].text, 'scheduled check');
   h.runner.send(thread.id, 'new request');
+  await tick(8);
   assert.match(h.adapter.last.sent.at(-1)!.text, /unread request[\s\S]*new request/);
 });
 
@@ -312,11 +313,11 @@ test('background output before the carrying input starts does not settle saved m
   assert.match(s.sent.at(-1)!.text, /earlier request[\s\S]*follow-up[\s\S]*latest/);
 });
 
-test('a user message steered into scheduled work carries saved messages immediately', () => {
+test('a user message steered into a peer turn carries saved messages immediately', () => {
   const h = makeHarness();
   const { thread } = h.runner.create({ text: 'earlier request', accountId: 'claude-3' });
   stop(h, thread.id);
-  h.runner.send(thread.id, 'scheduled work', [], { origin: 'schedule' });
+  h.runner.send(thread.id, '[Sent by the agent in the thread \"Coordinator\" (12345678)]\n\nStatus report');
   h.runner.send(thread.id, 'latest request');
   assert.match(h.adapter.last.sent.at(-1)!.text, /earlier request[\s\S]*latest request/);
 });
@@ -381,9 +382,9 @@ test('an adapter dropping the carrying input does not settle its saved content o
   const h = makeHarness();
   const { thread } = h.runner.create({ text: 'earlier request', accountId: 'claude-3' });
   stop(h, thread.id);
-  h.runner.send(thread.id, 'scheduled work', [], { origin: 'schedule' });
+  h.runner.send(thread.id, '[Sent by the agent in the thread \"Coordinator\" (12345678)]\n\nStatus report');
   const s = h.adapter.last;
-  s.text('work', 'The scheduled work is running.');
+  s.text('work', 'The status report is running.');
   h.runner.send(thread.id, 'carrying input');
   const id = s.sent.at(-1)!.id!;
   h.runner.interrupt(thread.id);
@@ -417,7 +418,7 @@ test('a session-not-found retry keeps recovery on a steered carrier and leaves s
     await tick();
     if (command) h.runner.send(thread.id, command);
     else {
-      h.runner.send(thread.id, 'scheduled work', [], { origin: 'schedule' });
+      h.runner.send(thread.id, '[Sent by the agent in the thread \"Coordinator\" (12345678)]\n\nStatus report');
       h.runner.send(thread.id, 'steered carrier');
     }
     const missing = h.adapter.last;

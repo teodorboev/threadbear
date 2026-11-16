@@ -241,20 +241,20 @@ test('land: a rebase conflict is undone and names the files', async () => {
 test("land never rebases a branch with a merge on it (Mike's release), so his commits keep their ids", async () => {
   const { main } = makeRepo();
   // Mike's release: a commit of his that main doesn't have.
-  sh(main, 'git checkout -q -b mike && echo his > his.txt && git add his.txt && git commit -qm "Mike\'s change" && git checkout -q main');
-  const his = sh(main, 'git rev-parse mike');
+  sh(main, 'git checkout -q -b alex && echo his > his.txt && git add his.txt && git commit -qm "Alex\'s change" && git checkout -q main');
+  const his = sh(main, 'git rev-parse alex');
   const t = makeBranch(main);
-  sh(t.path, 'git merge -q --no-ff --no-edit mike');
+  sh(t.path, 'git merge -q --no-ff --no-edit alex');
   const c = capture();
   assert.equal(await land(t, c.opts), 0, c.err.join('\n'));
   sh(main, `git merge-base --is-ancestor ${his} main`);
   assert.equal(c.out.length, 2, 'what landed is the merge, not each of his commits');
-  assert.match(c.out[1], /Merge branch 'mike'/);
+  assert.match(c.out[1], /Merge branch 'alex'/);
 
   // Main moved meanwhile: main is merged in, still no rebase.
-  sh(main, 'git checkout -q mike && echo more > more.txt && git add more.txt && git commit -qm "More of his" && git checkout -q main');
-  const more = sh(main, 'git rev-parse mike');
-  sh(t.path, 'git merge -q --no-ff --no-edit mike');
+  sh(main, 'git checkout -q alex && echo more > more.txt && git add more.txt && git commit -qm "More of his" && git checkout -q main');
+  const more = sh(main, 'git rev-parse alex');
+  sh(t.path, 'git merge -q --no-ff --no-edit alex');
   commit(main, { 'other.txt': 'x\n' }, 'Other work');
   const again = capture();
   assert.equal(await land(t, again.opts), 0, again.err.join('\n'));

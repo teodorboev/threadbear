@@ -26,7 +26,7 @@ struct EndOfSpeechTests {
     }
 
     @Test func stoppingOnTheWaitsLongerForTheRest() {
-        // "Which direction did I take the… Stash It design", as asked on the phone on 24 October.
+        // "Which direction did I take the… Recipe Box design", as asked on the phone on 24 October.
         var detector = EndOfSpeechDetector()
         feedLevels(&detector, from: 0, to: 0.3, db: -62)
         feedLevels(&detector, from: 0.3, to: 1.5, db: -25)

@@ -55,7 +55,7 @@ test('waitFor: hibernates until the thread finishes, then wakes and carries on w
   assert.ok(h.events(waiter).some((e) => e.type === 'system.note' && /^Woke up.*: ".+" finished\.$/.test(e.text)));
 });
 
-test('waitFor: a target that ends needing Mike, or hibernates itself, has not finished', () => {
+test('waitFor: a target that ends needing Alex, or hibernates itself, has not finished', () => {
   const { h, waiter, target, turn } = setup();
   turn(waiter, { needs: 'nothing', waitFor: [target] });
   turn(target, { needs: 'you', asks: [{ question: 'Restart the runner?' }] });

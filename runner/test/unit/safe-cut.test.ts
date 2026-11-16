@@ -75,7 +75,7 @@ const SECRETS: { name: string; text: string; secret: string }[] = [
   { name: 'a connection URL', text: `connect with ${URL} then run the migration`, secret: PASSWORD },
   { name: 'a JSON password', text: `the config is {"password": "hunter2hunter2hunter2"} so log in`, secret: 'hunter2hunter2hunter2' },
   { name: 'an assignment', text: `set AGENT_ARCHIVE_ENROLLMENT_SECRET=Ab3dEf9hIjK1mN0pQr5t and restart`, secret: 'Ab3dEf9hIjK1mN0pQr5t' },
-  { name: 'Basic auth', text: `send Authorization: Basic ${Buffer.from('mike:verysecretpassword').toString('base64')} along`, secret: Buffer.from('mike:verysecretpassword').toString('base64') },
+  { name: 'Basic auth', text: `send Authorization: Basic ${Buffer.from('alex:verysecretpassword').toString('base64')} along`, secret: Buffer.from('alex:verysecretpassword').toString('base64') },
 ];
 
 for (const s of SECRETS) {

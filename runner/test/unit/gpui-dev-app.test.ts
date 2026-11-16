@@ -1,5 +1,5 @@
 // desktop/scripts/dev-app.sh, the GPUI app's dev-app: what keeps an agent's
-// app off Mike's own things and off other threads' apps. Its refusals, whose
+// app off Alex's own things and off other threads' apps. Its refusals, whose
 // instance a command means, and a whole start, do, stop and idle quit with a
 // stand-in for the app (a small node script that speaks the automation
 // socket and writes down what it was started with), on the real mock runner,
@@ -110,6 +110,8 @@ test('remote builds expose the full live log and still find the built binaries',
   const home = path.join(tmp, 'home');
   const temp = path.join(tmp, 'tmp');
   for (const dir of [scripts, bin, home, temp]) fs.mkdirSync(dir, { recursive: true });
+  // dev-app refuses a group-writable TMPDIR, and a umask of 0002 (some Linux boxes) makes one.
+  fs.chmodSync(temp, 0o700);
   fs.copyFileSync(path.join(path.dirname(DEV_APP), 'dev-app.ts'), path.join(scripts, 'dev-app.ts'));
   fs.writeFileSync(path.join(checkout, 'package.json'), '{"type":"module"}');
   const config = path.join(home, 'Library', 'Application Support', 'Threadbear');
@@ -180,7 +182,9 @@ test('start, do, dump, stop, and the idle quit, with a stand-in app on the mock'
   const tmp = tmpDir('gpui-dev-app-');
   const app = path.join(tmp, 'fake-app');
   fs.writeFileSync(app, FAKE_APP, { mode: 0o755 });
+  // 0700 whatever the umask: dev-app refuses a group-writable TMPDIR.
   fs.mkdirSync(path.join(tmp, 'tmp'));
+  fs.chmodSync(path.join(tmp, 'tmp'), 0o700);
   fs.mkdirSync(path.join(tmp, 'home'));
   const env = { TMPDIR: path.join(tmp, 'tmp'), HOME: path.join(tmp, 'home'), TB_GPUI_BIN: app, THREADBEAR_THREAD_ID: 'thread-one', DEV_APP_IDLE_QUIT_SECONDS: '4' };
   const realHome = path.join(tmp, 'home', 'Library', 'Application Support', 'Threadbear');
@@ -196,12 +200,15 @@ test('start, do, dump, stop, and the idle quit, with a stand-in app on the mock'
     assert.equal(started.out, 'mine1');
     const dir = path.join(fs.realpathSync(env.TMPDIR), 'threadbear-gpui-dev-app', 'mine1');
     const seen = JSON.parse(fs.readFileSync(path.join(dir, 'fake-env.json'), 'utf8'));
-    // Behind Mike's windows, with its own pasteboard, on the mock's data folder.
+    // Behind Alex's windows, with its own pasteboard, on the mock's data folder.
     assert.equal(seen.THREADBEAR_KEEP_BEHIND, '1');
+    // Unseen, and named for what it is in ps and Activity Monitor.
+    assert.equal(seen.THREADBEAR_SHOW_WINDOW, undefined);
+    assert.ok(fs.existsSync(path.join(dir, 'bin', 'Threadbear Headless Tester')), 'runs as a named copy of the build');
     assert.equal(seen.THREADBEAR_PASTEBOARD, 'com.mikerosoft.threadbear.automation.gpui-mine1');
     assert.equal(seen.THREADBEAR_HOME, path.join(dir, 'home'));
     assert.equal(seen.THREADBEAR_AUTOMATION_LIVE, undefined);
-    // Never the machine's web runtime, with Mike's Chromium profile.
+    // Never the machine's web runtime, with Alex's Chromium profile.
     assert.equal(seen.THREADBEAR_WEB_RUNTIME_DIR, path.join(fs.realpathSync(env.TMPDIR), 'threadbear-gpui-dev-app', 'web-runtime'));
     assert.ok(fs.existsSync(path.join(dir, 'home', 'secrets', 'runner-token')), "the mock's own token");
 

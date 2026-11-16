@@ -83,10 +83,10 @@ import Testing
     /// refused, even one whose key is kept, and nothing is kept for it.
     @Test func aThreadMovedToAnotherRunnerIsRefused() {
         let store = MemoryRunnerKeyStore()
-        let bruceKey = Data(repeating: 5, count: 32).base64EncodedString()
-        RunnerKeyPins.pinFromPairing(["mac": Self.recipientPublic, "bruce": bruceKey], in: store)
+        let miniKey = Data(repeating: 5, count: 32).base64EncodedString()
+        RunnerKeyPins.pinFromPairing(["mac": Self.recipientPublic, "mac-mini": miniKey], in: store)
         #expect(RunnerKeyPins.check(Self.recipientPublic, runnerId: "mac", threadId: "t1", in: store) == .trusted)
-        #expect(RunnerKeyPins.check(bruceKey, runnerId: "bruce", threadId: "t1", in: store) == .moved)
+        #expect(RunnerKeyPins.check(miniKey, runnerId: "mac-mini", threadId: "t1", in: store) == .moved)
         #expect(store.runner(forThread: "t1") == "mac")
         // Back on its own runner, it's fine again.
         #expect(RunnerKeyPins.check(Self.recipientPublic, runnerId: "mac", threadId: "t1", in: store) == .trusted)
@@ -96,36 +96,36 @@ import Testing
     /// its first secret card.
     @Test func threadsSeenInAListArePinned() {
         let store = MemoryRunnerKeyStore()
-        let bruceKey = Data(repeating: 5, count: 32).base64EncodedString()
-        RunnerKeyPins.pinFromPairing(["mac": Self.recipientPublic, "bruce": bruceKey], in: store)
-        RunnerKeyPins.noteThreads([("t1", "mac"), ("t2", "bruce"), ("t3", "")], in: store)
+        let miniKey = Data(repeating: 5, count: 32).base64EncodedString()
+        RunnerKeyPins.pinFromPairing(["mac": Self.recipientPublic, "mac-mini": miniKey], in: store)
+        RunnerKeyPins.noteThreads([("t1", "mac"), ("t2", "mac-mini"), ("t3", "")], in: store)
         #expect(store.runner(forThread: "t1") == "mac")
         #expect(store.runner(forThread: "t3") == nil)
-        #expect(RunnerKeyPins.check(bruceKey, runnerId: "bruce", threadId: "t1", in: store) == .moved)
+        #expect(RunnerKeyPins.check(miniKey, runnerId: "mac-mini", threadId: "t1", in: store) == .moved)
         // A list that later says otherwise doesn't move the pin.
-        RunnerKeyPins.noteThreads([("t1", "bruce")], in: store)
+        RunnerKeyPins.noteThreads([("t1", "mac-mini")], in: store)
         #expect(store.runner(forThread: "t1") == "mac")
-        #expect(RunnerKeyPins.check(bruceKey, runnerId: "bruce", threadId: "t2", in: store) == .trusted)
+        #expect(RunnerKeyPins.check(miniKey, runnerId: "mac-mini", threadId: "t2", in: store) == .trusted)
     }
 
-    /// A phone pinned before this rule (Mike's, with his M5 and bruce)
+    /// A phone pinned before this rule (Mike's, with two Macs)
     /// keeps working: the keys it kept are trusted, new threads on them too.
     @Test func keysKeptBeforeTheRuleStillWork() {
-        let bruceKey = Data(repeating: 5, count: 32).base64EncodedString()
-        let store = MemoryRunnerKeyStore(["m5": Self.recipientPublic, "bruce": bruceKey], threads: ["old": "m5"])
-        #expect(RunnerKeyPins.check(Self.recipientPublic, runnerId: "m5", threadId: "old", in: store) == .trusted)
-        #expect(RunnerKeyPins.check(Self.recipientPublic, runnerId: "m5", threadId: "new", in: store) == .trusted)
-        #expect(RunnerKeyPins.check(bruceKey, runnerId: "bruce", threadId: "other", in: store) == .trusted)
+        let miniKey = Data(repeating: 5, count: 32).base64EncodedString()
+        let store = MemoryRunnerKeyStore(["laptop": Self.recipientPublic, "mac-mini": miniKey], threads: ["old": "laptop"])
+        #expect(RunnerKeyPins.check(Self.recipientPublic, runnerId: "laptop", threadId: "old", in: store) == .trusted)
+        #expect(RunnerKeyPins.check(Self.recipientPublic, runnerId: "laptop", threadId: "new", in: store) == .trusted)
+        #expect(RunnerKeyPins.check(miniKey, runnerId: "mac-mini", threadId: "other", in: store) == .trusted)
     }
 
     /// Pairing again replaces a runner's kept key (a Mac whose key was
     /// deleted on purpose), adds new runners, and skips keys it can't use.
     @Test func pairingAgainReplacesAndAdds() {
         let store = MemoryRunnerKeyStore(["mac": Data(repeating: 9, count: 32).base64EncodedString()])
-        let bruceKey = Data(repeating: 5, count: 32).base64EncodedString()
-        RunnerKeyPins.pinFromPairing(["mac": Self.recipientPublic, "bruce": bruceKey, "bad": "AAAA", "": bruceKey], in: store)
+        let miniKey = Data(repeating: 5, count: 32).base64EncodedString()
+        RunnerKeyPins.pinFromPairing(["mac": Self.recipientPublic, "mac-mini": miniKey, "bad": "AAAA", "": miniKey], in: store)
         #expect(store.key(for: "mac") == Self.recipientPublic)
-        #expect(store.key(for: "bruce") == bruceKey)
+        #expect(store.key(for: "mac-mini") == miniKey)
         #expect(store.key(for: "bad") == nil)
         #expect(store.key(for: "") == nil)
     }

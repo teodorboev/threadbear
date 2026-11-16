@@ -1,3 +1,4 @@
+import { HELD_EXTRA } from './schedule-check.ts';
 // The thread manager: owns threads, turns, the event log, approvals, idle
 // release and snoozes. Providers plug in through AgentAdapter; the WebSocket
 // server in rpc.ts is a thin layer over the public methods here.
@@ -162,6 +163,7 @@ import { newThreadsPart, type NewThreadsPart } from './runner/new-threads.ts';
 import { LAB_REVIEW_ROUNDS, applyAnswers, fixedSinceLastRound, labReviewPart, ledgerCard, openFindings, parseVerdict, type LabReviewPart } from './runner/lab-review.ts';
 import { looseEndsPart, type LooseEndsPart } from './runner/loose-ends.ts';
 import { quietInboxPart, type QuietInboxPart } from './runner/quiet-inbox.ts';
+import { nestedPart, type NestedPart } from './runner/nested.ts';
 import { CONFINED_NO_SANDBOX, sandboxFor } from './sandbox.ts';
 import { COPIED_REFUSAL, neutraliseCopied, realCopy } from './real-copy.ts';
 
@@ -199,6 +201,9 @@ export type RunnerUpdates = {
   // being done about launcherChanged (reinstall.ts).
   checkout?: string;
   reinstall?: ReinstallStatus;
+  // Its reinstall stages for the next login rather than stopping everything
+  // (from 15 Nov 2026).
+  launcherStages?: true;
   // Mike's releases, for a fork (upstream.ts); left out while off.
   upstream?: UpstreamStatus;
   // This machine isn't following GitHub's main properly (follow-origin.ts).
@@ -304,6 +309,7 @@ export type Turn = {
   // shell or async subagent finished, or a background subagent asked for
   // approval). There's no user.message.
   auto?: boolean;
+  ordinaryInput?: true; // A user or peer joined a background-opened turn.
   cliStarted?: boolean; // the CLI is running a turn for it (not just an approval)
   interruptTimer?: TimerHandle;
   // Ids of the messages the CLI has yet to answer for this turn: the one
@@ -319,6 +325,7 @@ export type Turn = {
   deliveryKnown?: boolean;
   startedMessages?: Set<string>;
   cancelledMessages?: Set<string>;
+  requeuedMessages?: Set<string>;
   foreignOutput?: boolean;
   // The most access the CLI has had in this turn (accessOf): a Codex turn
   // keeps the mode it started with when the thread is lowered mid-turn.
@@ -680,7 +687,7 @@ export const UNTIL_RESTART = '9999-12-31T00:00:00.000Z';
 export const NO_WAKE_TIME = UNTIL_RESTART;
 
 // Parts of the Runner that live in runner/ (see each file's top).
-export interface Runner extends LooseEndsPart, QuietInboxPart, LabReviewPart, NewThreadsPart, HibernationPart, TitlesPart, HighlightsPart, PatchesPart, EditingPart, ClisPart, ReviewsPart, ButtonsPart, ApprovalsPart, ProjectsHostPart, StoppedWorkPart, HandoversPart, PoolsPart, NetworkPart, WorktreesPart, CommandsPart, ContextUsagePart, MovesPart {}
+export interface Runner extends LooseEndsPart, QuietInboxPart, NestedPart, LabReviewPart, NewThreadsPart, HibernationPart, TitlesPart, HighlightsPart, PatchesPart, EditingPart, ClisPart, ReviewsPart, ButtonsPart, ApprovalsPart, ProjectsHostPart, StoppedWorkPart, HandoversPart, PoolsPart, NetworkPart, WorktreesPart, CommandsPart, ContextUsagePart, MovesPart {}
 export class Runner {
   // While main.ts is still starting up: waking a thread for its waits
   // (reconcileWaits) would start a CLI whose tools aren't ready, so they
@@ -689,6 +696,9 @@ export class Runner {
   // The schedules that send to a thread (main.ts sets it from the
   // Scheduler), for the done card's loose ends.
   schedulesFor?: (threadId: string) => Schedule[];
+  // The schedule checks this runner runs by itself, and where (main.ts sets
+  // it from the Scheduler), for writeRunsAsCode.
+  scheduleChecks?: () => { command: string; cwd: string }[] & { unknown?: boolean };
   // The release this runner runs (none from a source checkout), for
   // threads hibernating until a new one (snoozedUntil "release"). Tests set it.
   release: string | undefined = RELEASE.release;
@@ -1133,8 +1143,9 @@ export class Runner {
     // nothing sends it before then anyway, so a restart (planned or not)
     // leaves it for the wake-up to send. That includes a snooze that ended
     // while the runner was down: start() wakes it straight after loading.
-    // Anything else queued was cut off.
-    if (rec.queue.length && !midTurn && (rec.snoozedUntil !== undefined || rec.archivedAt !== undefined)) {
+    // A queue held for saved user input is durable too; other unsent inputs
+    // were cut off.
+    if (rec.queue.length && !midTurn && (rec.snoozedUntil !== undefined || rec.archivedAt !== undefined || this.queueHeld(st))) {
       this.markDirty(st);
       return false;
     }
@@ -1530,9 +1541,15 @@ export class Runner {
   // running turn: it waits and starts its own.
   // Cache only the keys looked up. New deliveries search backwards through
   // their possible lifetime, rather than parsing the thread's whole history.
-  private scheduledMessages = new WeakMap<EventLog, Map<string, { through: number; since: number; message?: { seq: number; started: boolean; text: string; images: ImageRef[] } }>>();
+  private scheduledMessages = new WeakMap<EventLog, Map<string, { through: number; since: number; message?: ScheduledDelivery }>>();
 
   private scheduledMessage(st: ThreadState, messageId: string, since: number) {
+    const delivery = this.scheduledDelivery(st, messageId, since);
+    // A receipt acknowledges delivery without supplying a user.message row.
+    return delivery && 'seq' in delivery ? delivery : undefined;
+  }
+
+  private scheduledDelivery(st: ThreadState, messageId: string, since: number): ScheduledDelivery | undefined {
     // A schedule/request may have been timestamped by another runner.
     since = Math.max(0, since - 5 * 60_000);
     const log = this.store.log(st.rec.id);
@@ -1550,7 +1567,7 @@ export class Runner {
     let message = reuse ? cached.message : undefined;
     let started = message?.started ?? false;
     const finish = () => {
-      const found = message && { ...message, started };
+      const found = message?.superseded ? message : message && { ...message, started };
       index.set(messageId, { through: last, since, message: found });
       return found;
     };
@@ -1558,6 +1575,11 @@ export class Runner {
       const events = log.read(Math.max(from, to - 127), to);
       for (let i = events.length - 1; i >= 0; i--) {
         const e = events[i];
+        if (e.type === 'system.note' && e.supersededReminder === messageId) {
+          message = { superseded: true, started: true };
+          started = true;
+          return finish();
+        }
         if (e.turnId === messageId) {
           if (e.type === 'turn.started') {
             started = true;
@@ -1578,21 +1600,21 @@ export class Runner {
     if (!run) return undefined;
     const st = this.mustGet(threadId);
     const turnId = scheduledMessageId(threadId, scheduleId, run);
-    if (st.rec.queue.some((q) => q.turnId === turnId) || this.scheduledMessage(st, turnId, since)?.started) return { turnId };
+    if (st.rec.queue.some((q) => q.turnId === turnId) || this.scheduledDelivery(st, turnId, since)?.started) return { turnId };
     return undefined;
   }
 
-  sendScheduled(threadId: string, text: string, scheduleId: string, run?: string, since = 0): { turnId: string } {
+  sendScheduled(threadId: string, text: string, scheduleId: string, run?: string, since = 0, preserve?: boolean): { turnId: string } {
     const prior = this.findScheduledSend(threadId, scheduleId, run, since);
     if (prior) return prior;
     const messageId = run ? scheduledMessageId(threadId, scheduleId, run) : undefined;
     const logged = messageId ? this.scheduledMessage(this.mustGet(threadId), messageId, since) : undefined;
     // A partial start retries the original logged input, including its check
     // output, so the model reads exactly what the transcript shows.
-    return this.send(threadId, logged?.text ?? text, logged?.images ?? [], { origin: 'schedule', scheduleId, queue: true, ...(messageId ? { messageId, scheduledSince: since } : {}) });
+    return this.send(threadId, logged?.text ?? text, logged?.images ?? [], { origin: 'schedule', scheduleId, queue: true, ...(preserve !== undefined ? { preserveSchedule: preserve } : {}), ...(messageId ? { messageId, scheduledSince: since } : {}) });
   }
 
-  send(threadId: string, text: string, images: ImageRef[] = [], opts: SendOptions = {}): { turnId: string } {
+  send(threadId: string, text: string, images: ImageRef[] = [], opts: SendOptions = {}): { turnId: string; held?: true } {
     const st = this.mustGet(threadId);
     this.checkAccepting();
     // A thread a draining runner is letting go of is about to be the new
@@ -1604,6 +1626,11 @@ export class Runner {
     // Its turn was made up; a real agent picking it up would only be lost.
     if (st.rec.sample) throw new RpcError(ErrorCode.badParams, "This is one of the tour's sample threads, so nothing can be sent to it. Start a new thread to try it for real.");
     checkImages(images);
+    // A report to the thread that started the sender, kept until its other
+    // threads finish (runner/nested.ts).
+    if (this.holdReport(st, text, images, opts)) return { turnId: crypto.randomUUID(), held: true };
+    // Mike writing: anything held goes in first, so he and it see the same.
+    if (fromMike(text, opts) && st.rec.heldReports?.length) this.deliverHeld(st);
     return { turnId: this.sendTo(st, text, images, opts) };
   }
 
@@ -1671,6 +1698,7 @@ export class Runner {
     const msg: QueuedSend = { turnId, text, images: refs };
     if (opts.origin) msg.origin = opts.origin;
     if (opts.scheduleId) msg.scheduleId = opts.scheduleId;
+    if (opts.preserveSchedule !== undefined) msg.preserveSchedule = opts.preserveSchedule;
     if (opts.scheduledSince !== undefined) msg.scheduledSince = opts.scheduledSince;
     if (opts.answers?.length) msg.answers = opts.answers;
     if (opts.editOf) msg.editOf = opts.editOf;
@@ -1726,14 +1754,14 @@ export class Runner {
       return rt.turn.turnId;
     }
     // Moving to another runner (runner/moves.ts): it waits, and goes with the thread.
-    if (rt.turn || rec.queue.length || this.draining || rt.editing || rt.moving) {
+    if (rt.turn || rec.queue.length || this.draining || rt.editing || rt.moving || (rec.interruptedMessages?.length && isAutomaticInput(msg))) {
       // Behind a running turn, or behind messages that couldn't start
       // earlier: they go first. On a draining runner a thread with no turn
       // is usually about to move across, and the message goes with it
       // (kickQueue starts it here if background work is holding the thread).
       rec.queue.push(msg);
       this.markDirty(st);
-      this.kickQueue(st);
+      if (!this.kickQueue(st) && this.queueHeld(st)) this.scheduleIdle(st);
       return turnId;
     }
     this.startTurn(st, msg);
@@ -1742,7 +1770,8 @@ export class Runner {
 
   // A message sent during a turn can go into it only while the CLI is
   // there to take it and nothing is set to change under it: not while a
-  // CLI is still starting or leaving, not behind messages already waiting,
+  // CLI is still starting or leaving, not behind ordinary messages waiting
+  // (reminders never hold up a message from Mike or another thread),
   // not once a move or a fresh CLI is due on the next turn (the message is
   // meant for that), not after Stop was pressed (the CLI would cancel it
   // with the rest), and not into a turn opened only for a card, where
@@ -1751,7 +1780,7 @@ export class Runner {
     const { rec, rt } = st;
     const turn = rt.turn;
     if (!turn || !rt.session || rt.closing || this.stopping || rt.editing) return false;
-    if (rec.queue.length || rec.handoff || rec.moved || rt.releaseWhenIdle || turn.interruptRequested) return false;
+    if (rec.queue.some(q => !isAutomaticInput(q)) || rec.handoff || rec.moved || rt.releaseWhenIdle || turn.interruptRequested) return false;
     // Nor into a compaction or review (a skill's turn takes them).
     if (turn.noSteer || turn.local) return false;
     return !turn.auto || Boolean(turn.cliStarted);
@@ -1781,6 +1810,7 @@ export class Runner {
     const { rt } = st;
     const turn = rt.turn!;
     const event = this.emit(st, userMessage(msg), turn.turnId);
+    this.markOlderInputs(st, msg);
     (turn.inputs ??= new Map()).set(msg.turnId, event.seq);
     turn.messages.push(msg.turnId);
     // He wrote again, so the turn owes him another reply.
@@ -1792,13 +1822,14 @@ export class Runner {
     turn.cardReopened = false;
     // ...and an archive it asked for before reading this is off: "wait, one
     // more thing" shouldn't send the thread away. It can ask again.
-    if (turn.endTurn?.archive) turn.endTurn = { ...turn.endTurn, archive: false };
+    if (turn.endTurn) turn.endTurn = { ...turn.endTurn, archive: false, snooze: undefined, waitFor: undefined };
     this.markDirty(st);
     // A change reaches a running turn too, or a clear could wait out as many
     // messages as were sent into it (Codex review).
     turn.dispatched = true;
     if (!turn.deliveryKnown) turn.foreignOutput = false;
     this.sendWithInstructionsNews(st, this.withInterruptedMessages(st, msg, this.forAgent(msg)));
+    if (!isAutomaticInput(msg)) turn.ordinaryInput = true;
   }
 
   // A turn that had its end_turn, opened again once the agent has read a
@@ -1820,13 +1851,22 @@ export class Runner {
     turn.narrationItem = undefined;
   }
 
+  private markOlderInputs(st: ThreadState, msg: QueuedSend): void {
+    if (!isAutomaticInput(msg) || msg.retryAfterInterrupt) {
+      for (const q of st.rec.queue) {
+        if (isAutomaticInput(q) && (!msg.retryAfterInterrupt || !q.retryAfterInterrupt)) q.beforeMessage = true;
+      }
+    }
+  }
+
   // The text the agent gets for a message. One from the phone says so, and
   // whether he's still at the Mac, so the agent doesn't hand him a Mac-only
   // step while he's out and keeps the reply short. It goes on every phone
   // message rather than once, as he moves between the two. The transcript
   // keeps what he typed. "Phone app", not "iPhone app": the origin doesn't say
   // which, and an Android phone (android-native/, or Keith's) sends the same.
-  forAgent(msg: { text: string; origin?: MessageOrigin }): string {
+  forAgent(msg: { text: string; origin?: MessageOrigin; beforeMessage?: true }): string {
+    if (msg.beforeMessage) return `${msg.text}\n\nThis ${msg.origin === 'schedule' ? 'reminder' : 'message'} was queued before a later message in this thread. Follow the later instructions, including any request to stop.`;
     if (msg.origin !== 'phone') return msg.text;
     const atMac = this.atMac?.();
     const where = atMac === true ? ', at the Mac' : atMac === false ? ', away from the Mac' : '';
@@ -1855,6 +1895,7 @@ export class Runner {
     rt.idleTimer = undefined;
     rt.turn = { turnId: msg.turnId, startedAt: this.clock.now(), interruptRequested: false, messages: [msg.turnId], edited: new Set(), access: rec.permissionMode };
     rt.turn.inputs = new Map([[msg.turnId, messageSeq]]);
+    this.markOlderInputs(st, msg);
     rt.activeAt = this.clock.now();
     rec.turnId = msg.turnId;
     rec.lastActivityAt = this.isoNow();
@@ -2479,7 +2520,7 @@ export class Runner {
           // The CLI has nothing left to run, so a message sent during the
           // turn went nowhere (an error ended its queue). Say so rather than
           // wait for an answer that won't come.
-          const unsaved = turn.messages.some(id => !turn.startedMessages?.has(id) && !rec.interruptedMessages?.includes(turn.inputs?.get(id) ?? -1));
+          const unsaved = turn.messages.some(id => !turn.startedMessages?.has(id) && !rec.interruptedMessages?.includes(turn.inputs?.get(id) ?? -1) && !turn.requeuedMessages?.has(id));
           turn.messages = [];
           if (!turn.interruptRequested || unsaved) this.emit(st, { type: 'system.note', text: 'A message sent during this turn was dropped by the CLI. Send it again.' }, turn.turnId);
         }
@@ -2508,7 +2549,7 @@ export class Runner {
       rt.finished = [];
       this.markDirty(st);
       // A version move or a fresh CLI was waiting for the grace to end.
-      if ((rt.versionMove || rt.releaseWhenIdle) && !rt.turn) this.scheduleIdle(st);
+      if ((rt.versionMove || rt.releaseWhenIdle || this.queueHeld(st)) && !rt.turn) this.scheduleIdle(st);
     }, WAKE_GRACE_MS);
   }
 
@@ -2637,13 +2678,14 @@ export class Runner {
     if (!netLost && rec.waitingForNetwork) delete rec.waitingForNetwork;
     // The agent asked for its own thread to be archived (end_turn's
     // archive, which Mike asked it for). It can't archive itself mid-turn,
-    // as that stops the CLI, so it happens here, once the turn is over, and
-    // not if a message is already waiting for the next one.
+    // as that stops the CLI, so it happens here, once the turn is over.
+    // Fresh messages still need an answer; automatic inputs already waiting
+    // when a later ordinary message arrived may wait through its park.
     // Nor while a card is still waiting (a subagent's, which outlives the
     // turn): archiving or snoozing would hide it and stop the work behind it.
     // More likely now the runner's own threads run on the install's mode
     // (own-threads.ts; Codex review, 9 Nov 2026).
-    const away = outcome === 'completed' && !turn.auto && said?.needs === 'nothing' && !rec.queue.length && !rt.approvals.size;
+    const away = outcome === 'completed' && (!turn.auto || turn.ordinaryInput === true) && said?.needs === 'nothing' && rec.queue.every(q => isAutomaticInput(q) && q.beforeMessage) && !rt.approvals.size;
     const archive = away && archiveFromTool(turn.endTurn);
     // Hibernating likewise (end_turn's snooze). Archive wins if it asked for both.
     const snooze = away && !archive ? snoozeFromTool(turn.endTurn) : undefined;
@@ -2660,12 +2702,17 @@ export class Runner {
       !rec.subagents?.some((a) => a.status === 'running') && !rt.tasks.length && !rt.approvals.size &&
       // A job that ended mid-turn: the CLI's turn reading its result is next.
       !rt.taskEndedInTurn && !rt.finished.length;
-    this.endTurn(st, ev.seq, outcome === 'failed' ? 'error' : 'idle', outcome, limitHit, netLost);
+    const holdQueue = Boolean(rec.queue.length && (archive || snooze || waitFor));
+    this.endTurn(st, ev.seq, outcome === 'failed' ? 'error' : 'idle', outcome, limitHit, netLost, holdQueue);
     // The done card's loose ends (experiment looseEnds), unless it's going
     // away now; and the card of the thread that started this one, which
     // lists this one while it's working.
     if (outcome === 'completed' && said?.needs === 'nothing' && !archive) void this.checkLooseEnds(st);
     this.recheckStarter(st);
+    // Reports its starter is holding may go now; at once if this one failed
+    // or was stopped (one moving login or waiting for the network carries
+    // on by itself). runner/nested.ts.
+    if (rec.startedBy?.kind === 'thread' && !rec.detached) this.settleHeldSoon(rec.startedBy.threadId, outcome !== 'completed' && !limitHit && !netLost);
     // A code change gets another lab's review before it counts as done
     // (runner/lab-review.ts, unless Settings turns it off): the thread waits on
     // the review, so anything waiting on it hears once it's been fixed.
@@ -2719,6 +2766,8 @@ export class Runner {
     }
     if (waitFor && !rt.turn && !rec.archivedAt && !this.stopping) this.waitOn(st, waitFor, snooze, turn.endTurnBy);
     else if (snooze && !rt.turn && !rec.archivedAt && !this.stopping) this.snoozeAfterTurn(st, snooze);
+    // An invalid wait may leave the thread awake; do not strand its queue.
+    if (holdQueue && !rt.turn && this.bucket(rec) === 'inbox') this.afterTurn(st);
   }
 
   // end_turn's snooze, once the turn is over: a time as update_thread
@@ -2754,7 +2803,7 @@ export class Runner {
     this.update({ threadId: rec.id, snoozedUntil: until });
   }
 
-  endTurn(st: ThreadState, completedSeq: number, status: ThreadStatus, outcome?: TurnOutcome, limitHit?: string, netLost?: string): void {
+  endTurn(st: ThreadState, completedSeq: number, status: ThreadStatus, outcome?: TurnOutcome, limitHit?: string, netLost?: string, holdQueue = false): void {
     const { rec, rt } = st;
     const finished = rt.turn;
     rt.turn?.interruptTimer?.cancel();
@@ -2788,7 +2837,9 @@ export class Runner {
     const waiters = rt.turnEndWaiters ?? [];
     rt.turnEndWaiters = undefined;
     for (const w of waiters) w();
-    this.afterTurn(st, limitHit, netLost);
+    // completeTurn applies the requested wait before older queued inputs
+    // can start another turn. The inputs remain durable for a later wake.
+    if (!holdQueue) this.afterTurn(st, limitHit, netLost);
   }
 
   // A turn that ended without a result from the CLI (spawn failure, crash).
@@ -3037,6 +3088,9 @@ export class Runner {
     archivedBy?: ArchivedBy;
     verdict?: ArchiveVerdict;
     starred?: boolean;
+    // Out from under the thread that started it in the sidebar, or back
+    // (docs/protocol.md, "Nested threads").
+    detached?: boolean;
     // Whether a turn that hits its login's limit waits for room and
     // carries on by itself (the limit box's menu). false also ends a wait
     // under way; true starts one if the thread is stuck at its limit now.
@@ -3315,9 +3369,16 @@ export class Runner {
     if (archiving) {
       this.reconcileWaits();
       this.recheckStarter(st);
+      this.settleHeldSoon(rec.startedBy?.threadId);
     }
     if (params.starred === true) rec.starredAt ??= this.isoNow();
     else if (params.starred === false) delete rec.starredAt;
+    if (params.detached !== undefined && rec.startedBy?.kind === 'thread' && rec.startedBy.threadId) {
+      if (params.detached) rec.detached = true;
+      else delete rec.detached;
+      // Its starter may have been holding reports for it (runner/nested.ts).
+      this.settleHeldSoon(rec.startedBy.threadId);
+    }
     if (params.carryOnAtReset !== undefined) this.setCarryOnAtReset(st, params.carryOnAtReset);
     if (accountChanged && rt.turn && rt.session && !stop) {
       // The turn carries on where it started; say so, or the picker reads
@@ -3389,6 +3450,7 @@ export class Runner {
     rt.trashed = true;
     this.threads.delete(threadId);
     this.waitedOnDeleted(threadId);
+    this.settleHeldSoon(rec.startedBy?.threadId);
     this.dirty.delete(threadId);
     rt.idleTimer?.cancel();
     rt.deltaTimer?.cancel();
@@ -3534,15 +3596,27 @@ export class Runner {
     if (!unreceived.size && !turn.deliveryKnown && (turn.modelOutput || (usage && !zero) || (!zero && rt.started && turn.dispatched))) return;
     const ids = new Set(rec.interruptedMessages);
     const before = ids.size;
+    const requeuedInputs: QueuedSend[] = [];
     for (const [id, seq] of turn.inputs ?? []) {
       if (unreceived.size && !unreceived.has(id)) continue;
       if (!unreceived.has(id) && (turn.startedMessages?.has(id) || (turn.deliveryKnown && !turn.cancelledMessages?.has(id) && (turn.modelOutput || (usage && !zero))))) continue;
       const e = this.store.log(rec.id).read(seq, seq)[0];
-      if (e?.type === 'user.message' && fromMike(e.text, e) && !this.commandPlan(st, e.text) && !cutOut(rec, seq)) ids.add(seq);
+      if (e?.type !== 'user.message' || this.commandPlan(st, e.text) || cutOut(rec, seq)) continue;
+      if (fromMike(e.text, e)) ids.add(seq);
+      else if (id !== turn.turnId && !isAutomaticInput(e) && !turn.requeuedMessages?.has(id)) {
+        // A peer's instruction is just as current as the user's. The CLI
+        // explicitly rejected it, so deliver it again before older reminders.
+        requeuedInputs.push({ turnId: crypto.randomUUID(), retryAfterInterrupt: true, text: e.text, images: e.images ?? [], ...(e.origin ? { origin: e.origin } : {}) });
+        (turn.requeuedMessages ??= new Set()).add(id);
+      }
     }
-    if (ids.size === before) return;
-    rec.interruptedMessages = [...ids];
-    this.emit(st, { type: 'system.note', savedMessage: true, text: 'Your stopped message and pictures are saved for your next message.' }, turn.turnId);
+    if (ids.size === before && !requeuedInputs.length) return;
+    rec.queue.unshift(...requeuedInputs);
+    if (ids.size !== before) {
+      rec.interruptedMessages = [...ids];
+      this.emit(st, { type: 'system.note', savedMessage: true, text: 'Your stopped message and pictures are saved for your next message.' }, turn.turnId);
+    }
+    if (requeuedInputs.length) this.emit(st, { type: 'system.note', text: 'Queued an unread message again after the CLI interrupted its delivery.' }, turn.turnId);
     this.markDirty(st);
   }
 
@@ -3558,6 +3632,9 @@ export class Runner {
 
   withInterruptedMessages(st: ThreadState, msg: QueuedSend, text: string): UserInput {
     const { rec, rt } = st;
+    if (rec.interruptedMessages?.length && !rt.turn?.recoveryInput && !isAutomaticInput(msg) && !fromMike(msg.text, msg) && !this.commandPlan(st, msg.text)) {
+      return { id: msg.turnId, text: `${text}\n\n[An earlier turn stopped before a user message was read. That message remains saved for the user's next message. Keep the stopped work paused until the user writes again, even if this message asks to restart it.]`, images: msg.images };
+    }
     if (!rec.interruptedMessages?.length || !fromMike(msg.text, msg) || this.commandPlan(st, msg.text) || (rt.turn?.recoveryInput && rt.turn.recoveryInput !== msg.turnId)) return { id: msg.turnId, text, images: msg.images };
     const saved = [...new Set(rec.interruptedMessages)].filter(seq => Number.isSafeInteger(seq) && seq > 0 && seq <= rec.lastSeq).sort((a, b) => a - b).flatMap(seq => this.store.log(rec.id).read(seq, seq)).filter(e => e.type === 'user.message' && fromMike(e.text, e) && !this.commandPlan(st, e.text) && !cutOut(rec, e.seq));
     const images: ImageRef[] = [];
@@ -3612,10 +3689,25 @@ export class Runner {
     return true;
   }
 
+  // A saved user message must be answered before automatic redelivery.
+  // This queue remains durable while its idle CLI may be released.
+  queueHeld(st: ThreadState): boolean {
+    return Boolean(st.rec.interruptedMessages?.length && st.rec.queue.length && st.rec.queue.every(isAutomaticInput));
+  }
+
   // Starts the next queued message if nothing is running. Returns true if
   // one started. One that can't be written (disk full) stays at the front.
   kickQueue(st: ThreadState): boolean {
-    if (st.rt.turn || st.rec.queue.length === 0 || this.stopping || st.rt.editing || st.rt.moving) return false;
+    if (this.stopping || st.rt.editing || st.rt.moving) return false;
+    try {
+      this.prepareQueue(st);
+    } catch (e) {
+      // Keep the queue intact and let other threads' wake/idle handling
+      // continue even when a receipt cannot be saved (e.g. a full disk).
+      this.log.error('could not prepare queued messages', { threadId: st.rec.id, error: String(e) });
+      return false;
+    }
+    if (st.rt.turn || st.rec.queue.length === 0) return false;
     // A draining runner hands a thread over with its queue rather than
     // start another turn on the old release; the primary starts it. Not if
     // background work is holding the thread here: that can be half an hour
@@ -3628,6 +3720,8 @@ export class Runner {
       this.queueHandoverCheck();
       return false;
     }
+    // A saved user cancellation must be read before automatic work resumes.
+    if (isAutomaticInput(st.rec.queue[0]) && st.rec.interruptedMessages?.length) return false;
     const next = st.rec.queue.shift()!;
     this.markDirty(st);
     try {
@@ -3639,6 +3733,38 @@ export class Runner {
       this.notice('error', `Couldn't start a message in "${st.rec.title}": ${(e as Error).message}`);
       return false;
     }
+  }
+
+  // Repair queues saved by older releases as well as direct queued sends.
+  // Keep ordinary messages in order ahead of reminders, and only the latest
+  // reminder for each schedule. Write receipts before removing anything:
+  // an old runner can have sent the slot without its primary hearing back.
+  prepareQueue(st: ThreadState): void {
+    const queue = st.rec.queue;
+    const receipted = new Set(queue.filter(q => isReminder(q) && this.scheduledDelivery(st, q.turnId, q.scheduledSince ?? 0)?.superseded));
+    const seen = new Set<string>();
+    const superseded = new Set<QueuedSend>();
+    for (let i = queue.length - 1; i >= 0; i--) {
+      const q = queue[i];
+      // Check output may contain new items already removed from the check's
+      // storage when it was sent. Old queues have no separate check flag,
+      // so preserve every reminder bearing the standard output suffix.
+      if (receipted.has(q) || !isReminder(q) || !q.scheduleId || typeof q.text !== 'string' || (q.preserveSchedule ?? hasCheckOutput(q.text))) continue;
+      if (seen.has(q.scheduleId)) superseded.add(q);
+      seen.add(q.scheduleId);
+    }
+    for (const q of superseded) {
+      if (!this.scheduledMessage(st, q.turnId, q.scheduledSince ?? 0)?.started) {
+        this.emit(st, { type: 'system.note', text: SUPERSEDED_REMINDER, supersededReminder: q.turnId }, st.rt.turn?.turnId);
+      }
+    }
+    const ordered = [
+      ...queue.filter(q => !isAutomaticInput(q)),
+      ...queue.filter(q => isAutomaticInput(q) && !superseded.has(q) && !receipted.has(q)),
+    ];
+    if (ordered.length === queue.length && ordered.every((q, i) => q === queue[i])) return;
+    st.rec.queue = ordered;
+    this.markDirty(st);
   }
 
   // ------------------------------------------------------ editing a message
@@ -3884,6 +4010,7 @@ export class Runner {
     }
     if (rec.schedule) s.schedule = { ...rec.schedule };
     if (rec.startedBy) s.startedBy = { ...rec.startedBy };
+    if (rec.detached) s.detached = true;
     if (rec.asked) s.asked = rec.asked;
     if (rec.keywords) s.keywords = rec.keywords;
     if (rec.panelRequest) s.panelRequest = { ...rec.panelRequest };
@@ -4213,7 +4340,7 @@ export class Runner {
 
 // The Runner's other methods live in parts under runner/, one area each;
 // they go onto its prototype here, as the class's own methods would be.
-for (const part of [looseEndsPart, quietInboxPart, labReviewPart, newThreadsPart, hibernationPart, titlesPart, highlightsPart, patchesPart, editingPart, clisPart, reviewsPart, buttonsPart, approvalsPart, projectsHostPart, stoppedWorkPart, handoversPart, poolsPart, networkPart, worktreesPart, commandsPart, contextUsagePart, movesPart]) {
+for (const part of [looseEndsPart, quietInboxPart, nestedPart, labReviewPart, newThreadsPart, hibernationPart, titlesPart, highlightsPart, patchesPart, editingPart, clisPart, reviewsPart, buttonsPart, approvalsPart, projectsHostPart, stoppedWorkPart, handoversPart, poolsPart, networkPart, worktreesPart, commandsPart, contextUsagePart, movesPart]) {
   for (const [key, d] of Object.entries(Object.getOwnPropertyDescriptors(part))) {
     Object.defineProperty(Runner.prototype, key, { ...d, enumerable: false });
   }
@@ -4240,11 +4367,30 @@ export function stoppedWorkMessage(what: string[], last: boolean): string {
   ].join('\n');
 }
 
-export type SendOptions = { origin?: MessageOrigin; scheduleId?: string; queue?: boolean; answers?: AskAnswer[]; editOf?: number; messageId?: string; scheduledSince?: number };
+export type SendOptions = { origin?: MessageOrigin; scheduleId?: string; preserveSchedule?: boolean; queue?: boolean; answers?: AskAnswer[]; editOf?: number; messageId?: string; scheduledSince?: number };
+
+type ScheduledDelivery = { seq: number; started: boolean; text: string; images: ImageRef[]; superseded?: false } | { superseded: true; started: true };
+
+const SUPERSEDED_REMINDER = 'Skipped an older queued reminder because a newer reminder from the same schedule is waiting.';
+
+function isAutomaticInput(q: Pick<QueuedSend, 'origin' | 'retryAfterInterrupt'>): boolean {
+  return q.origin === 'schedule' || q.origin === 'runner' || q.retryAfterInterrupt === true;
+}
+
+function isReminder(q: QueuedSend): boolean {
+  return q.origin === 'schedule';
+}
+
+// Successful output and failure output may contain consumed items; an
+// empty failure report can safely be replaced by the next reminder.
+function hasCheckOutput(text: string): boolean {
+  const failed = text.lastIndexOf('\n\nIts check failed (');
+  return text.includes(HELD_EXTRA) || text.lastIndexOf('\n\nIts check found this:') > failed || (failed >= 0 && text.indexOf('\n\n```\n', failed) >= 0);
+}
 
 // A UUID-shaped id in the existing message/turn field, so it survives every
 // runner handover and crash without adding metadata for clients to mirror.
-function scheduledMessageId(threadId: string, scheduleId: string, run: string): string {
+export function scheduledMessageId(threadId: string, scheduleId: string, run: string): string {
   const hex = crypto.createHash('sha256').update(JSON.stringify([threadId, scheduleId, run])).digest('hex');
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-5${hex.slice(13, 16)}-a${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
 }

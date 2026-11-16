@@ -1,7 +1,7 @@
 {
   "id": "demo_quick_ask_readme",
   "title": "Write the Quick Ask README",
-  "cwd": "/Users/mike/dev/me/misc",
+  "cwd": "/Users/alex/code/misc",
   "accountId": "claude-main",
   "provider": "claude",
   "permissionMode": "full",

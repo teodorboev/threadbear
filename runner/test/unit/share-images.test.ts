@@ -42,7 +42,7 @@ test('reply images: pictures in a reply and pinned pictures, nothing else', () =
   assert.deepEqual(replyImagesInEvent(pin('guide/a.jpg'), '/w', home), [{ seq: 4, path: '/w/guide/a.jpg', pinned: true }]);
   assert.deepEqual(replyImagesInEvent(pin('guide/a.jpg'), undefined, home), []);
   assert.deepEqual(replyImagesInEvent(pin('~/a.webp'), undefined, home), [{ seq: 4, path: '/Users/ann/a.webp', pinned: true }]);
-  // A pinned doc, a link pin, Mike's attachments and a tool's screenshots stay.
+  // A pinned doc, a link pin, Alex's attachments and a tool's screenshots stay.
   assert.deepEqual(replyImagesInEvent(pin('/w/notes.md'), '/w', home), []);
   assert.deepEqual(replyImagesInEvent(ev(5, { type: 'tool.call', itemId: 'j', name: PIN_TOOL, kind: 'mcp', title: 'pin', input: { url: 'https://x.io/a.png' } }), '/w', home), []);
   const image = { path: '/w/c.png', mediaType: 'image/png' };

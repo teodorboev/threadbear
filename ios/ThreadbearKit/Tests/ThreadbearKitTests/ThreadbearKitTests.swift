@@ -49,7 +49,7 @@ import UniformTypeIdentifiers
 
     @Test func wokenThreadSaysSoUntilOpened() throws {
         let json = """
-        {"threadId":"t1","runnerId":"m5","title":"A","cwd":"/x","accountId":"claude-3","provider":"claude",
+        {"threadId":"t1","runnerId":"laptop","title":"A","cwd":"/x","accountId":"claude-3","provider":"claude",
          "status":"idle","needsYou":true,"unread":true,"preview":"","lastActivityAt":"2026-10-27T08:23:19.962Z",
          "woke":{"at":"2026-10-30T02:24:21.575Z","since":"2026-10-30T02:23:21.575Z"}}
         """
@@ -66,11 +66,11 @@ import UniformTypeIdentifiers
 
     @Test func threadRowDecodesWithISOAndMillisecondDates() throws {
         let json = """
-        [{"threadId":"t1","runnerId":"m5","title":"A","cwd":"/Users/m/dev/me/misc","accountId":"claude-3",
+        [{"threadId":"t1","runnerId":"laptop","title":"A","cwd":"/Users/alex/code/misc","accountId":"claude-3",
           "provider":"claude","status":"running","needsYou":false,"unread":true,"preview":"hi",
           "lastActivityAt":"2026-10-27T08:23:19.962Z","snoozedUntil":1761553399962,"working":"Running npm test",
           "projects":[{"id":"p1","title":"Threadbear"}]},
-         {"threadId":"t2","runnerId":"m5","title":"B","cwd":"/x","accountId":"a","provider":"codex",
+         {"threadId":"t2","runnerId":"laptop","title":"B","cwd":"/x","accountId":"a","provider":"codex",
           "status":"somethingNew","needsYou":true,"unread":false,"preview":"","lastActivityAt":1761553399962,
           "pendingApproval":{"approvalId":"ap","kind":"approval","name":"Bash","title":"Run","options":["allow","deny","later"],"inputSummary":"ls"}}]
         """
@@ -93,7 +93,7 @@ import UniformTypeIdentifiers
 
     @Test func questionAndMessagesDecode() throws {
         let json = """
-        {"thread":{"threadId":"t","runnerId":"m5","title":"Q","cwd":"/","accountId":"a","provider":"claude",
+        {"thread":{"threadId":"t","runnerId":"laptop","title":"Q","cwd":"/","accountId":"a","provider":"claude",
           "status":"waiting","needsYou":true,"unread":false,"preview":"","lastActivityAt":0,
           "pendingApproval":{"approvalId":"q","kind":"question","questions":[{"question":"Which?","multiSelect":false,"options":[{"label":"A"}]}]}},
          "messages":[{"seq":3.0,"role":"user","text":"go","origin":"phone","at":1000}]}
@@ -361,7 +361,7 @@ import UniformTypeIdentifiers
     @Test func projectRowsDecodeWithAndWithoutIcons() throws {
         let json = #"""
         [{"id":"p1","runnerId":"r1","title":"Garden","archived":false,"icon":{"symbol":"leaf","url":"https://x.convex.cloud/api/storage/abc","by":"librarian"}},
-         {"id":"p2","runnerId":"r1","title":"Site","archived":false,"icon":{"url":"not a url","by":"mike"}},
+         {"id":"p2","runnerId":"r1","title":"Site","archived":false,"icon":{"url":"not a url","by":"alex"}},
          {"id":"p3","runnerId":"r1","title":"Old","archived":false}]
         """#
         let rows = try JSONDecoder().decode([PhoneProject].self, from: Data(json.utf8))
@@ -418,11 +418,11 @@ import UniformTypeIdentifiers
     /// A self-hosted backend on the tailnet (docs/self-hosting.md): its port
     /// is kept, and anything else in the URL turns the link down.
     @Test func pairsWithATailnetBackend() throws {
-        let url = URL(string: "threadbear://pair?url=https%3A%2F%2FMac.tail9ef766.ts.net%3A3210&token=tb_abc")!
+        let url = URL(string: "threadbear://pair?url=https%3A%2F%2FMac.tail1234.ts.net%3A3210&token=tb_abc")!
         let pairing = try #require(Pairing.parse(url))
-        #expect(pairing.deploymentURL.absoluteString == "https://mac.tail9ef766.ts.net:3210")
+        #expect(pairing.deploymentURL.absoluteString == "https://mac.tail1234.ts.net:3210")
         #expect(Pairing.parse(pairing.link) == pairing)
-        for bad in ["http://mac.tail9ef766.ts.net:3210", "https://user@mac.tail9ef766.ts.net:3210", "https://mac.tail9ef766.ts.net:3210/api", "https://mac.tail9ef766.ts.net:3210?x=1"] {
+        for bad in ["http://mac.tail1234.ts.net:3210", "https://user@mac.tail1234.ts.net:3210", "https://mac.tail1234.ts.net:3210/api", "https://mac.tail1234.ts.net:3210?x=1"] {
             let link = URL(string: "threadbear://pair?url=\(bad.addingPercentEncoding(withAllowedCharacters: .alphanumerics)!)&token=t")!
             #expect(Pairing.parse(link) == nil, "\(bad)")
         }
@@ -556,7 +556,7 @@ import UniformTypeIdentifiers
 
     @Test func anUnreadableOptionalDateIsAbsent() throws {
         let json = """
-        {"threadId":"t","runnerId":"m5","title":"A","cwd":"/","accountId":"a","provider":"claude","status":"idle",
+        {"threadId":"t","runnerId":"laptop","title":"A","cwd":"/","accountId":"a","provider":"claude","status":"idle",
          "needsYou":false,"unread":false,"preview":"","lastActivityAt":"2026-10-27T08:23:19.962Z","lastActivityMs":1,
          "view":"inbox","createdAt":"2026-10-27T08:00:00Z","snoozedUntil":"restart"}
         """
@@ -568,7 +568,7 @@ import UniformTypeIdentifiers
     /// what it can, rather than losing the thread row.
     @Test func looseEndsReadLeniently() throws {
         let json = """
-        {"threadId":"t","runnerId":"m5","title":"A","cwd":"/","accountId":"a","provider":"claude","status":"idle",
+        {"threadId":"t","runnerId":"laptop","title":"A","cwd":"/","accountId":"a","provider":"claude","status":"idle",
          "needsYou":false,"unread":false,"preview":"","lastActivityAt":"2026-10-27T08:23:19.962Z","lastActivityMs":1,
          "view":"inbox","createdAt":"2026-10-27T08:00:00Z","needs":"nothing",
          "looseEnds":[{"kind":"thread","text":"\\"Side job\\", a thread it started, is still working","threadId":"c1"},
@@ -714,7 +714,7 @@ private func properties(of data: Data) -> [CFString: Any] {
     }
 }
 
-@Test func aThreadMikeDidNotStartSaysWhoDid() {
+@Test func aThreadSomeoneElseStartedSaysWhoDid() {
     let decoder = JSONDecoder()
     let json = { (startedBy: String) in
         #"{"threadId":"t","runnerId":"r","title":"t","cwd":"/x/misc","accountId":"a","provider":"claude","status":"idle","needsYou":false,"unread":false,"preview":"","createdAt":"2026-11-01T00:00:00.000Z","lastActivityAt":"2026-11-01T00:00:00.000Z"\#(startedBy)}"#
@@ -732,24 +732,24 @@ private func properties(of data: Data) -> [CFString: Any] {
 }
 
 @Test func aThreadsLinkButtonsOnlyOpenWebPages() throws {
-    let json = #"{"threadId":"t","runnerId":"r","title":"t","cwd":"/x","accountId":"a","provider":"claude","status":"idle","needsYou":false,"unread":false,"preview":"","createdAt":"2026-11-01T00:00:00.000Z","lastActivityAt":"2026-11-01T00:00:00.000Z","links":[{"title":"Website","url":"https://walkies.mikecann.app/","icon":"safari"},{"title":"Bad","url":"file:///etc/passwd"}]}"#
+    let json = #"{"threadId":"t","runnerId":"r","title":"t","cwd":"/x","accountId":"a","provider":"claude","status":"idle","needsYou":false,"unread":false,"preview":"","createdAt":"2026-11-01T00:00:00.000Z","lastActivityAt":"2026-11-01T00:00:00.000Z","links":[{"title":"Website","url":"https://pebble.example.com/","icon":"safari"},{"title":"Bad","url":"file:///etc/passwd"}]}"#
     let thread = try JSONDecoder().decode(PhoneThread.self, from: Data(json.utf8))
     #expect(thread.links?.count == 2)
-    #expect(thread.links?[0].page?.absoluteString == "https://walkies.mikecann.app/")
+    #expect(thread.links?[0].page?.absoluteString == "https://pebble.example.com/")
     #expect(thread.links?[0].icon == "safari")
     // Never a file or another app, even if one came through.
     #expect(thread.links?[1].page == nil)
     #expect(PhoneLink(title: "x", url: "javascript:alert(1)").page == nil)
 }
 
-@Test func agentMessagesAreToldApartFromMikes() {
+@Test func agentMessagesAreToldApartFromTheUsers() {
     let at = Date(timeIntervalSince1970: 0)
     let fromThread = PhoneMessage(seq: 1, role: .user, text: "[Sent by the agent in the thread \"Fix \"it\" (now)\" (c4c2389d)]\nWork the card.", at: at)
     #expect(fromThread.agentHeader?.title == "Fix \"it\" (now)")
     #expect(fromThread.agentHeader?.threadId == "c4c2389d")
     #expect(fromThread.agentHeader?.body == "Work the card.")
-    let move = PhoneMessage(seq: 2, role: .user, text: "[Sent by the agent before moving to ~/dev/me/x]\nCarry on.", at: at)
-    #expect(move.agentHeader?.movedTo == "~/dev/me/x")
+    let move = PhoneMessage(seq: 2, role: .user, text: "[Sent by the agent before moving to ~/code/x]\nCarry on.", at: at)
+    #expect(move.agentHeader?.movedTo == "~/code/x")
     #expect(move.agentHeader?.body == "Carry on.")
     // Mike's own words, a schedule's and the assistant's never are.
     #expect(PhoneMessage(seq: 3, role: .user, text: "Ship it", at: at).agentHeader == nil)

@@ -54,7 +54,7 @@ fs.writeFileSync(
   JSON.stringify({
     id,
     title: 'A very long thread',
-    cwd: '/Users/mike/dev/long',
+    cwd: '/Users/alex/dev/long',
     accountId: 'claude-main',
     provider: 'claude',
     permissionMode: 'ask',
@@ -88,7 +88,7 @@ for (let n = 0; n < others; n += 1) {
   fs.writeFileSync(path.join(dir, 'thread.json'), JSON.stringify({
     id: other,
     title: `${topics[n % topics.length]} ${n + 1}`,
-    cwd: `/Users/mike/dev/project-${n % 5}`,
+    cwd: `/Users/alex/dev/project-${n % 5}`,
     accountId: 'claude-main',
     provider: 'claude',
     permissionMode: 'ask',

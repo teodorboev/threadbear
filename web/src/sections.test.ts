@@ -126,17 +126,17 @@ test('filters pick out what needs Mike, unread, shared, and a place', () => {
   const unread = row({ unread: true });
   const shared = row({ share: { access: 'link' } });
   const stopped = row({ share: { access: 'none' } });
-  const inProject = row({ projects: [{ id: 'p', title: 'Poddle' }] });
+  const inProject = row({ projects: [{ id: 'p', title: 'Lantern' }] });
   const all = [asked, question, unread, shared, stopped, inProject];
   const of = (f: Parameters<typeof passes>[1]) => ids(all.filter((r) => passes(r, f)));
   assert.deepEqual(of(NO_FILTER), ids(all));
   assert.deepEqual(of({ show: 'needsYou' }), ids([asked, question]));
   assert.deepEqual(of({ show: 'unread' }), ids([unread]));
   assert.deepEqual(of({ show: 'shared' }), ids([shared]));
-  assert.deepEqual(of({ show: 'all', place: 'Poddle' }), ids([inProject]));
+  assert.deepEqual(of({ show: 'all', place: 'Lantern' }), ids([inProject]));
   assert.deepEqual(of({ show: 'unread', place: 'acme' }), ids([unread]));
   assert.ok(!isFiltering(NO_FILTER));
-  assert.ok(isFiltering({ show: 'all', place: 'Poddle' }));
+  assert.ok(isFiltering({ show: 'all', place: 'Lantern' }));
 });
 
 test('a thread put away never needs Mike or counts as unread', () => {
@@ -152,7 +152,7 @@ test('a thread put away never needs Mike or counts as unread', () => {
 });
 
 test('the open thread stays under a status filter, but not a search or another place', () => {
-  const read = row({ title: 'Read now', projects: [{ id: 'p', title: 'Poddle' }] });
+  const read = row({ title: 'Read now', projects: [{ id: 'p', title: 'Lantern' }] });
   assert.ok(!shows(read, '', { show: 'unread' }));
   assert.ok(shows(read, '', { show: 'unread' }, read.threadId));
   assert.ok(!shows(read, 'something else', { show: 'unread' }, read.threadId));
@@ -160,10 +160,10 @@ test('the open thread stays under a status filter, but not a search or another p
 });
 
 test('place choices count each thread once, most threads first', () => {
-  const dupe = row({ projects: [{ id: 'p', title: 'Poddle' }] });
-  const choices = placeChoices([dupe, dupe, row({ projects: [{ id: 'p', title: 'Poddle' }] }), row({ cwd: '/x/acme' })]);
+  const dupe = row({ projects: [{ id: 'p', title: 'Lantern' }] });
+  const choices = placeChoices([dupe, dupe, row({ projects: [{ id: 'p', title: 'Lantern' }] }), row({ cwd: '/x/acme' })]);
   assert.deepEqual(choices, [
-    { place: 'Poddle', count: 2 },
+    { place: 'Lantern', count: 2 },
     { place: 'acme', count: 1 },
   ]);
 });

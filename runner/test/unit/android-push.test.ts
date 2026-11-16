@@ -74,11 +74,11 @@ test("Firebase's own error code wins over the status word, so another project's 
 
 test('with two keys, the answer is the one that worked, else the token\'s own project\'s', () => {
   const wrong = { status: 403, reason: 'SENDER_ID_MISMATCH' };
-  // Mike's phone: Keith's key turns it down, Mike's sends
+  // Alex's phone: Keith's key turns it down, Alex's sends
   assert.deepEqual(fcmPick([wrong, { status: 200 }]), { status: 200 });
   // Keith's phone, sent first time
   assert.deepEqual(fcmPick([{ status: 200 }]), { status: 200 });
-  // A removed app on Mike's phone: his own project says UNREGISTERED, so the backend forgets it
+  // A removed app on Alex's phone: his own project says UNREGISTERED, so the backend forgets it
   const gone = fcmPick([wrong, { status: 404, reason: 'UNREGISTERED' }])!;
   assert.equal(fcmGone(gone.status, gone.reason), true);
   // ...and the same the other way round
@@ -94,9 +94,9 @@ test('with two keys, the answer is the one that worked, else the token\'s own pr
 
 test("a key that fails for its own reasons doesn't hide the token's own project's answer", () => {
   const wrong = { status: 403, reason: 'SENDER_ID_MISMATCH' };
-  // Keith's key broken (401), Mike's project says the token's gone: gone wins
+  // Keith's key broken (401), Alex's project says the token's gone: gone wins
   assert.deepEqual(fcmPick([{ status: 401, reason: 'UNAUTHENTICATED' }, { status: 404, reason: 'UNREGISTERED' }]), { status: 404, reason: 'UNREGISTERED' });
-  // Keith's key timed out, Mike's sent
+  // Keith's key timed out, Alex's sent
   assert.deepEqual(fcmPick([{ status: 0, reason: 'timeout' }, { status: 200 }]), { status: 200 });
   // Only failures of keys: the first, which isn't "gone", so nothing's dropped
   assert.deepEqual(fcmPick([{ status: 503, reason: 'UNAVAILABLE' }, wrong]), { status: 503, reason: 'UNAVAILABLE' });
@@ -111,10 +111,10 @@ test("a key that fails for its own reasons doesn't hide the token's own project'
 });
 
 test("a key's own sign-in failing never settles a send, and an unclaimed 404 doesn't drop another project's phone", () => {
-  // Keith's key can't sign in (Google's token endpoint answers 400): Mike's key is still tried
+  // Keith's key can't sign in (Google's token endpoint answers 400): Alex's key is still tried
   assert.equal(fcmSettled({ status: 400, reason: 'UNAUTHENTICATED' }), false);
   assert.deepEqual(fcmPick([{ status: 400, reason: 'UNAUTHENTICATED' }, { status: 200 }]), { status: 200 });
-  // Keith's project hiccups, Mike's says a bare 404: the hiccup is the answer, so Keith's phone stays
+  // Keith's project hiccups, Alex's says a bare 404: the hiccup is the answer, so Keith's phone stays
   const picked = fcmPick([{ status: 503, reason: 'UNAVAILABLE' }, { status: 404, reason: 'NOT_FOUND' }])!;
   assert.deepEqual(picked, { status: 503, reason: 'UNAVAILABLE' });
   assert.equal(fcmGone(picked.status, picked.reason), false);

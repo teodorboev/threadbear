@@ -14,7 +14,7 @@ import { PATIENCE_MS } from './patience.ts';
 export { holdUntil } from './patience.ts';
 import { PatchTrust } from '../../src/patch-trust.ts';
 
-// Commits need a name, and Mike's own git config (signing, hooks) mustn't
+// Commits need a name, and Alex's own git config (signing, hooks) mustn't
 // reach the temp repos. Each test file runs in its own process.
 Object.assign(process.env, {
   GIT_CONFIG_GLOBAL: '/dev/null',

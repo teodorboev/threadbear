@@ -12,5 +12,10 @@ final class NewAppTests: XCTestCase {
         XCTAssertTrue(brief.contains("Switch now") && brief.contains("Later"), "it asks with those answers")
         XCTAssertTrue(brief.contains("Don't switch before I answer"))
         XCTAssertFalse(brief.contains("—"), "no em dashes in what it says")
+        // Tried as a stranger on Tinker Desk (15 Nov 2026): a first build took
+        // 31 minutes and about 4 GB, and the script stops with exit 6 when
+        // there isn't room.
+        XCTAssertTrue(brief.contains("20 to 40 minutes") && !brief.contains("10 minutes"))
+        XCTAssertTrue(brief.contains("exit 6") && brief.contains("Exit 4"))
     }
 }

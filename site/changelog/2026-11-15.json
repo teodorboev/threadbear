@@ -1,0 +1,14 @@
+{
+  "release": "2026-11-15",
+  "highlights": [],
+  "added": [],
+  "changed": [
+    "Writing Tools and the Mac's text services work on words you select in the new app, as they did in the old one",
+    "A reply streaming into a thread no longer redraws the whole of the new app for every few words, so it stays quick while agents talk",
+    "In the new app, the sidebar's counts and dots pop in when they turn up, and a row's status words fade over as they change, as they did in the old app",
+    "The new app waits for ten quiet minutes of changes before it builds an update, rather than building every one"
+  ],
+  "fixed": [
+    "A file an agent pinned and opened for you in the new app could fail to open when Highlights was slow or failed to load once"
+  ]
+}

@@ -1,4 +1,4 @@
-// Mike's standing instructions (instructions.ts): a fresh session gets them
+// Alex's standing instructions (instructions.ts): a fresh session gets them
 // with its instructions; a live or resumed one hears a change once, before
 // his next message.
 import { test } from 'node:test';

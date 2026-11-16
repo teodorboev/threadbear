@@ -20,7 +20,7 @@ function setup(takesStartedBy?: () => boolean, appConnected?: () => boolean, tak
     },
     subscribe: (fn, args, onUpdate) => {
       assert.equal(fn, 'sync:otherRunnersThreads');
-      assert.deepEqual(args, { key: 'k', runnerId: 'r-m5' });
+      assert.deepEqual(args, { key: 'k', runnerId: 'r-laptop' });
       onRemote = onUpdate;
       subscriptions++;
       return () => {
@@ -28,7 +28,7 @@ function setup(takesStartedBy?: () => boolean, appConnected?: () => boolean, tak
       };
     },
     key: 'k',
-    runnerId: 'r-m5',
+    runnerId: 'r-laptop',
     home: h.home,
     host: h.runner,
     publish: (n: Notification) => n.method === 'remoteThreads.updated' && heard.push(n.params),
@@ -89,12 +89,12 @@ test('other runners’ threads reach the app, without an old runner’s rpcUrl',
   // A runner from before the direct link went (13 Nov) may still send rpcUrl
   // in its heartbeat, and the backend keeps it: the app never gets it.
   const value = {
-    runners: [{ runnerId: 'r-bruce', name: 'bruce', icon: 'macmini', lastSeenAt, rpcUrl: 'wss://bruce.example.ts.net:8797/rpc' }],
-    threads: [{ runnerId: 'r-bruce', threadId: 't1', title: 'Birthday check', cwd: '/Users/bruce', accountId: 'codex-main', provider: 'codex', status: 'idle', needsYou: false, unread: true, preview: 'No birthdays', createdAt: 'c', lastActivityAt: 'l' }],
+    runners: [{ runnerId: 'r-mac-mini', name: 'mac-mini', icon: 'macmini', lastSeenAt, rpcUrl: 'wss://mac-mini.example.ts.net:8797/rpc' }],
+    threads: [{ runnerId: 'r-mac-mini', threadId: 't1', title: 'Birthday check', cwd: '/Users/mac-mini', accountId: 'codex-main', provider: 'codex', status: 'idle', needsYou: false, unread: true, preview: 'No birthdays', createdAt: 'c', lastActivityAt: 'l' }],
   };
   remote(value);
   assert.equal(heard.length, 1);
-  assert.deepEqual(heard[0]!.runners, [{ id: 'r-bruce', name: 'bruce', icon: 'macmini', online: true, lastSeenAt: new Date(lastSeenAt).toISOString() }]);
+  assert.deepEqual(heard[0]!.runners, [{ id: 'r-mac-mini', name: 'mac-mini', icon: 'macmini', online: true, lastSeenAt: new Date(lastSeenAt).toISOString() }]);
   assert.equal(heard[0]!.threads[0]!.title, 'Birthday check');
   index.stop();
 });
@@ -117,7 +117,7 @@ test('a row carries who started the thread, once the backend takes it, and goes 
   index.stop();
 });
 
-test('a row carries what Mike last said, once the backend takes it', async () => {
+test('a row carries what Alex last said, once the backend takes it', async () => {
   let takes = false;
   const { h, index, writes, flush } = setup(undefined, undefined, () => takes);
   const { thread } = h.runner.create({ text: 'Try the GPU route', accountId: 'claude-3' });
@@ -136,7 +136,7 @@ test('other runners’ threads are watched only while a Mac app is connected', a
   let app = false;
   const { h, index, heard, remote, watching, subscriptions } = setup(undefined, () => app);
   index.start();
-  assert.equal(watching(), false, 'no app (Bruce): nothing watched');
+  assert.equal(watching(), false, 'no app (Mac mini): nothing watched');
   h.clock.advance(60_000);
   await tick();
   assert.equal(watching(), false);
@@ -146,7 +146,7 @@ test('other runners’ threads are watched only while a Mac app is connected', a
   assert.deepEqual(index.list().threads, []);
   assert.equal(index.list().ready, false, 'an unanswered empty list is not a deletion');
   assert.equal(watching(), true);
-  remote({ runners: [{ runnerId: 'r-bruce', name: 'bruce', lastSeenAt: h.clock.now() }], threads: [] });
+  remote({ runners: [{ runnerId: 'r-mac-mini', name: 'mac-mini', lastSeenAt: h.clock.now() }], threads: [] });
   assert.equal(heard.length, 1);
   assert.equal(heard[0]!.ready, true);
   assert.equal(index.list().ready, true);
@@ -163,7 +163,7 @@ test('other runners’ threads are watched only while a Mac app is connected', a
   h.clock.advance(3 * 60_000);
   await tick();
   assert.equal(watching(), false, 'gone for good: the watch stops');
-  assert.equal(index.list().runners[0]!.name, 'bruce', 'what was heard stays for the next app');
+  assert.equal(index.list().runners[0]!.name, 'mac-mini', 'what was heard stays for the next app');
   assert.equal(watching(), true);
   assert.equal(subscriptions(), 2);
 
@@ -184,7 +184,7 @@ test('other runners’ threads are watched only while a Mac app is connected', a
 // answering each subscription from its own `since` the way
 // sync:threadIndexSince does, and re-running every live one on a write.
 function sinceBackend() {
-  const runners = [{ runnerId: 'r-bruce', name: 'bruce', lastSeenAt: Date.now() }];
+  const runners = [{ runnerId: 'r-mac-mini', name: 'mac-mini', lastSeenAt: Date.now() }];
   const rows: { runnerId: string; threadId: string; title: string; updatedMs: number; deleted?: boolean }[] = [];
   const subs = new Map<number, { fn: string; args: Record<string, unknown>; onUpdate: (v: unknown) => void }>();
   let next = 0;
@@ -202,7 +202,7 @@ function sinceBackend() {
   const write = (threadId: string, title: string, deleted = false) => {
     clock += 1;
     const i = rows.findIndex((r) => r.threadId === threadId);
-    const row = { runnerId: 'r-bruce', threadId, title, updatedMs: clock, ...(deleted ? { deleted } : {}) };
+    const row = { runnerId: 'r-mac-mini', threadId, title, updatedMs: clock, ...(deleted ? { deleted } : {}) };
     if (i >= 0) rows[i] = row;
     else rows.push(row);
     for (const s of [...subs.values()]) if (s.fn === 'sync:threadIndexSince') s.onUpdate(answer(s));
@@ -226,7 +226,7 @@ test('with API 29 a re-run reads only the rows that changed, and hears deletions
     post: async () => null,
     subscribe: b.subscribe,
     key: 'k',
-    runnerId: 'r-m5',
+    runnerId: 'r-laptop',
     home: h.home,
     host: h.runner,
     publish: (n: Notification) => n.method === 'remoteThreads.updated' && heard.push(n.params),
@@ -241,7 +241,7 @@ test('with API 29 a re-run reads only the rows that changed, and hears deletions
   assert.equal(index.heard(), true);
   assert.deepEqual(b.live().sort(), ['sync:otherRunnersList', 'sync:threadIndexSince']);
   assert.equal(heard.at(-1)!.threads.length, 100);
-  assert.equal(heard.at(-1)!.runners[0]!.name, 'bruce');
+  assert.equal(heard.at(-1)!.runners[0]!.name, 'mac-mini');
 
   // One thread renamed: a handful of rows read, not a hundred.
   b.resetReads();
@@ -279,7 +279,7 @@ test('the list counts as heard (for the agent tools) once the rows come, not jus
       return () => undefined;
     },
     key: 'k',
-    runnerId: 'r-m5',
+    runnerId: 'r-laptop',
     home: h.home,
     host: h.runner,
     publish: () => {},
@@ -311,7 +311,7 @@ test('a runner key that may not read the other runners’ threads stops watching
       return () => {};
     },
     key: 'k',
-    runnerId: 'r-bruce',
+    runnerId: 'r-mac-mini',
     home: h.home,
     host: h.runner,
     publish: () => {},
@@ -347,7 +347,7 @@ test("a runner key's archived rows, which a backend before API 54 dropped, go ag
         return null;
       },
       key: 'tbr_k',
-      runnerId: 'r-bruce',
+      runnerId: 'r-mac-mini',
       home: h.home,
       host: h.runner,
       clock: h.clock,
@@ -387,7 +387,7 @@ test("a runner key's archived rows, which a backend before API 54 dropped, go ag
   assert.deepEqual(third.writes.flatMap((w) => w.rows.map((r) => r.threadId)), []);
 });
 
-test("Mike's runner order (API 58) comes with the other runners, and an update says it at once", async () => {
+test("Alex's runner order (API 58) comes with the other runners, and an update says it at once", async () => {
   const h = makeHarness();
   let orderAnswer: ((v: unknown) => void) | undefined;
   const heard: RemoteThreads[] = [];
@@ -401,7 +401,7 @@ test("Mike's runner order (API 58) comes with the other runners, and an update s
       return () => undefined;
     },
     key: 'k',
-    runnerId: 'r-m5',
+    runnerId: 'r-laptop',
     home: h.home,
     host: h.runner,
     publish: (n: Notification) => n.method === 'remoteThreads.updated' && heard.push(n.params),
@@ -413,10 +413,10 @@ test("Mike's runner order (API 58) comes with the other runners, and an update s
   index.start();
   index.list();
   for (let i = 0; i < 5; i++) await tick();
-  orderAnswer!(['r-cloud', 'r-m5']);
-  assert.deepEqual(heard.at(-1)!.order, ['r-cloud', 'r-m5']);
+  orderAnswer!(['r-cloud', 'r-laptop']);
+  assert.deepEqual(heard.at(-1)!.order, ['r-cloud', 'r-laptop']);
   assert.equal(heard.at(-1)!.runners[0]!.id, 'r-cloud', 'the runners stay with it');
-  assert.deepEqual(index.list().order, ['r-cloud', 'r-m5']);
+  assert.deepEqual(index.list().order, ['r-cloud', 'r-laptop']);
   index.stop();
 });
 
@@ -430,7 +430,7 @@ test('an older backend is never asked for the order', async () => {
       return () => undefined;
     },
     key: 'k',
-    runnerId: 'r-m5',
+    runnerId: 'r-laptop',
     home: h.home,
     host: h.runner,
     clock: h.clock,
@@ -451,9 +451,9 @@ test('an older backend is never asked for the order', async () => {
 test('another runner’s row whose id isn’t a thread id’s shape is left out', async () => {
   const { index, heard, remote } = setup();
   index.start();
-  const row = (threadId: string) => ({ runnerId: 'r-bruce', threadId, title: 'x', cwd: '/', accountId: 'a', provider: 'claude', status: 'idle', needsYou: false, unread: false, preview: '', createdAt: 'c', lastActivityAt: 'l' });
+  const row = (threadId: string) => ({ runnerId: 'r-mac-mini', threadId, title: 'x', cwd: '/', accountId: 'a', provider: 'claude', status: 'idle', needsYou: false, unread: false, preview: '', createdAt: 'c', lastActivityAt: 'l' });
   remote({
-    runners: [{ runnerId: 'r-bruce', name: 'bruce', lastSeenAt: 1 }],
+    runners: [{ runnerId: 'r-mac-mini', name: 'mac-mini', lastSeenAt: 1 }],
     threads: [row('remote$(printf TB_ID_EXECUTED >&2)'), row('deadbeef) ![local](/tmp/private.png'), row('../x'), row('0cf430ac-f429-4b2e-9c1d-2f6a8b7c9d0e')],
   });
   assert.deepEqual(heard.at(-1)!.threads.map((t) => t.threadId), ['0cf430ac-f429-4b2e-9c1d-2f6a8b7c9d0e']);

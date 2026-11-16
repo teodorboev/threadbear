@@ -13,9 +13,9 @@ use support::*;
 use threadbear_core::reducer::*;
 
 const LIMIT: &str = "You've hit your 5-hour limit · resets 11:30am (Australia/Perth)";
-const MOVED: &str = "Moved to mike@example.org: mike@example.net hit its 5-hour limit, back at 11:30 am.";
-const MOVED_AGAIN: &str = "Moved to mike@example.com: mike@example.org hit its weekly limit, back at Thu 1 pm.";
-const WAITING: &str = "Every login in Claude is out of room. Carrying on at 11:30 am when mike@example.net is back.";
+const MOVED: &str = "Moved to alex@example.org: alex@example.net hit its 5-hour limit, back at 11:30 am.";
+const MOVED_AGAIN: &str = "Moved to alex@example.com: alex@example.org hit its weekly limit, back at Thu 1 pm.";
+const WAITING: &str = "Every login in Claude is out of room. Carrying on at 11:30 am when alex@example.net is back.";
 
 fn mike(seq: i64, words: &str, turn: &str) -> Event {
     event_turn(seq, "user.message", json!({"text": words, "images": []}), Some(turn))
@@ -191,14 +191,14 @@ fn turning_carry_on_off_shows_under_the_wait() {
 
 #[test]
 fn which_notes_are_a_logins() {
-    for text in [MOVED, MOVED_AGAIN, WAITING, "Won't carry on by itself. Send a message when you want it to.", "Moved to Codex: mike@example.net isn't in Claude.", "Still no room in Claude. Carrying on at 5:00 am.", "mike@example.net hit its usage limit. Carrying on at 6:10 pm when mike@example.net is back."] {
+    for text in [MOVED, MOVED_AGAIN, WAITING, "Won't carry on by itself. Send a message when you want it to.", "Moved to Codex: alex@example.net isn't in Claude.", "Still no room in Claude. Carrying on at 5:00 am.", "alex@example.net hit its usage limit. Carrying on at 6:10 pm when alex@example.net is back."] {
         assert!(RowContent::Note(text.to_owned()).is_login_note(), "{text}");
     }
     // A move to another folder is one Mike (or the agent) asked for.
     for text in [
-        "Moved to /Users/mike/dev/app. The session carries on there.",
-        "Moved to /Users/mike/dev/app on mike@example.org. The session carries on there, with the whole conversation.",
-        "Resumed the session on mike@example.org, with the whole conversation.",
+        "Moved to /Users/alex/dev/app. The session carries on there.",
+        "Moved to /Users/alex/dev/app on alex@example.org. The session carries on there, with the whole conversation.",
+        "Resumed the session on alex@example.org, with the whole conversation.",
         "Put in Threadbear by the librarian.",
         "Woke up after hibernating for 2 days.",
     ] {

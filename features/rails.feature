@@ -46,7 +46,7 @@ Feature: The rails down the window's edges
     Then the activity bar's "Updates" button has the grey dot
     When the runner says its launcher has changed
     Then the activity bar's "Updates" button has the accent dot
-    When the runner says it will reinstall itself once no thread is busy
+    When the runner says it is updating Threadbear Runner by itself
     Then the activity bar's "Updates" button has the grey dot
 
   @rail.right

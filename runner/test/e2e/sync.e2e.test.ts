@@ -1,6 +1,6 @@
 // The Convex mirror against a real deployment: the repo's local one, named
 // in .env.e2e at the repo root (gitignored; `npx convex deployment create
-// mikec:threadbear:local --select` writes .env.local, which is then copied
+// alexc:threadbear:local --select` writes .env.local, which is then copied
 // to .env.e2e so the Sydney dev deployment can stay selected for everyday
 // work). Every convex command here passes `--env-file .env.e2e`, so
 // nothing touches the Sydney project. Starts `npx convex dev` for the local
@@ -140,7 +140,7 @@ describe('convex mirror e2e', { skip: LOCAL ? false : 'no local Convex deploymen
   // Step 6 (docs/protocol.md, Schedules, "Runners"): with an API 9 backend
   // the runner moves its schedules into the table, makes them there, takes
   // each due run with a claim, runs what another runner asked for, and can
-  // put one on another runner (here a pretend "bruce" that only heartbeats).
+  // put one on another runner (here a pretend "mac-mini" that only heartbeats).
   test('schedules live in the backend: made there, claimed when due, run on request, made for another runner', async () => {
     const runnerId = readRunnerJson(home).sync?.runnerId;
     const owned = async () => (await api('query', 'sync:schedules', { key })) as any[];
@@ -167,17 +167,17 @@ describe('convex mirror e2e', { skip: LOCAL ? false : 'no local Convex deploymen
     assert.equal(listed.runnerName, 'E2E Mac');
 
     // Another runner, as the backend knows it.
-    await api('mutation', 'sync:heartbeat', { key, runner: { runnerId: 'e2e-bruce', name: 'bruce', version: 'x', startedAt: new Date().toISOString(), draining: false, threadCount: 0 } });
+    await api('mutation', 'sync:heartbeat', { key, runner: { runnerId: 'e2e-mac-mini', name: 'mac-mini', version: 'x', startedAt: new Date().toISOString(), draining: false, threadCount: 0 } });
     // The local deployment keeps the runners of earlier runs (said goodbye,
     // so not offered); this one is first.
     const runners = ((await client.call('runners.list')) as any).runners;
     assert.deepEqual([runners[0].name, runners[0].self], ['E2E Mac', true]);
-    assert.ok(runners.some((r: any) => r.id === 'e2e-bruce' && r.name === 'bruce' && r.online && !r.self), JSON.stringify(runners));
-    const away = ((await client.call('schedules.create', { text: 'On Bruce', cron: '@hourly', runnerId: 'bruce' })) as any).schedule;
-    assert.equal(away.runnerId, 'e2e-bruce');
-    assert.equal(away.runnerName, 'bruce');
-    assert.equal((await until('bruce\'s row', () => row(away.id))).cwd, undefined, "bruce's default folder");
-    // Run now on bruce's: asked for, not run here.
+    assert.ok(runners.some((r: any) => r.id === 'e2e-mac-mini' && r.name === 'mac-mini' && r.online && !r.self), JSON.stringify(runners));
+    const away = ((await client.call('schedules.create', { text: 'On Mac mini', cron: '@hourly', runnerId: 'mac-mini' })) as any).schedule;
+    assert.equal(away.runnerId, 'e2e-mac-mini');
+    assert.equal(away.runnerName, 'mac-mini');
+    assert.equal((await until('mac-mini\'s row', () => row(away.id))).cwd, undefined, "mac-mini's default folder");
+    // Run now on mac-mini's: asked for, not run here.
     const asked = (await client.call('schedules.run', { scheduleId: away.id })) as any;
     assert.equal(asked.queued, true);
     assert.ok((await row(away.id)).runRequestedAt);
@@ -208,8 +208,8 @@ describe('convex mirror e2e', { skip: LOCAL ? false : 'no local Convex deploymen
     for (const t of started) await client.call('threads.delete', { threadId: t.id });
     const saidOnDisk = JSON.parse(fs.readFileSync(path.join(home, 'schedules.json'), 'utf8'));
     assert.equal(saidOnDisk.version, 2, 'the file is the backend copy');
-    // Bruce goes, so the phone's main runner online is this one again.
-    await api('mutation', 'sync:bye', { key, runnerId: 'e2e-bruce' });
+    // Mac mini goes, so the phone's main runner online is this one again.
+    await api('mutation', 'sync:bye', { key, runnerId: 'e2e-mac-mini' });
   });
 
   // Step 6 part 2 (docs/protocol.md, "Other runners' threads"): the runner
@@ -452,7 +452,7 @@ describe('convex mirror e2e', { skip: LOCAL ? false : 'no local Convex deploymen
   test('scrubbing: the backend checks what an old runner sends, and scrub-stored rewrites old rows', async () => {
     const secret = `sk-${'e2e1'.repeat(12)}`;
     const threadId = `scrub-${crypto.randomBytes(4).toString('hex')}`;
-    const { token } = (await api('mutation', 'sync:issueToken', { key, kind: 'phone', name: 'scrub-e2e' })) as { token: string };
+    const { token } = (await api('mutation', 'sync:issueToken', { key, kind: 'browser', name: 'scrub-e2e' })) as { token: string };
     const runnerId = readRunnerJson(home).sync?.runnerId;
     const at = new Date().toISOString();
     await api('mutation', 'sync:upsertThreads', {
@@ -700,7 +700,7 @@ describe('convex mirror e2e', { skip: LOCAL ? false : 'no local Convex deploymen
     await client.call('threads.delete', { threadId: createdOutcome.threadId });
     // With no runner named, a new thread goes to the runner with the most
     // threads, even when a spare Mac heartbeat last: a phone thread once went
-    // to Bruce, which has none of Mike's repos and no printer.
+    // to Mac mini, which has none of Alex's repos and no printer.
     const beat = (id: string, threadCount: number) => api('mutation', 'sync:heartbeat', { key, runner: { runnerId: id, name: id, version: 'x', startedAt: new Date().toISOString(), draining: false, threadCount } });
     await beat('e2e-main', 100_000);
     await beat('e2e-spare', 0);

@@ -1,7 +1,7 @@
 {
   "id": "demo_tidy_imports",
   "title": "Tidy the imports in the uploader",
-  "cwd": "/Users/mike/dev/me/misc",
+  "cwd": "/Users/alex/code/misc",
   "accountId": "claude-main",
   "provider": "claude",
   "permissionMode": "full",

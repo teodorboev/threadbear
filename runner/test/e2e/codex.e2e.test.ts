@@ -3,7 +3,7 @@
 // with gpt-6-luna at low effort, tiny prompts and temp working folders.
 // Run with `./check.sh --e2e` (TB_E2E_SKIP_CODEX=1 skips it).
 //
-// It uses Mike's real ~/.codex, since the login lives there, so codexArgs
+// It uses Alex's real ~/.codex, since the login lives there, so codexArgs
 // switch off everything that writes to that home or starts work by itself
 // (memories, chronicle, goals and his six MCP servers). Every Codex thread
 // it makes is deleted afterwards with thread/delete, with its
@@ -29,7 +29,7 @@ const IMAGEGEN = process.env.TB_E2E_CODEX_IMAGEGEN === '1';
 const IDLE_MS = 8000;
 const RUNNER_DIR = path.join(import.meta.dirname, '..', '..');
 const CODEX_HOME = path.join(os.homedir(), '.codex');
-// Mike's MCP servers, by their config.toml table keys.
+// Alex's MCP servers, by their config.toml table keys.
 const MCP_SERVERS = ['openaiDeveloperDocs', 'node_repl', 'computer-use', 'paper', 'agent-archive', 'connectors'];
 const CODEX_ARGS = [
   '--disable', 'memories',

@@ -44,7 +44,10 @@
 # themselves. The Swift Mac app is frozen (scripts/swift-freeze.sh), so its
 # build and tests only run when something in app/ or dock/ it builds from
 # changed: not the parts the GPUI app uses (the mock runner, fixtures, art),
-# whose own checks are the desktop app's. BearDock's tests only run when
+# whose own checks are the desktop app's. Except that a change to the mock
+# runner, or to the Swift tests that read it, runs just those tests
+# (swift test --filter, swift-freeze.sh --mock-tests), --quick included,
+# so it needs a Mac. BearDock's tests only run when
 # dock/ changed (the app's own build and tests cover how it uses it). The iPhone app's ThreadbearKit
 # tests run with any of the options when ios/ changed, or a Mac app file
 # ThreadbearKit links to (IOS_NEEDS, below), --quick included, so
@@ -491,6 +494,30 @@ if [ "$QUICK" = 1 ] && [ "$RUNNER_ONLY" = 0 ]; then
     step "app release build" "$ROOT/app" "${LIMITED[@]}" swift build -c release --product Threadbear --disable-keychain
   else
     skip "app release build" "the Swift app is frozen and nothing it builds changed"
+  fi
+fi
+# The Swift tests that read the mock runner the GPUI app shares, by
+# themselves, --quick included, when the mock or they changed: the mock's
+# demo data was renamed on 15 Nov and three MockRunnerTests broke on main,
+# as nothing here ran them (the mock counts as GPUI-shared, so it doesn't
+# build the Swift app). The full check's own app tests cover them when it
+# runs those. Not on main with nothing changed, as swift_needed.
+read -r -d '' SWIFT_MOCK_NEEDS SWIFT_MOCK_FILTER < <("$ROOT/scripts/swift-freeze.sh" --mock-tests 2>/dev/null; printf '\0')
+if [ "$RUNNER_ONLY" = 0 ] && [ -n "$SWIFT_MOCK_NEEDS" ] && [ -n "$SWIFT_MOCK_FILTER" ] \
+  && ! { [ "$QUICK" = 0 ] && swift_needed; } \
+  && { [ "$ALL" = 1 ] || printf '%s\n' "$CHANGED" | grep -E "$SWIFT_MOCK_NEEDS" >/dev/null; }; then
+  # --e2e runs on the Mac someone's working on, for its claude login, and a
+  # test target's first build is minutes of Swift: leave these to the check
+  # that lands it (Codex's review, 15 Nov). With no check host at all
+  # (FALLBACK) they still run here, as the app's release build does, rather
+  # than let a mock change land unchecked.
+  if [ "$E2E" = 1 ] && [ "$FALLBACK" != 1 ]; then
+    skip "app mock tests" "--e2e runs on this Mac; ./check.sh --quick runs them on a check host"
+  else
+  if [ ! -d "$ROOT/app/Tools/mock-runner/node_modules" ]; then
+    step "mock runner packages" "$ROOT/app/Tools/mock-runner" npm ci --no-audit --no-fund
+  fi
+  swift_test_step "app mock tests" "$ROOT/app" env THREADBEAR_REQUIRE_MOCK=1 "${LIMITED[@]}" swift test --disable-keychain --filter "$SWIFT_MOCK_FILTER"
   fi
 fi
 if [ "$QUICK" = 0 ] && ! swift_needed; then

@@ -20,7 +20,7 @@ import Testing
         let backend = ConvexBackend(transport: transport, token: "tb_x")
         let at = Date(timeIntervalSince1970: 1_800_000_000)
         let id = try await backend.quickAsk(.init(question: "Which drive?", answer: "CannMedia.",
-                                                  sources: [.init(title: "Bruce move", url: "https://a/b")], askedAt: at))
+                                                  sources: [.init(title: "Mac mini move", url: "https://a/b")], askedAt: at))
         #expect(id == "cmd_1")
         let (name, args) = try #require(transport.calls.withLock { $0.first })
         #expect(name == "phone:quickAsk")
@@ -28,7 +28,7 @@ import Testing
         #expect(args["question"] == .string("Which drive?"))
         #expect(args["answer"] == .string("CannMedia."))
         #expect(args["askedAt"] == .number(1_800_000_000_000))
-        #expect(args["sources"] == .array([.object(["title": .string("Bruce move"), "url": .string("https://a/b")])]))
+        #expect(args["sources"] == .array([.object(["title": .string("Mac mini move"), "url": .string("https://a/b")])]))
     }
 
     @Test func fakeMakesAThreadWithTheExchange() async throws {

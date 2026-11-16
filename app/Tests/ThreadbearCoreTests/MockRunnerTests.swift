@@ -335,7 +335,7 @@ final class MockRunnerTests: XCTestCase {
     }
 
     /// Schedules on another runner, as the mock plays them: runners.list with
-    /// this runner and bruce, a schedule made for bruce by name keeping its
+    /// this runner and mac-mini, a schedule made for mac-mini by name keeping its
     /// folder as typed, Run now on it queued with no thread, a thread's
     /// schedule refused a runner, and an old runner's -32601.
     func testSchedulesOnAnotherRunner() async throws {
@@ -343,32 +343,32 @@ final class MockRunnerTests: XCTestCase {
         defer { client.close() }
         _ = try await client.hello(version: "test")
         let runners = try await client.listRunners()
-        XCTAssertEqual(runners.map(\.name), ["m5", "bruce"])
+        XCTAssertEqual(runners.map(\.name), ["laptop", "mac-mini"])
         XCTAssertEqual(runners.map(\.isSelf), [true, false])
         XCTAssertTrue(runners[1].online)
-        let me = runners[0], bruce = runners[1]
+        let me = runners[0], mini = runners[1]
 
         let list = try await client.listSchedules()
-        XCTAssertTrue(list.contains { $0.runsElsewhere(than: me.id) }, "the demo has a schedule on bruce")
-        XCTAssertTrue(list.contains { $0.runRequestedAt != nil }, "and one waiting for bruce")
+        XCTAssertTrue(list.contains { $0.runsElsewhere(than: me.id) }, "the demo has a schedule on mac-mini")
+        XCTAssertTrue(list.contains { $0.runRequestedAt != nil }, "and one waiting for mac-mini")
         XCTAssertTrue(list.contains { $0.runnerId == me.id }, "this runner's own carry its id too")
 
-        let made = try await client.createSchedule(NewScheduleRequest(text: "Check the drive.", when: .cron("0 7 * * *"), cwd: "/Volumes/Bruce/x", runnerId: "bruce"))
-        XCTAssertEqual(made.runnerId, bruce.id)
-        XCTAssertEqual(made.runnerName, "bruce")
-        XCTAssertEqual(made.cwd, "/Volumes/Bruce/x", "a path on bruce, kept as typed")
-        XCTAssertNil(made.accountId, "left to bruce's default")
-        let noFolder = try await client.createSchedule(NewScheduleRequest(text: "Default folder.", when: .cron("0 7 * * *"), runnerId: bruce.id))
-        XCTAssertNil(noFolder.cwd, "no folder means bruce's default")
+        let made = try await client.createSchedule(NewScheduleRequest(text: "Check the drive.", when: .cron("0 7 * * *"), cwd: "/Volumes/Media/x", runnerId: "mac-mini"))
+        XCTAssertEqual(made.runnerId, mini.id)
+        XCTAssertEqual(made.runnerName, "mac-mini")
+        XCTAssertEqual(made.cwd, "/Volumes/Media/x", "a path on mac-mini, kept as typed")
+        XCTAssertNil(made.accountId, "left to mac-mini's default")
+        let noFolder = try await client.createSchedule(NewScheduleRequest(text: "Default folder.", when: .cron("0 7 * * *"), runnerId: mini.id))
+        XCTAssertNil(noFolder.cwd, "no folder means mac-mini's default")
 
         let run = try await client.runSchedule(made.id)
         XCTAssertTrue(run.queued)
         XCTAssertNil(run.threadId)
         XCTAssertNotNil(run.schedule.runRequestedAt)
-        XCTAssertEqual(run.schedule.runs, 0, "bruce hasn't run it yet")
+        XCTAssertEqual(run.schedule.runs, 0, "mac-mini hasn't run it yet")
 
         do {
-            let params: [String: JSONValue] = ["text": .string("x"), "cron": .string("0 7 * * *"), "threadId": .string("demo_settings_tabs"), "runnerId": .string("bruce")]
+            let params: [String: JSONValue] = ["text": .string("x"), "cron": .string("0 7 * * *"), "threadId": .string("demo_settings_tabs"), "runnerId": .string("mac-mini")]
             _ = try await client.call("schedules.create", .object(params), as: JSONValue.self)
             XCTFail("a thread's schedule has no runner choice")
         } catch RPCError.server(let code, _) {
@@ -445,16 +445,16 @@ final class MockRunnerTests: XCTestCase {
         let client = try await connect()
         defer { client.close() }
         let hello = try await client.hello(version: "test")
-        XCTAssertEqual(hello.pools?.map(\.id), ["claude", "convex", "codex", "side-projects", "evenings"])
+        XCTAssertEqual(hello.pools?.map(\.id), ["claude", "work", "codex", "personal", "weekends"])
         XCTAssertEqual(hello.defaults.poolId, "claude")
-        let created = try await client.createThread(NewThreadRequest(text: "hi", poolId: "side-projects", model: "opus"))
-        XCTAssertEqual(created.poolId, "side-projects")
+        let created = try await client.createThread(NewThreadRequest(text: "hi", poolId: "personal", model: "opus"))
+        XCTAssertEqual(created.poolId, "personal")
         XCTAssertEqual(created.accountId, "claude-3", "the named model's provider")
         let pinned = try await client.updateThread(created.id, ThreadUpdate(poolId: .some(nil)))
         XCTAssertNil(pinned.poolId)
         XCTAssertEqual(pinned.accountId, "claude-3")
-        let moved = try await client.updateThread(created.id, ThreadUpdate(poolId: "convex"))
-        XCTAssertEqual(moved.poolId, "convex")
+        let moved = try await client.updateThread(created.id, ThreadUpdate(poolId: "work"))
+        XCTAssertEqual(moved.poolId, "work")
         XCTAssertEqual(moved.accountId, "claude-2", "onto one of the pool's logins")
         let byLogin = try await client.updateThread(created.id, ThreadUpdate(accountId: "claude-main"))
         XCTAssertNil(byLogin.poolId, "naming a login pins")
@@ -505,27 +505,27 @@ final class MockRunnerTests: XCTestCase {
     }
 
     /// Other runners' threads: listed by this runner, and read through it
-    /// (the mock plays bruce's side of the backend), as the app does it.
+    /// (the mock plays mac-mini's side of the backend), as the app does it.
     func testRemoteThreadsOpenThroughThisRunner() async throws {
         let client = try await connect()
         defer { client.close() }
         _ = try await client.hello(version: "test")
         let remote = try await client.remoteThreads()
-        let bruce = try XCTUnwrap(remote.runners.first)
-        XCTAssertEqual(bruce.name, "bruce")
-        XCTAssertEqual(bruce.icon, "macmini")
-        XCTAssertTrue(bruce.online)
-        XCTAssertEqual(Set(remote.threads.map(\.threadId)), ["bruce_backup", "bruce_media", "bruce_render"])
-        XCTAssertTrue(remote.threads.allSatisfy { $0.runnerId == bruce.id })
-        XCTAssertEqual(remote.threads.first { $0.threadId == "bruce_backup" }?.unread, true)
-        XCTAssertEqual(remote.threads.first { $0.threadId == "bruce_render" }?.status, .running)
+        let mini = try XCTUnwrap(remote.runners.first)
+        XCTAssertEqual(mini.name, "mac-mini")
+        XCTAssertEqual(mini.icon, "macmini")
+        XCTAssertTrue(mini.online)
+        XCTAssertEqual(Set(remote.threads.map(\.threadId)), ["mini_backup", "mini_media", "mini_render"])
+        XCTAssertTrue(remote.threads.allSatisfy { $0.runnerId == mini.id })
+        XCTAssertEqual(remote.threads.first { $0.threadId == "mini_backup" }?.unread, true)
+        XCTAssertEqual(remote.threads.first { $0.threadId == "mini_render" }?.status, .running)
 
         // Not this runner's to list...
         let own = try await client.listThreads(include: [.inbox, .snoozed, .archived])
-        XCTAssertFalse(own.contains { $0.id.hasPrefix("bruce_") })
+        XCTAssertFalse(own.contains { $0.id.hasPrefix("mini_") })
         // ...but it answers for them through the backend, the app's only
         // way in (docs/protocol.md, "Other runners' threads through the backend").
-        let relayed = try await client.events(threadId: "bruce_backup")
+        let relayed = try await client.events(threadId: "mini_backup")
         XCTAssertFalse(relayed.events.isEmpty)
         // A thread nobody has is still not found.
         do {

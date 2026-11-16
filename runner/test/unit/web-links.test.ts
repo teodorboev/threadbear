@@ -55,7 +55,7 @@ test('a work link finds its step in its own turn', () => {
   assert.equal(findStep('Run the tests', 9, rows), 5);
   assert.equal(findStep('Run the tests', 3, rows), 2);
   assert.equal(findStep('risky part', 9, rows), 6);
-  assert.equal(findStep('/Users/mike/dev/a.tsx', 9, rows), 8);
+  assert.equal(findStep('/Users/alex/dev/a.tsx', 9, rows), 8);
 });
 
 test('words found nowhere in the turn find nothing', () => {

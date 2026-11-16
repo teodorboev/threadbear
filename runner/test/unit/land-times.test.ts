@@ -34,7 +34,7 @@ const entries = (log: string) => fs.readFileSync(log, 'utf8').trim().split('\n')
 
 test('parseCheckTimes reads check.sh lines: host, copy, steps, skips and a step that needed a second run', () => {
   const text = [
-    'Checking on tinker-desk (copied in 2s; THREADBEAR_CHECK_HOST= ./check.sh --local runs here)',
+    'Checking on build-box (copied in 2s; THREADBEAR_CHECK_HOST= ./check.sh --local runs here)',
     'ok    runner typecheck        1s',
     'ok    runner unit tests     304s  (passed on a second run of the files that failed:)',
     '        ✖ a test that needed it (6622.234ms)',
@@ -42,7 +42,7 @@ test('parseCheckTimes reads check.sh lines: host, copy, steps, skips and a step 
     'skip  app release build    (nothing in app/ or dock/ changed; --all runs it)',
   ].join('\n');
   assert.deepEqual(parseCheckTimes(text), {
-    host: 'tinker-desk',
+    host: 'build-box',
     copySeconds: 2,
     steps: [
       { name: 'runner typecheck', status: 'ok', seconds: 1 },
@@ -57,7 +57,7 @@ test('parseCheckTimes reads check.sh lines: host, copy, steps, skips and a step 
 // passedLandCheck), so steps from a host that dropped out, or run here
 // after none could take it, mustn't be logged as a host's.
 test('parseCheckTimes: the host and steps are the last run\'s, and a run that fell back to this Mac has no host', () => {
-  const dropped = ['Checking on tinker-desk (copied in 2s; x)', 'ok    runner typecheck        1s', 'FAIL  runner unit tests      9s  /x.log'];
+  const dropped = ['Checking on build-box (copied in 2s; x)', 'ok    runner typecheck        1s', 'FAIL  runner unit tests      9s  /x.log'];
   assert.deepEqual(parseCheckTimes([...dropped, 'Checking on cloud (its copy is already there)', 'ok    runner typecheck        2s', 'ok    runner unit tests    300s'].join('\n')), {
     host: 'cloud',
     steps: [{ name: 'runner typecheck', status: 'ok', seconds: 2 }, { name: 'runner unit tests', status: 'ok', seconds: 300 }],

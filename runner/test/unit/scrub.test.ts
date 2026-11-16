@@ -150,7 +150,7 @@ test('a home folder and external volumes are not looked through', async () => {
   files(home, { '.env': `A_SECRET=${value}\n` });
   const known = new KnownValues({ env: {}, home });
   known.noteFolder(home);
-  known.noteFolder('/Volumes/CannMedia/thing');
+  known.noteFolder('/Volumes/MediaDrive/thing');
   known.noteFolder('relative/path');
   await known.settled();
   assert.equal(known.count, 0);

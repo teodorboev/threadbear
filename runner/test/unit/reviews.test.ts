@@ -254,7 +254,7 @@ test('a reply whose session.send fails is recovered after restart', async () => 
   assert.deepEqual(again.store.load(thread.id)?.reviewDeliveries,[review.id]);
 });
 
-test('a message from Mike supersedes open reviews; runner, schedule and agent messages do not', () => {
+test('a message from Alex supersedes open reviews; runner, schedule and agent messages do not', () => {
   const {h,thread,input}=fixture();
   const {review}=h.runner.createReview(thread.id,input);
   h.adapter.last.result();

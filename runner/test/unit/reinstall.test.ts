@@ -1,6 +1,6 @@
-// The runner reinstalling its own LaunchAgent (src/reinstall.ts): when it
-// starts install-runner.sh, what the Updates panel is told, and what it
-// does with the script's exit.
+// The runner updating its own LaunchAgent (src/reinstall.ts): when it
+// starts install-runner.sh --stage, what the Updates panel is told, and
+// what it does with the script's exit.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -9,16 +9,17 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { FakeClock } from '../../src/clock.ts';
 import { nullLogger } from '../../src/log.ts';
-import { BUSY_EXIT, RUNNING_LIMIT_MS, Reinstaller, installArgs, jobEnv, jobLabel, jobPlist, launcherKey, reinstallDir, reinstallLogPath, type JobSpec } from '../../src/reinstall.ts';
+import { RUNNING_LIMIT_MS, RUNS_NODE_REASON, Reinstaller, installArgs, jobEnv, jobLabel, jobPlist, launcherKey, reinstallDir, reinstallLogPath, type JobSpec } from '../../src/reinstall.ts';
 
-type Setup = { behind?: { reason: string; key: string }; idle?: boolean; auto?: boolean; spawnError?: string; alive?: boolean | undefined };
+type Setup = { behind?: { reason: string; key: string }; auto?: boolean; spawnError?: string; alive?: boolean | undefined };
 
 function setup(s: Setup = {}) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'tb-reinstall-'));
   const clock = new FakeClock();
-  const state = { behind: s.behind ?? { reason: "Threadbear Runner.app was built from older launcher sources than main's.", key: 'k1' } as { reason: string; key: string } | undefined, idle: s.idle ?? true, auto: s.auto ?? false, alive: ('alive' in s ? s.alive : true) as boolean | undefined };
+  const state = { behind: s.behind ?? { reason: "Threadbear Runner.app was built from older launcher sources than main's.", key: 'k1' } as { reason: string; key: string } | undefined, auto: s.auto ?? false, alive: ('alive' in s ? s.alive : true) as boolean | undefined };
   const jobs: JobSpec[] = [];
   let changes = 0;
+  let rechecks = 0;
   const make = () =>
     new Reinstaller({
       home,
@@ -26,9 +27,9 @@ function setup(s: Setup = {}) {
       clock,
       log: nullLogger,
       behind: () => state.behind,
-      idle: () => state.idle,
       auto: () => state.auto,
       onChange: () => changes++,
+      recheck: () => rechecks++,
       env: { HOME: '/Users/me', PATH: '/usr/bin:/bin', XPC_SERVICE_NAME: 'com.mikerosoft.threadbear.runner', THREADBEAR_THREAD_ID: 'nope', THREADBEAR_HOME: '/elsewhere' },
       platform: 'darwin',
       // The job is going until it writes its result (finish below).
@@ -43,71 +44,76 @@ function setup(s: Setup = {}) {
     fs.appendFileSync(reinstallLogPath(home), `${said}\n`);
     fs.writeFileSync(path.join(reinstallDir(home), 'result'), `${code}\n`);
   };
-  return { home, clock, state, jobs, make, finish, changes: () => changes };
+  return { home, clock, state, jobs, make, finish, changes: () => changes, rechecks: () => rechecks };
 }
 
-test('without the experiment, nothing starts until Reinstall now; the panel shows the button', () => {
+test('without the experiment, nothing starts until Update it; then it stages straight away, busy threads or not', () => {
   const t = setup();
   const r = t.make();
   r.consider();
   assert.equal(t.jobs.length, 0);
-  assert.equal(r.status(), undefined, 'no reinstall field: the app offers Reinstall now');
+  assert.equal(r.status(), undefined, 'no reinstall field: the app offers Update it');
   const s = r.request();
   assert.equal(t.jobs.length, 1);
   assert.equal(s?.state, 'running');
   assert.equal(t.jobs[0].label, 'com.mikerosoft.threadbear.runner.reinstall');
   assert.equal(t.jobs[0].args[0], '/Users/me/dev/threadbear/runner/scripts/install-runner.sh');
+  assert.equal(t.jobs[0].args.at(-1), '--stage', 'stages: stops nothing, so it never waits for an idle moment');
 });
 
-test('Reinstall now with a thread busy waits, then starts once nothing is', () => {
-  const t = setup({ idle: false });
+test('with the experiment on, it stages by itself as soon as main is ahead', () => {
+  const t = setup({ auto: true });
   const r = t.make();
-  assert.equal(r.request()?.state, 'waiting');
-  assert.equal(t.jobs.length, 0);
-  t.clock.advance(60_000);
-  assert.equal(t.jobs.length, 0, 'still busy');
-  t.state.idle = true;
-  t.clock.advance(60_000);
+  r.consider();
   assert.equal(t.jobs.length, 1);
   assert.equal(r.status()?.state, 'running');
 });
 
-test('with the experiment on, it starts by itself once idle, and says it will before then', () => {
-  const t = setup({ auto: true, idle: false });
+test('staged: when what it checks is up to date the line goes; when the running job is still behind it says it waits for a restart', () => {
+  const t = setup({ auto: true });
   const r = t.make();
   r.consider();
-  assert.deepEqual(r.status(), { state: 'waiting', auto: true });
-  t.state.idle = true;
-  t.clock.advance(60_000);
+  t.finish(0, 'Staged com.mikerosoft.threadbear.runner');
+  // The app rebuilt in place: main's launcher matches it now, which the
+  // updater is asked to look at straight away rather than at its next check.
+  t.state.behind = undefined;
+  t.clock.advance(5_000);
+  assert.equal(t.rechecks(), 1);
+  assert.equal(r.status(), undefined);
+  const saved = JSON.parse(fs.readFileSync(path.join(reinstallDir(t.home), 'state.json'), 'utf8'));
+  assert.equal(saved.finished.code, 0);
+  // Something only launchd starting the job again fixes (a plist that
+  // still runs node): staged, not failed, and not tried again.
+  t.state.behind = { reason: RUNS_NODE_REASON, key: 'k1' };
+  r.consider();
+  assert.deepEqual(r.status(), { state: 'staged', logFile: reinstallLogPath(t.home) });
+  t.clock.advance(60 * 60_000);
+  r.consider();
   assert.equal(t.jobs.length, 1);
 });
 
-test('a success clears it; the runner it started reads the result after coming up', () => {
+test("finished, but the files on disk are still behind (it staged from a checkout that isn't at main): a failure, not staged", () => {
   const t = setup({ auto: true });
-  t.make().consider();
-  assert.equal(t.jobs.length, 1);
-  // The old runner is stopped by the script. The new one starts with no
-  // updater check yet (behind unknown) and the job still waiting on it.
-  t.state.behind = undefined;
-  const next = t.make();
-  next.consider();
-  assert.equal(next.status(), undefined);
-  t.finish(0, 'Installed com.mikerosoft.threadbear.runner');
+  const r = t.make();
+  r.consider();
+  t.finish(0);
   t.clock.advance(5_000);
-  const saved = JSON.parse(fs.readFileSync(path.join(reinstallDir(t.home), 'state.json'), 'utf8'));
-  assert.equal(saved.finished.code, 0);
-  assert.equal(t.jobs.length, 1, 'not started again');
+  const s = r.status();
+  assert.equal(s?.state, 'failed');
+  assert.match(s?.reason ?? '', /^It finished, but this is still so: Threadbear Runner\.app was built/);
+  r.consider();
+  assert.equal(t.jobs.length, 1, 'not tried over and over');
 });
 
 test('a failure shows why, is not retried by itself for the same main, and Try again runs it once more', () => {
   const t = setup({ auto: true });
   const r = t.make();
   r.consider();
-  t.finish(1, "The old plist didn't load either.\nBack as it was. The log above says what went wrong; fix it and run this again.");
+  t.finish(1, "launch.mjs doesn't load, so nothing was changed.");
   t.clock.advance(5_000);
   const s = r.status();
   assert.equal(s?.state, 'failed');
-  assert.match(s?.reason ?? '', /Back as it was/);
+  assert.match(s?.reason ?? '', /doesn't load/);
   assert.equal(s?.logFile, reinstallLogPath(t.home));
   t.clock.advance(10 * 60_000);
   r.consider();
@@ -127,30 +133,6 @@ test('a failure shows why, is not retried by itself for the same main, and Try a
   assert.equal(r.status()?.state, 'failed', 'a failed Try again is not tried over and over');
   t.clock.advance(10 * 60_000);
   assert.equal(t.jobs.length, 3);
-});
-
-test('busy by the time the script checked: waits and goes again, not a failure', () => {
-  const t = setup();
-  const r = t.make();
-  r.request();
-  t.state.idle = false;
-  t.finish(BUSY_EXIT, "Not replacing the running com.mikerosoft.threadbear.runner while threads are busy: they'd be cut short.");
-  t.clock.advance(5_000);
-  assert.equal(r.status()?.state, 'waiting');
-  t.state.idle = true;
-  t.clock.advance(60_000);
-  assert.equal(t.jobs.length, 2);
-});
-
-test('finished but still behind is a failure, saying what is still behind', () => {
-  const t = setup();
-  const r = t.make();
-  r.request();
-  t.finish(0);
-  t.clock.advance(5_000);
-  const s = r.status();
-  assert.equal(s?.state, 'failed');
-  assert.match(s?.reason ?? '', /^install-runner\.sh finished, but threadbear Runner\.app was built/i);
 });
 
 test('a job still going stays running however long it takes; one that died without a result fails', () => {
@@ -199,9 +181,9 @@ test('nothing to do when the LaunchAgent is up to date, or the runner runs from 
 
 test("the job's arguments and environment: a sandbox names its home and label; nothing of a thread's goes in", () => {
   const env = { HOME: '/Users/me', PATH: '/usr/bin', XPC_SERVICE_NAME: 'com.mikerosoft.threadbear.runner', THREADBEAR_RUNNER_APP: '/Users/me/Applications/Threadbear Runner.app', THREADBEAR_THREAD_ID: 't', THREADBEAR_HOME: '/x', THREADBEAR_RUNNER_HOME: '/y' };
-  assert.deepEqual(installArgs('/c', '/Users/me/Library/Application Support/Threadbear', env, 'darwin'), ['/c/runner/scripts/install-runner.sh', '--runner-app', '/Users/me/Applications/Threadbear Runner.app']);
+  assert.deepEqual(installArgs('/c', '/Users/me/Library/Application Support/Threadbear', env, 'darwin'), ['/c/runner/scripts/install-runner.sh', '--runner-app', '/Users/me/Applications/Threadbear Runner.app', '--stage']);
   const sandbox = { ...env, XPC_SERVICE_NAME: 'com.mikerosoft.threadbear.runner.devtest', THREADBEAR_PORT: '0' };
-  assert.deepEqual(installArgs('/c', '/tmp/sb', sandbox, 'darwin'), ['/c/runner/scripts/install-runner.sh', '--home', '/tmp/sb', '--label', 'com.mikerosoft.threadbear.runner.devtest', '--runner-app', '/Users/me/Applications/Threadbear Runner.app', '--port', '0']);
+  assert.deepEqual(installArgs('/c', '/tmp/sb', sandbox, 'darwin'), ['/c/runner/scripts/install-runner.sh', '--home', '/tmp/sb', '--label', 'com.mikerosoft.threadbear.runner.devtest', '--runner-app', '/Users/me/Applications/Threadbear Runner.app', '--port', '0', '--stage']);
   assert.equal(jobLabel({ XPC_SERVICE_NAME: '0' }, 'darwin'), 'com.mikerosoft.threadbear.runner', 'a process launchd didn\'t start');
   assert.equal(jobLabel({ XPC_SERVICE_NAME: 'x.y' }, 'linux', () => ''), 'com.mikerosoft.threadbear.runner');
   // Linux: the unit it runs in, so a custom --label goes with its --home.

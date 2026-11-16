@@ -31,23 +31,23 @@ test("a description that came over the relay keeps only what it should, or none 
 test("the target's preview gives its guess and its logins, and says what would stop the move before it starts", async () => {
   const t = makeHarness(tmpDir('tb-preview-home-'), {}, {
     accounts: new FakeAccounts([
-      { id: 'claude-1', provider: 'claude', title: 'Claude', configDir: tmpDir(), email: 'mike@example.com' },
+      { id: 'claude-1', provider: 'claude', title: 'Claude', configDir: tmpDir(), email: 'alex@example.com' },
       { id: 'claude-2', provider: 'claude', title: 'Claude 2', configDir: tmpDir() },
       { id: 'codex-1', provider: 'codex', title: 'Codex', configDir: tmpDir() },
     ]),
   });
-  const base = { title: 'x', home: '/Users/mike', accountId: 'a', permissionMode: 'full', schedules: 0, provider: 'claude' };
+  const base = { title: 'x', home: '/Users/alex', accountId: 'a', permissionMode: 'full', schedules: 0, provider: 'claude' };
 
   // A folder that's there: its guess, the same email's login, and only Claude logins to pick.
   const folder = tmpDir('tb-preview-folder-');
-  const ok = await t.runner.previewMove({ info: { ...base, cwd: folder, email: 'Mike@example.com', worktree: false }, self: 'T1', cwd: folder });
+  const ok = await t.runner.previewMove({ info: { ...base, cwd: folder, email: 'Alex@example.com', worktree: false }, self: 'T1', cwd: folder });
   assert.deepEqual(ok.problems, []);
   assert.equal(ok.cwd, folder);
   assert.equal(ok.accountId, 'claude-1');
   assert.deepEqual(ok.accounts.map((a) => a.id), ['claude-1', 'claude-2']);
 
   // Nowhere to go: the problem, and still the logins.
-  const none = await t.runner.previewMove({ info: { ...base, cwd: '/Users/mike/nowhere-at-all', worktree: false }, self: 'T1' });
+  const none = await t.runner.previewMove({ info: { ...base, cwd: '/Users/alex/nowhere-at-all', worktree: false }, self: 'T1' });
   assert.equal(none.problems.length, 1);
   assert.match(none.problems[0]!, /There's no folder/);
   assert.equal(none.accounts.length, 2);
@@ -56,8 +56,8 @@ test("the target's preview gives its guess and its logins, and says what would s
   // not after the thread has frozen and packed.
   const repo = tmpDir('tb-preview-repo-');
   execFileSync('git', ['-C', repo, 'init', '-q']);
-  execFileSync('git', ['-C', repo, 'remote', 'add', 'origin', 'https://github.com/mikecann/foo']);
-  const wt = await t.runner.previewMove({ info: { ...base, cwd: '/Users/mike/dev/foo', origin: 'git@github.com:mikecann/foo.git', repoTop: '/Users/mike/dev/foo', subdir: '', worktree: true }, self: 'T1', cwd: repo });
+  execFileSync('git', ['-C', repo, 'remote', 'add', 'origin', 'https://github.com/alex-example/foo']);
+  const wt = await t.runner.previewMove({ info: { ...base, cwd: '/Users/alex/dev/foo', origin: 'git@github.com:alex-example/foo.git', repoTop: '/Users/alex/dev/foo', subdir: '', worktree: true }, self: 'T1', cwd: repo });
   assert.equal(wt.worktree, true);
   assert.equal(wt.problems.length, 1);
   assert.match(wt.problems[0]!, /no worktree patch/);

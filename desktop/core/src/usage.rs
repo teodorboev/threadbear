@@ -1832,7 +1832,7 @@ mod tests {
             windows.push(window("weekly", "Weekly", week, weekly_reset));
             Usage { windows, ..Default::default() }
         };
-        // Mike's gmail login: Fable's own week has a meter, not a line; the
+        // Alex's main login: Fable's own week has a meter, not a line; the
         // allowance and the spend are one line.
         let mut gmail = usage_of(Some(90.), 16., Some(at_on(30, 1, 0)));
         gmail.windows.push(window("weekly_model", "Weekly Fable", 96., Some(at_on(30, 1, 0))));
@@ -1873,27 +1873,27 @@ mod tests {
         assert_eq!(tightest(&u).map(|w| w.kind.as_str()), Some("five_hour"));
     }
 
-    /// Mike's logins, much as the mock runner has them.
+    /// Alex's logins, much as the mock runner has them.
     fn logins() -> RunnerLogins {
         RunnerLogins::from_hello(&json!({
             "accounts": [
-                { "id": "claude-main", "provider": "claude", "email": "mike@example.com", "plan": "Max", "usage": {
+                { "id": "claude-main", "provider": "claude", "email": "alex@example.com", "plan": "Max", "usage": {
                     "windows": [{ "kind": "weekly", "title": "Weekly", "remainingPercent": 78 }, { "kind": "weekly_model", "title": "Weekly Fable", "remainingPercent": 71 }],
                     "readAt": iso_time(at(11, 15)), "notice": "Couldn't check usage just now. · $48.85 extra usage spent" } },
-                { "id": "claude-2", "provider": "claude", "email": "work@example.com", "note": "Convex work only", "usage": {
+                { "id": "claude-2", "provider": "claude", "email": "work@example.com", "note": "Work only", "usage": {
                     "windows": [{ "kind": "five_hour", "title": "5-hour", "remainingPercent": 95 }, { "kind": "weekly", "title": "Weekly", "remainingPercent": 100 }],
                     "notice": "Couldn't check usage just now." } },
-                { "id": "claude-4", "provider": "claude", "email": "mike+4@example.com", "usage": { "blocked": true,
+                { "id": "claude-4", "provider": "claude", "email": "alex+4@example.com", "usage": { "blocked": true,
                     "windows": [{ "kind": "five_hour", "title": "5-hour", "remainingPercent": 0, "resetsAt": iso_time(at(15, 40)) }, { "kind": "weekly", "title": "Weekly", "remainingPercent": 31 }] } },
-                { "id": "codex-main", "provider": "codex", "title": "Codex · mike@example.com", "email": "mike@example.com", "usage": { "source": "live",
+                { "id": "codex-main", "provider": "codex", "title": "Codex · alex@example.com", "email": "alex@example.com", "usage": { "source": "live",
                     "notice": "64,390 credits · 2 limit resets available",
                     "windows": [{ "kind": "weekly", "title": "Weekly", "remainingPercent": 64, "detail": "64,390 credits" }, { "kind": "other", "title": "GPT-6.1-Sol", "remainingPercent": 82 }] } },
                 { "id": "new", "provider": "claude", "email": "new@example.com" }
             ],
             "pools": [
                 { "id": "claude", "title": "Claude", "accountIds": ["claude-main", "claude-4"] },
-                { "id": "mixed", "title": "Side projects", "icon": "hammer", "accountIds": ["codex-main", "claude-main"] },
-                { "id": "evenings", "title": "Evenings", "accountIds": ["claude-4"] },
+                { "id": "mixed", "title": "Personal", "icon": "hammer", "accountIds": ["codex-main", "claude-main"] },
+                { "id": "weekends", "title": "Weekends", "accountIds": ["claude-4"] },
                 { "id": "gone", "title": "Gone", "accountIds": ["nobody"] }
             ]
         }))
@@ -1903,7 +1903,7 @@ mod tests {
     fn the_icons_tooltip_has_each_pools_best_room() {
         let l = logins();
         let tip = icon_tooltip(&groups(&l.pools, &l.accounts), at(13, 0), &zone());
-        assert_eq!(tip, "Usage\nClaude: 78% left\nSide projects: 78% left\nEvenings: at its limit, back at 3:40 pm\nNot in a pool: 95% left");
+        assert_eq!(tip, "Usage\nClaude: 78% left\nPersonal: 78% left\nWeekends: at its limit, back at 3:40 pm\nNot in a pool: 95% left");
         assert_eq!(pool_symbol(&l.pools[0], &l.accounts), "sparkle");
         assert_eq!(pool_symbol(&l.pools[1], &l.accounts), "hammer");
     }
@@ -1925,7 +1925,7 @@ mod tests {
         assert_eq!(login_colour("claude-main", &l.accounts, true), Some(0x3987E5));
         assert_eq!(login_colour("claude-2", &l.accounts, false), Some(0xEB6834));
         assert_eq!(login_colour("nobody", &l.accounts, false), None);
-        assert_eq!(login_label("claude-main", &l.accounts), "mike");
+        assert_eq!(login_label("claude-main", &l.accounts), "alex");
         assert_eq!(login_label("codex-main", &l.accounts), "Codex");
     }
 
@@ -1935,10 +1935,10 @@ mod tests {
         let z = zone();
         let now = at(13, 0);
         let c = cards(&l.pools, &l.accounts, None, true, now, &z);
-        assert_eq!(c.iter().map(|c| c.title.as_str()).collect::<Vec<_>>(), vec!["Claude", "Side projects", "Evenings", "Not in a pool"]);
+        assert_eq!(c.iter().map(|c| c.title.as_str()).collect::<Vec<_>>(), vec!["Claude", "Personal", "Weekends", "Not in a pool"]);
         let main = &c[0].sections[0].logins[0];
-        assert_eq!(main.name, "mike@example.com");
-        assert_eq!(main.tip, "mike@example.com, Max");
+        assert_eq!(main.name, "alex@example.com");
+        assert_eq!(main.tip, "alex@example.com, Max");
         assert_eq!(main.meters.iter().map(|m| format!("{} {}", m.title, m.left)).collect::<Vec<_>>(), vec!["Weekly 78% left", "Weekly Fable 71% left"], "the model's own week under the main one");
         assert_eq!(main.more, vec!["$48.85 extra usage spent"], "the shared part of the notice goes to the foot");
         assert!(!main.dot, "no colours before the stats");
@@ -2068,9 +2068,9 @@ mod tests {
     fn the_lines_are_the_swift_apps() {
         let l = logins();
         let lines = lines(&l.pools, &l.accounts, None, at(13, 0), &zone());
-        assert_eq!(&lines[..3], &["# Claude", "## Claude", "mike@example.com (Max): Weekly 78%, Weekly Fable 71% [Couldn't check usage just now. · $48.85 extra usage spent]"]);
+        assert_eq!(&lines[..3], &["# Claude", "## Claude", "alex@example.com (Max): Weekly 78%, Weekly Fable 71% [Couldn't check usage just now. · $48.85 extra usage spent]"]);
         assert!(lines.contains(&"new@example.com: nothing known".to_string()));
-        assert!(lines.contains(&"mike+4@example.com, limit reached: 5-hour 0%, Weekly 31%".to_string()));
+        assert!(lines.contains(&"alex+4@example.com, limit reached: 5-hour 0%, Weekly 31%".to_string()));
         assert_eq!(lines.last().map(String::as_str), Some("Usage from Token Stats at 11:15 am"));
     }
 }

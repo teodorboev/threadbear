@@ -96,7 +96,7 @@ test('90/91: a move finished before any mark is held, as nothing can say what it
     (rec) => (rec.worktree = { ...c.worktree }),
     (file) => {
       const n = fs.readFileSync(file, 'utf8').split('\n').filter(Boolean).length;
-      fs.appendFileSync(file, JSON.stringify({ seq: n + 1, at: new Date().toISOString(), type: 'system.note', text: 'Moved from Bruce to M5, in /x.' }) + '\n');
+      fs.appendFileSync(file, JSON.stringify({ seq: n + 1, at: new Date().toISOString(), type: 'system.note', text: 'Moved from Mac mini to Laptop, in /x.' }) + '\n');
     },
   );
   assert.equal((await trust.check(c.patch, 0)).trusted, false);
@@ -148,7 +148,7 @@ test('a log says a thread was moved here only with the note adoptMoved writes', 
   fs.writeFileSync(file, JSON.stringify({ seq: 1, type: 'user.message', text: 'Moved to /x' }) + '\n');
   assert.equal(eventsSayMovedIn(dir), false);
   // Past a read's piece, across its edge.
-  fs.appendFileSync(file, 'x'.repeat((1 << 20) - 10) + '\n' + JSON.stringify({ seq: 2, type: 'system.note', text: 'Moved from Bruce to M5.' }) + '\n');
+  fs.appendFileSync(file, 'x'.repeat((1 << 20) - 10) + '\n' + JSON.stringify({ seq: 2, type: 'system.note', text: 'Moved from Mac mini to Laptop.' }) + '\n');
   assert.equal(eventsSayMovedIn(dir), true);
 });
 
@@ -192,7 +192,7 @@ test('90/91: a handover before start, and a record that can not be read, still h
     const recFile = path.join(c.home, 'threads', other, 'thread.json');
     fs.writeFileSync(recFile, JSON.stringify({ ...JSON.parse(fs.readFileSync(recFile, 'utf8')), id: other }));
     const n = fs.readFileSync(path.join(c.home, 'threads', other, 'events.ndjson'), 'utf8').split('\n').filter(Boolean).length;
-    fs.appendFileSync(path.join(c.home, 'threads', other, 'events.ndjson'), JSON.stringify({ seq: n + 1, type: 'system.note', text: `Moved from Bruce to M5, in ${c.wt}.` }) + '\n');
+    fs.appendFileSync(path.join(c.home, 'threads', other, 'events.ndjson'), JSON.stringify({ seq: n + 1, type: 'system.note', text: `Moved from Mac mini to Laptop, in ${c.wt}.` }) + '\n');
     fs.rmSync(c.side);
     const fresh = new PatchTrust({ file: c.file, always: [c.repo] });
     (h.runner as any).patchTrust = fresh;
@@ -206,7 +206,7 @@ test('90/91: a handover before start, and a record that can not be read, still h
     const { id } = await runnerWith(c, (rec) => (rec.worktree = { ...c.worktree }));
     const dir = path.join(c.home, 'threads', id);
     const n = fs.readFileSync(path.join(dir, 'events.ndjson'), 'utf8').split('\n').filter(Boolean).length;
-    fs.appendFileSync(path.join(dir, 'events.ndjson'), JSON.stringify({ seq: n + 1, type: 'system.note', text: `Moved from Bruce to M5, in ${path.join(c.wt, 'sub')}. Its worktree's work changes this repo's patches.` }) + '\n');
+    fs.appendFileSync(path.join(dir, 'events.ndjson'), JSON.stringify({ seq: n + 1, type: 'system.note', text: `Moved from Mac mini to Laptop, in ${path.join(c.wt, 'sub')}. Its worktree's work changes this repo's patches.` }) + '\n');
     fs.writeFileSync(path.join(dir, 'thread.json'), '{ broken');
     fs.rmSync(c.side);
     const trust = new PatchTrust({ file: c.file, always: [c.repo] });
@@ -227,10 +227,10 @@ test("90/91: a note's folder is found whatever the names around it say, and only
   g(c.repo, 'worktree', 'add', '-q', '-b', 'thread/odd', path.join(odd, 'slot-2'), 'main');
   const dir = tmpDir();
   const lines = [
-    { type: 'system.note', text: `Moved from Bruce, in /nonexistent. to M5, in ${c.wt}. Its worktree's work changes this repo's patches.` },
-    { type: 'system.note', text: `Moved from Bruce to M5, in ${path.join(odd, 'slot-2', 'sub')}.` },
-    { type: 'system.note', text: `Moved from Bruce to M5, in ${c.repo}.` },
-    { type: 'user.message', text: `Moved from Bruce to M5, in ${c.root}.` },
+    { type: 'system.note', text: `Moved from Mac mini, in /nonexistent. to Laptop, in ${c.wt}. Its worktree's work changes this repo's patches.` },
+    { type: 'system.note', text: `Moved from Mac mini to Laptop, in ${path.join(odd, 'slot-2', 'sub')}.` },
+    { type: 'system.note', text: `Moved from Mac mini to Laptop, in ${c.repo}.` },
+    { type: 'user.message', text: `Moved from Mac mini to Laptop, in ${c.root}.` },
   ];
   fs.mkdirSync(path.join(c.wt, 'sub'), { recursive: true });
   fs.mkdirSync(path.join(odd, 'slot-2', 'sub'), { recursive: true });
@@ -245,7 +245,7 @@ test('90/91: a handover of an unreadable moved record before start still holds i
   const other = '0123abcd-0000-4000-8000-000000000002';
   fs.cpSync(path.join(c.home, 'threads', id), path.join(c.home, 'threads', other), { recursive: true });
   const n = fs.readFileSync(path.join(c.home, 'threads', other, 'events.ndjson'), 'utf8').split('\n').filter(Boolean).length;
-  fs.appendFileSync(path.join(c.home, 'threads', other, 'events.ndjson'), JSON.stringify({ seq: n + 1, type: 'system.note', text: `Moved from Bruce to M5, in ${c.wt}.` }) + '\n');
+  fs.appendFileSync(path.join(c.home, 'threads', other, 'events.ndjson'), JSON.stringify({ seq: n + 1, type: 'system.note', text: `Moved from Mac mini to Laptop, in ${c.wt}.` }) + '\n');
   fs.writeFileSync(path.join(c.home, 'threads', other, 'thread.json'), '{ broken');
   fs.rmSync(c.side);
   const fresh = new PatchTrust({ file: c.file, always: [c.repo] });
@@ -263,7 +263,7 @@ test('90/91: a crafted note is read in well under a second of CPU, and a long re
   const c = checkout();
   const dir = tmpDir();
   const evil = { seq: 1, type: 'system.note', text: 'Moved from x, in /' + 'a/'.repeat(20_000) + '.'.repeat(20_000) + ', in /'.repeat(5000) };
-  const long = { seq: 2, type: 'system.note', text: `Moved from Bruce to M5, in ${c.wt}. Left behind: ${'some/file.ts, '.repeat(100_000)}` };
+  const long = { seq: 2, type: 'system.note', text: `Moved from Mac mini to Laptop, in ${c.wt}. Left behind: ${'some/file.ts, '.repeat(100_000)}` };
   fs.writeFileSync(path.join(dir, 'events.ndjson'), [evil, long].map((l) => JSON.stringify(l)).join('\n') + '\n');
   const before = process.cpuUsage();
   const held = movedInWorktrees(dir);

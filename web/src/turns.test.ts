@@ -57,7 +57,7 @@ test('splitTurns times each turn from its ask to its last message', () => {
 // folds into the work, as on the Mac (13 Nov).
 test("a login's note stays out of the work, between what came before it and the reply after", () => {
   const note = (text: string, s: number): TurnMessage => ({ seq: ++seq, role: 'note', text, at: at(s) });
-  const moved = 'Moved to mike@example.org: mike@example.net hit its 5-hour limit, back at 11:30 am.';
+  const moved = 'Moved to alex@example.org: alex@example.net hit its 5-hour limit, back at 11:30 am.';
   const rows = [
     user('land it', 0),
     tool('Ran tb land', 5),

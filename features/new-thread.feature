@@ -23,19 +23,19 @@ Feature: The new-thread page
   @thread.newpage
   Scenario: Each login in the pool shows the room it has left
     When I start a new thread
-    Then the room cards say "mike: week 78% left | mike+3: 5h 12% · week 40% left | mike+4: Limit reached"
+    Then the room cards say "alex: week 78% left | alex+3: 5h 12% · week 40% left | alex+4: Limit reached"
 
   @thread.newpage
   Scenario: A card pins the draft to that login
     When I start a new thread
     And I pin the new thread to the login "claude-3"
-    Then the note under the box says "Starts in misc on mike+3"
-    And the room card "mike+3" is ringed
+    Then the note under the box says "Starts in misc on alex+3"
+    And the room card "alex+3" is ringed
 
   @thread.newpage
   Scenario: Choosing a folder changes where it starts
     When I start a new thread
-    And I choose the folder "/Users/mike/dev/me/threadbear" for the new thread
+    And I choose the folder "/Users/alex/code/threadbear" for the new thread
     Then the note under the box says "Starts in threadbear on the Claude pool"
 
   @thread.newpage
@@ -67,15 +67,15 @@ Feature: The new-thread page
   @thread.newpage
   Scenario: A thread starts with what was picked on the page
     When I start a new thread
-    And I choose the folder "/Users/mike/dev/me/threadbear" for the new thread
+    And I choose the folder "/Users/alex/code/threadbear" for the new thread
     And I send "Check the landing copy"
     Then a thread called "Check the landing copy" opens
-    And the thread's folder is "/Users/mike/dev/me/threadbear"
+    And the thread's folder is "/Users/alex/code/threadbear"
 
   @thread.newpage
   Scenario: After sending, the next new thread starts from the defaults again
     When I start a new thread
-    And I choose the folder "/Users/mike/dev/me/threadbear" for the new thread
+    And I choose the folder "/Users/alex/code/threadbear" for the new thread
     And I send "Check the landing copy"
     Then a thread called "Check the landing copy" opens
     When I start a new thread

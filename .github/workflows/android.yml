@@ -49,8 +49,10 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4.9.1
         with:
           distribution: temurin
           java-version: '17'
@@ -61,31 +63,38 @@ jobs:
       - name: Kit tests and a debug build
         run: cd android-native && ./gradlew --no-daemon :kit:test :app:assembleDebug
 
+  # The release is two jobs, so the signing key never meets the build
+  # (Daybreak 123, 15 Nov 2026). `apk` builds an unsigned APK: Gradle, its
+  # plugins and the repo's own build scripts run there, with no key and a
+  # read-only token, and it hands on the APK with its SHA-256. `release`
+  # checks the APK is those exact bytes, signs it with apksigner and
+  # publishes it; it runs no actions, checks nothing out and runs no Gradle,
+  # so the only code that sees the key is GitHub's CLI and the runner
+  # image's Android build tools. The Gradle wrapper's download is pinned by
+  # its SHA-256 too (gradle-wrapper.properties). Every `uses:` in every workflow is a full commit SHA
+  # (workflow-pins.test.ts fails on anything else), so a moved tag can't
+  # put new code in either job.
   apk:
     if: github.repository == 'mikecann/threadbear' && startsWith(github.ref, 'refs/tags/release/')
     runs-on: ubuntu-24.04
     timeout-minutes: 30
-    # The key's only way in: this environment gives its secrets to release/* tags alone.
+    # For the Firebase config alone, which the APK carries in its
+    # BuildConfig anyway. A job is only handed the secrets it names, and this
+    # one never names the key or its password.
     environment: android-release
-    # One release build at a time across every tag, so "latest" is worked
-    # out and set with no other release being made meanwhile (an older tag's
-    # run can't set itself latest after a newer one has). A run still
-    # waiting when another tag's comes is dropped; the newer one covers it.
-    concurrency:
-      group: android-release-publish
-      cancel-in-progress: false
     permissions:
-      contents: write
+      contents: read
     env:
       TAG: ${{ github.ref_name }}
-      # The release key's certificate, so a swapped secret can't ship an APK
-      # no installed copy would take (Android wants the same key for an update).
-      CERT_SHA256: 185d962a979b9015485c6ea8450cbc52e31153b058922e3eb80823848609c358
+    outputs:
+      todo: ${{ steps.todo.outputs.yes }}
+      sha256: ${{ steps.built.outputs.sha256 }}
     steps:
       # The tag itself, by its full ref, never a branch with the same name.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: ${{ github.ref }}
+          persist-credentials: false
 
       - name: Skip a release from before the Android app
         id: has
@@ -105,7 +114,7 @@ jobs:
             echo "yes=1" >> "$GITHUB_OUTPUT"
           fi
 
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4.9.1
         if: steps.todo.outputs.yes
         with:
           distribution: temurin
@@ -117,31 +126,87 @@ jobs:
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
           "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-37.0" "build-tools;37.0.0" >/dev/null
 
-      - name: Key and Firebase config from the environment's secrets
+      - name: Firebase config from the environment
         if: steps.todo.outputs.yes
         env:
-          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
           GOOGLE_SERVICES_JSON: ${{ secrets.ANDROID_GOOGLE_SERVICES_JSON }}
-        run: |
-          echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.jks"
-          printf '%s' "$GOOGLE_SERVICES_JSON" > android-native/app/google-services.json
+        run: printf '%s' "$GOOGLE_SERVICES_JSON" > android-native/app/google-services.json
 
-      - name: Build the release APK
+      - name: Build the unsigned release APK
+        id: built
         if: steps.todo.outputs.yes
-        env:
-          THREADBEAR_KEYSTORE: ${{ runner.temp }}/release.jks
-          THREADBEAR_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
         run: |
           export THREADBEAR_RELEASE="${TAG#release/}"
           cd android-native
+          # No key here: with none, the release build comes out unsigned (build.gradle.kts).
           ./gradlew --no-daemon :kit:test :app:assembleRelease
-          cp app/build/outputs/apk/release/app-release.apk "$RUNNER_TEMP/threadbear-android.apk"
+          mkdir -p "$RUNNER_TEMP/unsigned"
+          cp app/build/outputs/apk/release/app-release-unsigned.apk "$RUNNER_TEMP/unsigned/threadbear-android-unsigned.apk"
+          echo "sha256=$(sha256sum "$RUNNER_TEMP/unsigned/threadbear-android-unsigned.apk" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+          rm -f app/google-services.json
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: steps.todo.outputs.yes
+        with:
+          name: unsigned-apk
+          path: ${{ runner.temp }}/unsigned/threadbear-android-unsigned.apk
+          retention-days: 1
+          if-no-files-found: error
+
+  release:
+    needs: apk
+    if: github.repository == 'mikecann/threadbear' && startsWith(github.ref, 'refs/tags/release/') && needs.apk.outputs.todo && needs.apk.outputs.sha256
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    # The key's only way in: this environment gives its secrets to release/* tags alone.
+    environment: android-release
+    # One release at a time across every tag, so "latest" is worked out and
+    # set with no other release being made meanwhile (an older tag's run
+    # can't set itself latest after a newer one has). A run still waiting
+    # when another tag's comes is dropped; the newer one covers it.
+    concurrency:
+      group: android-release-publish
+      cancel-in-progress: false
+    permissions:
+      contents: write
+      # gh run download: this run's own artifact.
+      actions: read
+    env:
+      TAG: ${{ github.ref_name }}
+      GH_REPO: ${{ github.repository }}
+      # The release key's certificate, so a swapped secret can't ship an APK
+      # no installed copy would take (Android wants the same key for an update).
+      CERT_SHA256: 185d962a979b9015485c6ea8450cbc52e31153b058922e3eb80823848609c358
+    steps:
+      # No actions and nothing checked out: the only code that runs where the
+      # key is is GitHub's own CLI and the runner image's Android build tools.
+      - name: Fetch the build's unsigned APK
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh run download "$GITHUB_RUN_ID" --name unsigned-apk --dir "$RUNNER_TEMP/unsigned"
+
+      - name: Sign the APK the build job made, byte for byte
+        env:
+          WANT: ${{ needs.apk.outputs.sha256 }}
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          THREADBEAR_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+        run: |
+          # The image's own build tools, nothing downloaded here.
+          tools="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)"
+          unsigned="$RUNNER_TEMP/unsigned/threadbear-android-unsigned.apk"
+          # Checked here, right before signing, with nothing run in between.
+          got=$(sha256sum "$unsigned" | cut -d' ' -f1)
+          [ "$got" = "$WANT" ] || { echo "The APK's digest is $got, not the build's $WANT."; exit 1; }
+          echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.jks"
+          "$tools/apksigner" sign --ks "$RUNNER_TEMP/release.jks" --ks-key-alias threadbear \
+            --ks-pass env:THREADBEAR_KEYSTORE_PASSWORD --key-pass env:THREADBEAR_KEYSTORE_PASSWORD \
+            --out "$RUNNER_TEMP/threadbear-android.apk" "$unsigned"
+          rm -f "$RUNNER_TEMP/release.jks"
           # Signed with the release key itself, by its certificate's digest.
-          "$ANDROID_HOME/build-tools/37.0.0/apksigner" verify --print-certs "$RUNNER_TEMP/threadbear-android.apk" \
+          "$tools/apksigner" verify --print-certs "$RUNNER_TEMP/threadbear-android.apk" \
             | grep -q "certificate SHA-256 digest: $CERT_SHA256"
 
       - name: Attach it to the tag's release
-        if: steps.todo.outputs.yes
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -157,4 +222,4 @@ jobs:
 
       - name: Never leave the key on the runner
         if: always()
-        run: rm -f "$RUNNER_TEMP/release.jks" android-native/app/google-services.json
+        run: rm -f "$RUNNER_TEMP/release.jks"

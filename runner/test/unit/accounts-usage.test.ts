@@ -537,7 +537,7 @@ function discoveryRoot() {
   const accts = path.join(root, 'Accounts');
   const codexMain = path.join(root, 'dot-codex');
   fs.mkdirSync(codexMain);
-  return { root, main, accts, codexMain, cfg: { userHome: root, pathEnv: '', claudeMainDir: main, claudeMainJson: path.join(root, 'claude.json'), tokenStatsAccountsDir: accts, codexMainDir: codexMain, accountNotes: { 'claude-2': 'Convex work only' } } };
+  return { root, main, accts, codexMain, cfg: { userHome: root, pathEnv: '', claudeMainDir: main, claudeMainJson: path.join(root, 'claude.json'), tokenStatsAccountsDir: accts, codexMainDir: codexMain, accountNotes: { 'claude-2': 'Work only' } } };
 }
 
 test('Codex logins: auth.json exists (never opened) or the Keychain store, in ~/.codex and codex-N', () => {
@@ -555,7 +555,7 @@ test('Codex logins: auth.json exists (never opened) or the Keychain store, in ~/
     ['codex-main', 'codex', 'Codex · codex-main'],
     ['codex-1', 'codex', 'Codex · codex-1'],
   ]);
-  assert.equal(found.find((a) => a.id === 'claude-2')!.note, 'Convex work only');
+  assert.equal(found.find((a) => a.id === 'claude-2')!.note, 'Work only');
   assert.equal(found.find((a) => a.id === 'codex-main')!.configDir, d.codexMain);
   // No codexMainDir (an older config shape): no codex-main.
   assert.ok(!discoverAccounts({ ...d.cfg, codexMainDir: undefined }).some((a) => a.id === 'codex-main'));
@@ -627,7 +627,7 @@ test('registry: titles, email and plan from limits.json, usage on every account,
   assert.equal(pct(codex.usage, 'weekly'), 93);
   const two = list.find((a) => a.id === 'claude-2')!;
   assert.equal(two.title, 'two-local@example.com', 'not in limits.json by folder or email: .claude.json');
-  assert.equal(two.note, 'Convex work only');
+  assert.equal(two.note, 'Work only');
   assert.equal(two.usage, undefined);
   // Live readings show on the next list without a rescan.
   usage.record('claude-main', { windows: [{ kind: 'five_hour', title: '5-hour', remainingPercent: 50 }], blocked: false });

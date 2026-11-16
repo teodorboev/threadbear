@@ -910,6 +910,13 @@ impl Threadbear {
                         if let Some(pane) = self.kept.get(&t.id, cx) {
                             pane.update(cx, |p, cx| p.summary_changed(&t, cx));
                         }
+                        // Into the other runners' list as well, which is
+                        // put back over these whenever this Mac's own list
+                        // comes in (RemoteThreads::take_update).
+                        if t.is_remote() {
+                            self.remote.index.take_update(&t);
+                            self.remote.recent.note(&t);
+                        }
                         let before = self.threads.insert(t.id.clone(), Arc::new(t.clone()));
                         self.note_failed_account(before.as_deref(), &t);
                         self.thread_changed_outside(before.as_deref(), &t, cx);
@@ -934,6 +941,7 @@ impl Threadbear {
                         self.close_thread_panel(id, cx);
                         self.threads.remove(id);
                         self.failed_on_account.remove(id);
+                        self.remote.recent.forget(id);
                         self.refresh_dock_badge();
                     } else {
                         self.apply_remote_index(cx);
@@ -1484,6 +1492,10 @@ impl Threadbear {
     /// A thread named by the start of its id, as the Swift app's automation has it.
     #[cfg(feature = "automation")]
     pub(crate) fn thread_id_from(&self, start: &str) -> Result<String, String> {
+        // A whole id is that thread, though another's id starts with it.
+        if self.threads.contains_key(start) {
+            return Ok(start.to_owned());
+        }
         let mut found = self.threads.keys().filter(|id| id.starts_with(start));
         match (found.next(), found.next()) {
             (Some(id), None) => Ok(id.clone()),
@@ -1697,18 +1709,33 @@ impl Threadbear {
         let query = self.search.read(cx).value().trim().to_lowercase();
         let wakes = inbox::wakes(&self.scheduled.list);
         let changes = self.threads.changes();
+        // Nested threads (nested.rs) only with the experiment on, and not
+        // while searching: a search lists what it found, each on its own row.
+        let nested = query.is_empty() && self.nested_threads_on();
         if let Some(c) = self.sections_cache.borrow().as_ref() {
-            if c.changes == changes && c.query == query && c.order == self.sidebar.order && c.wakes == wakes && c.from <= now && now < c.until {
+            if c.changes == changes && c.query == query && c.order == self.sidebar.order && c.wakes == wakes && c.nested == nested && c.from <= now && now < c.until {
                 return c.sections.clone();
             }
         }
+        let nesting = nested.then(|| Rc::new(threadbear_core::nested::Nesting::build(self.threads.values(), now, &wakes)));
         // Shared rows: working them out again copies pointers (thread_map.rs).
-        let sections = Rc::new(inbox::sections_ordered(self.threads.values().filter(|t| query.is_empty() || inbox::matches(t, &query)), now, self.sidebar.order, &wakes));
+        let shown = self.threads.values().filter(|t| query.is_empty() || inbox::matches(t, &query));
+        let sections = Rc::new(match &nesting {
+            Some(n) => inbox::sections_nested(shown, now, self.sidebar.order, &wakes, n),
+            None => inbox::sections_ordered(shown, now, self.sidebar.order, &wakes),
+        });
         // Until the next snooze runs out, when a thread moves out of
         // Hibernating; nothing else in the sorting goes by the clock.
         let until = self.threads.values().map(|t| &**t).filter_map(|t| t.snoozed_until_ms()).filter(|at| *at > now).min().unwrap_or(i64::MAX);
-        *self.sections_cache.borrow_mut() = Some(SectionsCache { changes, query, order: self.sidebar.order, wakes, from: now, until, sections: sections.clone() });
+        *self.sections_cache.borrow_mut() = Some(SectionsCache { changes, query, order: self.sidebar.order, wakes, nested, from: now, until, sections: sections.clone(), nesting });
         sections
+    }
+
+    /// Which threads nest under which, as the sections were last worked out:
+    /// None with the experiment off or while searching.
+    pub(crate) fn shown_nesting(&self, cx: &App, now: i64) -> Option<Rc<threadbear_core::nested::Nesting>> {
+        self.shown_sections(cx, now);
+        self.sections_cache.borrow().as_ref().and_then(|c| c.nesting.clone())
     }
 
     /// The connection as the Swift app tells it (`ConnectionState`). While it
@@ -1838,4 +1865,7 @@ struct SectionsCache {
     from: i64,
     until: i64,
     sections: Rc<Vec<inbox::Section<Arc<ThreadSummary>>>>,
+    /// Worked out with nested threads, and which nest under which.
+    nested: bool,
+    nesting: Option<Rc<threadbear_core::nested::Nesting>>,
 }

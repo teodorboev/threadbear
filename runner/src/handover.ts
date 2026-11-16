@@ -137,6 +137,7 @@ export function scheduledSendMethods(runner: Pick<Runner, 'sendScheduled' | 'fin
   const deliver = (p: Record<string, unknown>) => {
     if (typeof p.threadId !== 'string' || typeof p.text !== 'string' || typeof p.scheduleId !== 'string') throw new RpcError(ErrorCode.badParams, 'threadId, text and scheduleId must be strings');
     if (p.run !== undefined && (typeof p.run !== 'string' || !p.run || p.run.length > 200)) throw new RpcError(ErrorCode.badParams, 'run must be a nonempty string of at most 200 characters');
+    if (p.preserve !== undefined && typeof p.preserve !== 'boolean') throw new RpcError(ErrorCode.badParams, 'preserve must be a boolean');
     if (!runner.has(p.threadId)) throw new RpcError(ErrorCode.moved, 'That thread has moved to the new runner.');
     if (p.since !== undefined && (typeof p.since !== 'number' || !Number.isFinite(p.since) || p.since < 0)) throw new RpcError(ErrorCode.badParams, 'since must be a finite nonnegative time');
     const since = p.since as number | undefined;
@@ -150,7 +151,7 @@ export function scheduledSendMethods(runner: Pick<Runner, 'sendScheduled' | 'fin
     // Recurring check-ins must eventually leave a quiet spell for the
     // old runner to hand over, even if its background shell never ends.
     if (runner.draining && runner.clock.now() - runner.draining.since >= DRAIN_MAX_OLD_MS) throw new RpcError(ErrorCode.busy, 'That old runner is waiting to hand this thread over; try again in a moment.');
-    const sent = runner.sendScheduled(p.threadId, p.text, p.scheduleId, run, since);
+    const sent = runner.sendScheduled(p.threadId, p.text, p.scheduleId, run, since, p.preserve as boolean | undefined);
     if (runner.unqueue(p.threadId, sent.turnId)) throw new RpcError(ErrorCode.busy, 'That scheduled turn could not start yet; try again in a moment.');
     return sent;
   };
@@ -163,15 +164,15 @@ export function scheduledSendMethods(runner: Pick<Runner, 'sendScheduled' | 'fin
   };
 }
 
-export async function sendScheduled(runner: Pick<Runner, 'sendScheduled' | 'has'>, peers: Pick<Peers, 'call'>, threadId: string, text: string, scheduleId: string, run?: string, since?: number): Promise<{ turnId: string }> {
+export async function sendScheduled(runner: Pick<Runner, 'sendScheduled' | 'has'>, peers: Pick<Peers, 'call'>, threadId: string, text: string, scheduleId: string, run?: string, since?: number, preserve?: boolean): Promise<{ turnId: string }> {
   try {
-    return await peers.call(threadId, run ? 'drain.sendScheduledOnce' : 'drain.sendScheduled', { threadId, text, scheduleId, ...(run ? { run, since } : {}) }) as { turnId: string };
+    return await peers.call(threadId, run ? 'drain.sendScheduledOnce' : 'drain.sendScheduled', { threadId, text, scheduleId, ...(run ? { run, since } : {}), ...(preserve !== undefined ? { preserve } : {}) }) as { turnId: string };
   } catch (e) {
     // The handedOver notification precedes this refusal. The primary now
     // owns it; deliver locally instead of losing this tick to the race.
     if (isMoved(e)) {
       if (!runner.has(threadId)) throw new RpcError(ErrorCode.busy, 'That thread is still moving to this runner; try again in a moment.');
-      return runner.sendScheduled(threadId, text, scheduleId, run, since);
+      return runner.sendScheduled(threadId, text, scheduleId, run, since, preserve);
     }
     // An unkeyed fallback cannot recognize a delivery after a lost reply.
     // Keep this one-time handover wait instead of restoring that duplicate.

@@ -9,8 +9,8 @@ const MIN = 60_000;
 const run = (name: string, ms: number, draining = false) => ({ runnerId: name, name, lastSeenAt: ago(ms), draining });
 
 test('online runners come first, and one gone for a week is left out', () => {
-  const rows = [run('zed', MIN), run('asleep', 10 * MIN), run('bruce', MIN), run('old', 8 * 24 * 60 * MIN)];
-  assert.deepEqual(runnersShown(rows, NOW).map((r) => r.name), ['bruce', 'zed', 'asleep']);
+  const rows = [run('zed', MIN), run('asleep', 10 * MIN), run('mac-mini', MIN), run('old', 8 * 24 * 60 * MIN)];
+  assert.deepEqual(runnersShown(rows, NOW).map((r) => r.name), ['mac-mini', 'zed', 'asleep']);
   assert.ok(isOnline(run('a', 2 * MIN), NOW));
   assert.ok(!isOnline(run('a', 4 * MIN), NOW));
 });

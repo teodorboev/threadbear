@@ -38,6 +38,9 @@ const LISTED = 50;
 // Rows handed over a run at a time (rehomeRows), as a thread can have more
 // than one mutation may read.
 const REHOME_PAGE = 200;
+// A claimed move T has said is done but whose rows haven't all gone over
+// after this has them sent again (expireMoves).
+const REHOME_STUCK_MS = 10 * 60_000;
 
 type Move = Doc<'threadMoves'>;
 type MoveState = Move['state'];
@@ -131,7 +134,7 @@ const listedMove = v.object({
 });
 
 function listed(m: Move) {
-  const { _id, _creationTime, chunks, ...rest } = m;
+  const { _id, _creationTime, chunks, rehomedAt: _r, doneAsked: _d, ...rest } = m;
   return { ...rest, ...(chunks ? { chunks: chunks.length } : {}) };
 }
 
@@ -396,12 +399,17 @@ export const moveClaim = mutation({
       if (c.threadId === m.threadId) await ctx.db.patch(c._id, { runnerId: m.to, updatedAt: new Date(now).toISOString() });
     }
     await ctx.db.patch(m._id, { state: 'claimed', updatedAt: now });
-    await ctx.scheduler.runAfter(0, internal.moves.rehomeRows, { threadId: m.threadId, from: m.from, to: m.to, table: 0, cursor: null });
+    await ctx.scheduler.runAfter(0, internal.moves.rehomeRows, { moveId: m.moveId, threadId: m.threadId, from: m.from, to: m.to, table: 0, cursor: null });
     return null;
   },
 });
 
-/** T has the thread running: the move is over. */
+/**
+ * T has the thread running: the move is over once its rows have all gone
+ * to T (rehomeRows ends it then, if they haven't yet). Until then it stays
+ * claimed, so the thread can't start another move whose rows a late page
+ * of this one would give to this one's T (Daybreak, 15 Nov 2026).
+ */
 export const moveDone = mutation({
   args: { key: v.string(), moveId: v.string() },
   returns: v.null(),
@@ -411,6 +419,10 @@ export const moveDone = mutation({
     await mustBe(ctx, caller, m, 'to');
     if (m.state === 'done') return null;
     mustBeIn(m, ['claimed'], 'be done');
+    if (!m.rehomedAt) {
+      if (!m.doneAsked) await ctx.db.patch(m._id, { doneAsked: true, updatedAt: Date.now() });
+      return null;
+    }
     await end(ctx, m, 'done');
     return null;
   },
@@ -459,17 +471,57 @@ async function rehomeFile(ctx: MutationCtx, storageId: Id<'_storage'>, from: str
   }
 }
 
+// The claimed move a rehome page is for, or null for a page that's no
+// longer any move's to run (its move ended, or a page left over from a run
+// that has finished). A page from before pages carried their move (a
+// deploy in the middle of one) finds it by the thread and the two runners.
+async function rehoming(ctx: MutationCtx, a: { moveId?: string; threadId: string; from: string; to: string }): Promise<Move | null> {
+  let m: Move | null = null;
+  if (a.moveId) {
+    m = await ctx.db
+      .query('threadMoves')
+      .withIndex('by_moveId', (q) => q.eq('moveId', a.moveId!))
+      .unique();
+  } else {
+    for (const x of await ctx.db.query('threadMoves').withIndex('by_thread', (q) => q.eq('threadId', a.threadId)).collect()) if (x.state === 'claimed' && !x.rehomedAt && x.from === a.from && x.to === a.to) m = x;
+  }
+  if (!m || m.state !== 'claimed' || m.rehomedAt || m.threadId !== a.threadId || m.from !== a.from || m.to !== a.to) return null;
+  return m;
+}
+
+// Every row has gone to T: T's done (if it has said so) ends the move.
+async function rehomed(ctx: MutationCtx, m: Move): Promise<void> {
+  await ctx.db.patch(m._id, { rehomedAt: Date.now() });
+  if (m.doneAsked) await end(ctx, m, 'done');
+}
+
 /**
  * A moved thread's mirrored rows to T, a page at a time: a runner key's
  * messages and tool output carry its runnerId and count against its
- * allowances (CAP), the owner's carry none.
+ * allowances (CAP), the owner's carry none. Each page is its move's and
+ * runs only while that move is claimed and the thread is T's, so a page
+ * that runs late (Convex keeps scheduled jobs in no set order) can't give
+ * rows to a runner the thread has since left; the move ends only after
+ * the last page (moveDone), so no next move starts before then; and a
+ * page run again finds nothing more of S's to give (Daybreak, 15 Nov 2026).
  */
 export const rehomeRows = internalMutation({
-  args: { threadId: v.string(), from: v.string(), to: v.string(), table: v.number(), cursor: v.union(v.string(), v.null()) },
+  args: { moveId: v.optional(v.string()), threadId: v.string(), from: v.string(), to: v.string(), table: v.number(), cursor: v.union(v.string(), v.null()) },
   returns: v.null(),
-  handler: async (ctx, { threadId, from, to, table, cursor }) => {
+  handler: async (ctx, { moveId, threadId, from, to, table, cursor }) => {
+    const m = await rehoming(ctx, { moveId, threadId, from, to });
+    if (!m) return null;
     const name = REHOME_TABLES[table];
-    if (!name) return null;
+    const t = await ctx.db
+      .query('threads')
+      .withIndex('by_threadId', (q) => q.eq('threadId', threadId))
+      .unique();
+    // Nothing more to give: past the last table, the thread gone (its rows
+    // go with it), or not T's (which a claimed move's can't be).
+    if (!name || !t || t.runnerId !== to) {
+      await rehomed(ctx, m);
+      return null;
+    }
     const fromKeyed = await hasLiveKey(ctx, from);
     const toKeyed = await hasLiveKey(ctx, to);
     // Every one of these tables has by_thread_seq, from threadId.
@@ -492,7 +544,8 @@ export const rehomeRows = internalMutation({
       } else await rehomeFile(ctx, row.storageId, from, to, toKeyed);
     }
     const next = page.isDone ? { table: table + 1, cursor: null } : { table, cursor: page.continueCursor };
-    if (REHOME_TABLES[next.table]) await ctx.scheduler.runAfter(0, internal.moves.rehomeRows, { threadId, from, to, ...next });
+    if (REHOME_TABLES[next.table]) await ctx.scheduler.runAfter(0, internal.moves.rehomeRows, { moveId: m.moveId, threadId, from, to, ...next });
+    else await rehomed(ctx, m);
     return null;
   },
 });
@@ -515,6 +568,15 @@ export const expireMoves = internalMutation({
       for (const m of await ctx.db.query('threadMoves').withIndex('by_state', (q) => q.eq('state', state)).take(100)) {
         if ((m.frozenAt ?? m.updatedAt) < now - MOVE_FROZEN_MS) await end(ctx, m, 'failed', 'The move took more than 30 minutes.');
       }
+    }
+    // A claimed move T said was done whose rows still haven't all gone over
+    // (a page lost, or a move claimed before pages carried their move):
+    // its rows go again from the start, which gives only what's still S's,
+    // and the last page ends it.
+    for (const m of await ctx.db.query('threadMoves').withIndex('by_state', (q) => q.eq('state', 'claimed').lt('updatedAt', now - REHOME_STUCK_MS)).take(100)) {
+      if (m.rehomedAt || !m.doneAsked) continue;
+      await ctx.db.patch(m._id, { updatedAt: now });
+      await ctx.scheduler.runAfter(0, internal.moves.rehomeRows, { moveId: m.moveId, threadId: m.threadId, from: m.from, to: m.to, table: 0, cursor: null });
     }
     for (const state of ['done', 'failed', 'cancelled'] as const) {
       for (const m of await ctx.db.query('threadMoves').withIndex('by_state', (q) => q.eq('state', state).lt('updatedAt', now - MOVE_KEPT_MS)).take(100)) await ctx.db.delete(m._id);

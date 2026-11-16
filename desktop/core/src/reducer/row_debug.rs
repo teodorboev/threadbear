@@ -91,6 +91,13 @@ impl RowDebug {
                 if completion.outcome != super::event::TurnOutcome::Completed {
                     words.push_str(&format!(", {}", completion.outcome.as_str()));
                 }
+                // Its error, where the footer draws it after the time (rows.rs
+                // `footer_text`: one with a kind has a box of its own).
+                // Another runner's failed turn says nothing else, and the
+                // parity run reads it here.
+                if let Some(error) = completion.error.as_deref().filter(|e| !e.is_empty() && completion.error_kind.is_none()) {
+                    words.push_str(&format!(": {}", error.lines().next().unwrap_or("")));
+                }
                 // Codex's footer shows only the time; its tokens are here.
                 if let Some(tokens) = token_line(completion.usage.as_ref()) {
                     words.push_str(&format!(", {tokens}"));

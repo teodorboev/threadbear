@@ -5,6 +5,7 @@ import com.mikerosoft.threadbear.kit.BackendApi
 import com.mikerosoft.threadbear.kit.InboxSections
 import com.mikerosoft.threadbear.kit.Pairing
 import com.mikerosoft.threadbear.kit.PairingRequest
+import com.mikerosoft.threadbear.kit.PairingSource
 import com.mikerosoft.threadbear.kit.PhoneAccount
 import com.mikerosoft.threadbear.kit.PhoneBackend
 import com.mikerosoft.threadbear.kit.PhoneCounts
@@ -149,10 +150,22 @@ class AppModel(context: Context, private val scope: CoroutineScope) {
 
     // Pairing
 
-    /** A link from the camera, the clipboard or another app: asked about first. */
-    fun ask(link: String): Boolean {
+    /**
+     * A pairing code from the app's scanner or the clipboard: asked about
+     * first. One another app opened is never taken (Daybreak 127): it says
+     * so and is false, as is anything that isn't a pairing.
+     */
+    fun ask(link: String, source: PairingSource): Boolean {
+        if (source.refuses(link, BuildConfig.ALLOW_LOCAL)) {
+            note("Threadbear doesn't pair from links other apps open. Scan the code on your Mac from Threadbear's own pairing screen instead.")
+            return true
+        }
+        if (PairingSource.isOldLink(link, BuildConfig.ALLOW_LOCAL)) {
+            note("That code is from an older Threadbear on your Mac, which puts the phone's token in it. Update Threadbear on your Mac, then show the code again.")
+            return true
+        }
         val server = Pairing.parse(link, BuildConfig.ALLOW_LOCAL)?.serverName ?: return false
-        val request = PairingRequest.of(link, BuildConfig.ALLOW_LOCAL, _pairing.value) { store.runnerKey(server, it) } ?: return false
+        val request = PairingRequest.of(link, source, BuildConfig.ALLOW_LOCAL, _pairing.value) { store.runnerKey(server, it) } ?: return false
         if (pendingPair.value == null) pendingPair.value = request
         return true
     }
@@ -167,15 +180,17 @@ class AppModel(context: Context, private val scope: CoroutineScope) {
         scope.launch {
             val trial = ConvexFfiTransport(shown.pairing.deploymentUrl)
             try {
-                val me = PhoneBackend(trial, shown.pairing.token).me()
+                // The Mac's one-use code, traded for the token (tokens:claim).
+                val pairing = shown.pairing.claimed(trial)
+                val me = PhoneBackend(trial, pairing.token).me()
                 // Another server: the old one stops reaching this phone. The
                 // same server with a new token keeps the registration, which
                 // registerPush moves to the new token.
                 val old = _pairing.value
-                pairingChanged(forget = old != null && old.deploymentUrl != shown.pairing.deploymentUrl)
-                store.save(shown.pairing)
+                pairingChanged(forget = old != null && old.deploymentUrl != pairing.deploymentUrl)
+                store.save(pairing)
                 trial.close()
-                connect(shown.pairing)
+                connect(pairing)
                 _identity.value = me
                 note("Paired with ${shown.host}")
                 registerPush()

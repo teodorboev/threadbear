@@ -370,4 +370,9 @@
 //    changed login, as the Mac does. Without it the page is as before, for
 //    apps built earlier. phone:thread, phone:search and share's page still
 //    leave them out.
-export const API_VERSION = 79;
+// 80: phone pairing codes (Daybreak 127). sync:issuePairingCode makes a
+//    one-use code, good for ten minutes, that the Mac's QR code carries in
+//    place of a phone token, and tokens:claim trades it for the token from
+//    the phone's own scanner. A runner pairs phones only from 80, so no
+//    token goes into a QR code again.
+export const API_VERSION = 80;

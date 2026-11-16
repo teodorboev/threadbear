@@ -233,7 +233,7 @@ mod tests {
 
     #[test]
     fn a_label_is_the_first_line_and_short() {
-        assert_eq!(ActivityEvent::label("Fix the sidebar\n~/dev/me/threadbear").as_deref(), Some("Fix the sidebar"));
+        assert_eq!(ActivityEvent::label("Fix the sidebar\n~/code/threadbear").as_deref(), Some("Fix the sidebar"));
         assert_eq!(ActivityEvent::label("  \n"), None);
         let long = ActivityEvent::label(&"a".repeat(300)).unwrap();
         assert_eq!(long.chars().count(), 120);

@@ -11,7 +11,7 @@
 // Through Convex, the only way this app reaches another Mac so far, the
 // runner sends no pictures at all, just a line saying how many it kept there,
 // and answers a `files.read` for another runner with "Files on another runner
-// are kept there for now." So these tiles turn up for the mock runner's bruce,
+// are kept there for now." So these tiles turn up for the mock runner's mac-mini,
 // which plays a direct link, and for whatever comes next.
 use crate::call;
 use gpui_kit::*;

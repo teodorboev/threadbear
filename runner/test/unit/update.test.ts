@@ -930,7 +930,7 @@ function landLine(commit: string, extra: Record<string, unknown> = {}): string {
       { name: 'runner unit tests', status: 'ok', seconds: 250 },
       { name: 'iphone kit tests', status: 'skip' },
     ],
-    host: 'tinker-desk',
+    host: 'build-box',
     check: './check.sh --quick',
     intact: true,
     ...extra,
@@ -946,8 +946,8 @@ test('passedLandCheck: only a real, passing check of that very commit, by check.
   const typecheck = { name: 'runner typecheck', status: 'ok' };
   const tests = { name: 'runner unit tests', status: 'ok' };
   assert.equal(passedLandCheck(file, c), undefined, 'no log');
-  assert.deepEqual(says(landLine(c)), { at: '2026-11-13T00:39:34.974Z', host: 'tinker-desk' });
-  assert.deepEqual(says(landLine(c, { at: undefined })), { host: 'tinker-desk' });
+  assert.deepEqual(says(landLine(c)), { at: '2026-11-13T00:39:34.974Z', host: 'build-box' });
+  assert.deepEqual(says(landLine(c, { at: undefined })), { host: 'build-box' });
   // Run in the worktree, with whatever packages and ignored files are there:
   // not what a build's check in its clean clone would have run on.
   assert.equal(says(landLine(c, { host: undefined })), undefined, 'a check run here, with no host');
@@ -999,7 +999,7 @@ test('landChecked: a commit a landing checked on a check host needs no second ch
   const src = commit('a runner change', 'runner/src/main.ts', 'console.log(2)\n');
   assert.equal(await landChecked(repo, 'runner/', src), undefined, 'nothing says it was checked');
   fs.writeFileSync(log, landLine(src));
-  assert.equal(await landChecked(repo, 'runner/', src), "tb land's check passed them at this commit on tinker-desk at 2026-11-13T00:39:34.974Z");
+  assert.equal(await landChecked(repo, 'runner/', src), "tb land's check passed them at this commit on build-box at 2026-11-13T00:39:34.974Z");
   assert.equal(await landChecked(repo, 'runner/', first), undefined, 'another commit');
   // From a worktree of the repo too: the log is beside the landing lock,
   // in the common git directory.

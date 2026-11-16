@@ -223,7 +223,7 @@ nonisolated struct QuickAskLink: Equatable, Sendable {
         return .success(QuickAskLink(server: server, token: token))
     }
 
-    /// Host and port, as an alert names it ("bruce.tail9ef766.ts.net:9443").
+    /// Host and port, as an alert names it ("mac-mini.tail1234.ts.net:9443").
     var hostName: String { AskAPI.normalizeBaseURL(server).map(Self.hostName) ?? server }
 
     static func hostName(_ url: URL) -> String {

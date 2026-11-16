@@ -68,18 +68,18 @@ mod tests {
     #[test]
     fn the_brief_says_what_the_app_knew() {
         let r = Report {
-            message: "Couldn't trust poddle:\nThread not found".into(),
+            message: "Couldn't trust kennel:\nThread not found".into(),
             at: "2026-11-11T15:20:00+08:00".into(),
             thread_id: Some("t1".into()),
-            thread_title: Some("Poddle".into()),
-            thread_folder: Some("/Users/x/dev/poddle".into()),
+            thread_title: Some("Kennel".into()),
+            thread_folder: Some("/Users/x/dev/kennel".into()),
             app_version: Some("0.1.0".into()),
             runner_version: Some("0.1.0+20261111".into()),
         };
-        assert_eq!(title(&r), "Error: Couldn't trust poddle: Thread not found");
+        assert_eq!(title(&r), "Error: Couldn't trust kennel: Thread not found");
         let p = prompt(&r);
-        assert!(p.contains("> Couldn't trust poddle:\n> Thread not found"), "{p}");
-        assert!(p.contains("- In thread t1 (\"Poddle\"), folder /Users/x/dev/poddle"), "{p}");
+        assert!(p.contains("> Couldn't trust kennel:\n> Thread not found"), "{p}");
+        assert!(p.contains("- In thread t1 (\"Kennel\"), folder /Users/x/dev/kennel"), "{p}");
         assert!(p.contains("- The app 0.1.0\n- Runner 0.1.0+20261111"), "{p}");
         assert!(p.contains("desktop/gpui/src"), "it points at this app's code: {p}");
         let none = Report { message: "x".into(), ..Default::default() };

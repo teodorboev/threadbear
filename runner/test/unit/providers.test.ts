@@ -82,5 +82,26 @@ test('a saved pool of only an agent this runner does not offer is gone', () => {
 test('hello lists each provider this runner offers', () => {
   assert.deepEqual(providersForHello().map((p) => p.id), [...PROVIDERS]);
   const h = makeHarness(undefined, {}, { accounts: new FakeAccounts(withCodex()) });
-  assert.deepEqual(h.runner.hello().providers.map((p) => p.name), ['Claude', 'Codex', 'Cursor', 'OpenCode']);
+  assert.deepEqual(h.runner.hello().providers.map((p) => p.name), ['Claude', 'Codex', 'Cursor', 'OpenCode', 'Grok']);
+});
+
+test('what Grok can do', () => {
+  const g = PROVIDER_INFO.grok;
+  assert.equal(g.name, 'Grok');
+  assert.equal(g.loginCommand, 'grok login');
+  // Its models list their own levels, which narrow Codex's set.
+  assert.equal(g.effort, 'codex');
+  assert.equal(g.autoMode, 'asks');
+  assert.equal(g.smallJobs, true, 'its hook denies every tool for one');
+  for (const can of [g.sandbox, g.rewind, g.usageReadings]) assert.equal(can, false);
+});
+
+test('a Grok thread takes an effort its model lists, and not one it does not', () => {
+  const grok: Account = { id: 'grok-main', provider: 'grok', title: 'Grok', configDir: '/g', models: [{ id: 'grok-4.7', model: 'grok-4.7', title: 'Grok 4.7', effortLevels: ['low', 'medium', 'high', 'xhigh'], defaultEffort: 'high' }, { id: 'grok-4.5', model: 'grok-4.5', title: 'Grok 4.5', effortLevels: ['low', 'medium', 'high'] }] };
+  const h = makeHarness(undefined, {}, { accounts: new FakeAccounts([...withCodex(), grok]) });
+  assert.deepEqual(h.runner.checkSettings(grok, 'grok-4.7', 'high'), { model: 'grok-4.7', effort: 'high', notes: [] });
+  const r = h.runner.checkSettings(grok, 'grok-4.5', 'xhigh');
+  assert.equal(r.effort, undefined);
+  assert.equal(r.notes.length, 1);
+  assert.equal(h.runner.modelFits(grok, 'claude-opus-5-5'), false);
 });

@@ -1,7 +1,7 @@
 {
   "id": "demo_button_colour",
   "title": "Pick a colour for the new Share button",
-  "cwd": "/Users/mike/dev/me/misc",
+  "cwd": "/Users/alex/code/misc",
   "accountId": "claude-main",
   "provider": "claude",
   "permissionMode": "full",

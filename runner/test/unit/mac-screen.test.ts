@@ -26,13 +26,13 @@ function setUp() {
   const h = makeHarness();
   const probe = new FakeProbe();
   const stateFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'mac-screen-')), 'mac-screen.json');
-  const make = () => new MacScreen({ host: h.runner, clock: h.clock, log: nullLogger, machine: 'bruce', stateFile, probe });
+  const make = () => new MacScreen({ host: h.runner, clock: h.clock, log: nullLogger, machine: 'mac-mini', stateFile, probe });
   const screen = make();
   const look = async (ms = LOOK_MS, s = screen) => {
     h.clock.advance(ms);
     await s.look();
   };
-  const noticeThreads = () => h.runner.list().filter((t) => /bruce/.test(t.title));
+  const noticeThreads = () => h.runner.list().filter((t) => /mac-mini/.test(t.title));
   const notes = (id: string) => h.events(id).filter((e) => e.type === 'system.note').map((e) => String(e.text));
   return { h, probe, screen, make, look, noticeThreads, notes };
 }
@@ -46,7 +46,7 @@ test('a dialog left waiting gets a thread in Needs you, without starting a CLI',
   const [t] = noticeThreads();
   assert.ok(t);
   assert.equal(t.needsYou, true);
-  assert.match(notes(t.id)[0], /dialog has been waiting on bruce/);
+  assert.match(notes(t.id)[0], /dialog has been waiting on mac-mini/);
   assert.match(notes(t.id)[0], /Full Disk Access/);
   assert.equal(h.adapter.sessions.length, 0, 'telling costs no model call');
   await look();
@@ -118,7 +118,7 @@ test('a dialog that goes before the wait is up is never mentioned', async () => 
 
 test('restarts neither reset the wait nor say it again', async () => {
   const { probe, make, look, noticeThreads, notes } = setUp();
-  // Bruce's runner restarts on every commit to main, so a wait held only in
+  // Mac mini's runner restarts on every commit to main, so a wait held only in
   // memory might never reach its 5 minutes.
   probe.count = 1;
   await look(LOOK_MS, make());
@@ -153,7 +153,7 @@ test('a Mac with no Threadbear app and no Full Disk Access is told once, up fron
   const [t] = noticeThreads();
   assert.ok(t);
   assert.equal(t.needsYou, true);
-  assert.match(notes(t.id)[0], /doesn't have Full Disk Access on bruce/);
+  assert.match(notes(t.id)[0], /doesn't have Full Disk Access on mac-mini/);
   await look(LOOK_MS, make());
   assert.equal(notes(t.id).length, 1);
 });
@@ -168,7 +168,7 @@ test('granting Full Disk Access says so and archives the notice thread', async (
   const id = noticeThreads()[0].id;
   probe.access = true;
   await look(LOOK_MS, make());
-  assert.match(notes(id).at(-1)!, /has Full Disk Access on bruce now/);
+  assert.match(notes(id).at(-1)!, /has Full Disk Access on mac-mini now/);
   assert.deepEqual(noticeThreads().map((t) => t.id), [], "nothing's left to do, so it leaves the inbox");
   assert.equal(h.runner.list(['archived']).find((t) => t.id === id)?.needsYou, false);
   await look(LOOK_MS, make());

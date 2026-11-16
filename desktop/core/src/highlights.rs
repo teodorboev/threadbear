@@ -1332,7 +1332,7 @@ mod tests {
             patch("app-store", serde_json::json!({})),
             patch("checks", serde_json::json!({})),
             patch("convex", serde_json::json!({ "projectId": "p1" })),
-            patch("tandem", serde_json::json!({ "matched": ["/Users/mike/v/cut.tandem"] })),
+            patch("tandem", serde_json::json!({ "matched": ["/Users/alex/v/cut.tandem"] })),
             patch("mine", serde_json::json!({ "source": "home" })),
         ];
         let action = |id: &str, patch: &str| Action { id: id.into(), title: id.into(), kind: "url".into(), patch: patch.into(), ..Default::default() };
@@ -1344,11 +1344,11 @@ mod tests {
             vec![
                 (PanelOrigin::Folder, vec![vec!["site", "sentry"], vec!["land"]]),
                 (PanelOrigin::Project("p1".into()), vec![vec!["dash"]]),
-                (PanelOrigin::Tool(vec!["/Users/mike/v/cut.tandem".into()]), vec![vec!["cut"]]),
+                (PanelOrigin::Tool(vec!["/Users/alex/v/cut.tandem".into()]), vec![vec!["cut"]]),
                 (PanelOrigin::Home, vec![vec!["note"]]),
             ]
         );
-        assert_eq!(PanelOrigin::Tool(vec!["/Users/mike/v/cut.tandem".into()]).tip("Cut", None), "Cut, for cut.tandem");
+        assert_eq!(PanelOrigin::Tool(vec!["/Users/alex/v/cut.tandem".into()]).tip("Cut", None), "Cut, for cut.tandem");
         assert_eq!(PanelOrigin::Project("p1".into()).tip("Convex", Some("Threadbear")), "Convex, from the Threadbear project");
         assert_eq!(action_glyph(&action("x", "app-store")), "arrow.up.right.square");
     }
@@ -1415,8 +1415,8 @@ mod tests {
     #[test]
     fn brief_points_split_the_bullets() {
         assert_eq!(
-            HighlightSections::points("- Added the Tandem card\n\n  - Panel follows the thread \n• Waiting on Mike to test"),
-            ["Added the Tandem card", "Panel follows the thread", "Waiting on Mike to test"]
+            HighlightSections::points("- Added the Tandem card\n\n  - Panel follows the thread \n• Waiting on Alex to test"),
+            ["Added the Tandem card", "Panel follows the thread", "Waiting on Alex to test"]
         );
         // An older paragraph brief stays one point.
         assert_eq!(HighlightSections::points("Rebuilt the pages; copy needs a pass."), ["Rebuilt the pages; copy needs a pass."]);
@@ -1424,10 +1424,10 @@ mod tests {
 
     #[test]
     fn web_pages_are_http_links_only() {
-        assert!(is_web_page("http://localhost:4321/poddle"));
+        assert!(is_web_page("http://localhost:4321/kennel"));
         assert!(is_web_page("HTTPS://github.com/m/site/pull/14"));
         assert!(!is_web_page("file:///tmp/a.html"));
-        assert!(!is_web_page("mailto:mike@example.com"));
+        assert!(!is_web_page("mailto:alex@example.com"));
         assert_eq!(viewer_for_path("/a/b/Index.HTML"), Viewer::Web);
         assert_eq!(viewer_for_path("/a/b/shot.png"), Viewer::Picture);
         assert_eq!(viewer_for_path("/a/b/clip.mp4"), Viewer::Picture);
@@ -1514,17 +1514,17 @@ mod tests {
 
     #[test]
     fn a_windows_path_sits_in_its_folder_the_same_way() {
-        assert_eq!(text::folder(r"C:\work\site\mockups\home.html", Some(r"C:\work\site"), r"C:\Users\mike"), "mockups");
+        assert_eq!(text::folder(r"C:\work\site\mockups\home.html", Some(r"C:\work\site"), r"C:\Users\alex"), "mockups");
         assert_eq!(last_component(r"C:\work\site\mockups\home.html"), "home.html");
     }
 
     #[test]
     fn folder_is_relative_to_the_threads_folder_else_home() {
-        let cwd = Some("/Users/mike/dev/site");
-        assert_eq!(text::folder("/Users/mike/dev/site/docs/mockups/a.html", cwd, "/Users/mike"), "docs/mockups");
-        assert_eq!(text::folder("/Users/mike/dev/site/README.md", Some("/Users/mike/dev/site/"), "/Users/mike"), "site");
-        assert_eq!(text::folder("/Users/mike/dev/site-old/a.md", cwd, "/Users/mike"), "~/dev/site-old");
-        assert_eq!(text::folder("/tmp/a.md", cwd, "/Users/mike"), "/tmp");
+        let cwd = Some("/Users/alex/dev/site");
+        assert_eq!(text::folder("/Users/alex/dev/site/docs/mockups/a.html", cwd, "/Users/alex"), "docs/mockups");
+        assert_eq!(text::folder("/Users/alex/dev/site/README.md", Some("/Users/alex/dev/site/"), "/Users/alex"), "site");
+        assert_eq!(text::folder("/Users/alex/dev/site-old/a.md", cwd, "/Users/alex"), "~/dev/site-old");
+        assert_eq!(text::folder("/tmp/a.md", cwd, "/Users/alex"), "/tmp");
         assert_eq!(text::address("https://www.github.com/m/site/pull/14/"), "github.com/m/site/pull/14");
         let commit = |branch: Option<&str>, pushed: bool| Highlight { id: "c".into(), kind: HighlightKind::Commit, title: "x".into(), branch: branch.map(str::to_owned), pushed, ..Default::default() };
         assert_eq!(text::commit_line(&commit(Some("main"), true)), "main · pushed");

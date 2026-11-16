@@ -40,6 +40,7 @@ import com.google.mlkit.vision.codescanner.GmsBarcodeScanning
 import com.mikerosoft.threadbear.android.LocalModel
 import com.mikerosoft.threadbear.android.LocalSnackbar
 import com.mikerosoft.threadbear.android.R
+import com.mikerosoft.threadbear.kit.PairingSource
 
 /**
  * Pairing: scan the code the Mac shows (Settings > Phone & browser), or
@@ -77,7 +78,7 @@ fun PairScreen() {
                 } else {
                     Button(
                         onClick = {
-                            scan(context, failed = { model.note(it) }) { if (!model.ask(it)) model.note("That code isn't a Threadbear pairing link.") }
+                            scan(context, failed = { model.note(it) }) { if (!model.ask(it, PairingSource.SCANNED)) model.note("That code isn't a Threadbear pairing code.") }
                         },
                         modifier = Modifier.fillMaxWidth().height(52.dp),
                         contentPadding = ButtonDefaults.ButtonWithIconContentPadding,
@@ -89,13 +90,13 @@ fun PairScreen() {
                     OutlinedButton(
                         onClick = {
                             val text = clipboardText(context)
-                            if (text == null || !model.ask(text)) model.note("There's no pairing link on the clipboard.")
+                            if (text == null || !model.ask(text, PairingSource.PASTED)) model.note("There's no pairing code on the clipboard.")
                         },
                         modifier = Modifier.fillMaxWidth().height(52.dp),
                     ) {
                         Icon(Line.Paste, null, Modifier.size(20.dp))
                         Spacer(Modifier.size(10.dp))
-                        Text("Paste a pairing link")
+                        Text("Paste a pairing code")
                     }
                 }
             }

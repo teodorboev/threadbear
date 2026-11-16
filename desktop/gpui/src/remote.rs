@@ -13,7 +13,7 @@ use gpui_kit::*;
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 use threadbear_core::logins::RunnerLogins;
-use threadbear_core::remote::{self, RemoteRunner, RemoteThreads, RunnerInfo};
+use threadbear_core::remote::{self, RecentUpdates, RemoteRunner, RemoteThreads, RunnerInfo};
 
 /// What the app knows of the other runners; the app holds one of these.
 #[derive(Default)]
@@ -21,6 +21,9 @@ pub(crate) struct RemoteState {
     pub(crate) runners: Vec<RemoteRunner>,
     /// The rows as last heard (`remoteIndex`).
     pub(crate) index: RemoteThreads,
+    /// The newest thread.updated for each of their threads, which a list
+    /// asked for before it came keeps (`RecentUpdates`).
+    pub(crate) recent: RecentUpdates,
     /// Each runner's logins, once `remoteThreads.logins` has answered:
     /// nil until then, as for `RemoteRunners.logins(for:)`.
     pub(crate) logins: HashMap<String, RunnerLogins>,
@@ -101,11 +104,12 @@ impl Threadbear {
             }));
         }
         let client = self.client.clone();
+        let asked = self.remote.recent.mark();
         cx.spawn(async move |this, cx| {
             let res = call(client.clone(), "remoteThreads.list", json!({})).await;
             match res {
                 Ok(value) => {
-                    this.update(cx, |this, cx| this.receive_remote(&value, cx)).ok();
+                    this.update(cx, |this, cx| this.receive_remote_since(&value, Some(asked), cx)).ok();
                 }
                 // None to come (a runner from before them).
                 Err(_) => {
@@ -136,12 +140,23 @@ impl Threadbear {
     /// `receive(remote:)`: the whole list, as `remoteThreads.list` and
     /// `remoteThreads.updated` give it.
     pub(crate) fn receive_remote(&mut self, value: &Value, cx: &mut Context<Self>) {
+        self.receive_remote_since(value, None, cx);
+    }
+
+    /// `receive_remote` for a `remoteThreads.list` reply asked for at
+    /// `asked` (`RecentUpdates::mark`): what came since stays.
+    pub(crate) fn receive_remote_since(&mut self, value: &Value, asked: Option<u64>, cx: &mut Context<Self>) {
         if value["ready"].as_bool() == Some(false) {
             self.remote.heard = false;
             cx.notify();
             return;
         }
-        let remote = remote::decode_remote_threads(value);
+        let mut remote = remote::decode_remote_threads(value);
+        match asked {
+            Some(asked) => self.remote.recent.reapply(&mut remote, asked),
+            // A notification: newer than every thread.updated before it.
+            None => self.remote.recent.superseded(),
+        }
         self.remote.runners = remote.runners.clone();
         self.remote.index = remote;
         self.remote.heard = true;

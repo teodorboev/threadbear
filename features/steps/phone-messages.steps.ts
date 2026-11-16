@@ -13,7 +13,7 @@ async function drawn(world: ThreadbearWorld, label: string) {
 }
 
 Given('the backup thread has a phone message with only a picture', async function (this: ThreadbearWorld) {
-  await this.app.do({ cmd: 'mock', method: 'phoneOnlyPicture', params: { threadId: 'bruce_backup' } });
+  await this.app.do({ cmd: 'mock', method: 'phoneOnlyPicture', params: { threadId: 'mini_backup' } });
 });
 
 Then('the phone origin mark is drawn', async function (this: ThreadbearWorld) {

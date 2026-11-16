@@ -109,14 +109,27 @@ test('a --quick run that touches the Mac app goes past a Linux host to a Mac', (
 });
 
 test("a --quick run that only touches what the GPUI app uses in app/ can take a Linux host", () => {
-  // The Swift app is frozen, so check.sh doesn't build it for the mock
-  // runner, fixtures or art (scripts/swift-freeze.sh --gpui-shared).
+  // The Swift app is frozen, so check.sh doesn't build it for fixtures or
+  // art (scripts/swift-freeze.sh --gpui-shared).
   const s = setup({ h1: { state: 'free', os: 'Linux' }, h2: { state: 'free' } });
-  fs.mkdirSync(path.join(s.repo, 'app/Tools/mock-runner'), { recursive: true });
-  fs.writeFileSync(path.join(s.repo, 'app/Tools/mock-runner/x.mjs'), '\n');
+  fs.mkdirSync(path.join(s.repo, 'app/Tests/Fixtures'), { recursive: true });
+  fs.writeFileSync(path.join(s.repo, 'app/Tests/Fixtures/x.json'), '\n');
   const r = s.run('h1,h2', 3600);
   assert.equal(r.status, 0, r.stdout + r.stderr);
   assert.deepEqual(r.copies, ['h1']);
+});
+
+test('a --quick run that touches the mock runner or its Swift tests goes to a Mac', () => {
+  // check.sh runs the Swift tests that read the mock when either changes
+  // (swift-freeze.sh --mock-tests), and swift test needs a Mac.
+  for (const file of ['app/Tools/mock-runner/x.mjs', 'app/Tests/ThreadbearCoreTests/MockRunnerTests.swift']) {
+    const s = setup({ h1: { state: 'free', os: 'Linux' }, h2: { state: 'free' } });
+    fs.mkdirSync(path.dirname(path.join(s.repo, file)), { recursive: true });
+    fs.writeFileSync(path.join(s.repo, file), '\n');
+    const r = s.run('h1,h2', 3600);
+    assert.equal(r.status, 0, `${file}: ${r.stdout}${r.stderr}`);
+    assert.deepEqual(r.copies, ['h2'], file);
+  }
 });
 
 test('a big change to the Mac app still goes to a Mac', () => {

@@ -125,7 +125,7 @@ test('ask_secret: a card goes up, the answer goes to a file, and the value is no
   }
 });
 
-test('ask_secret: declined, a message from Mike instead, and no answer in time', async () => {
+test('ask_secret: declined, a message from Alex instead, and no answer in time', async () => {
   const h = makeHarness();
   const thread = startThread(h);
   const ask = askTool(h, thread.id);

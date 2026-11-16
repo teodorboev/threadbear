@@ -24,7 +24,7 @@ const OPEN: SameWorkCandidate[] = [
   cand('5d339ef6', 'Explain the Claude 5-hour limit in the guide and FAQ', { asked: "Okay, so I guess we should just hold off on this until it's clear?" }),
   cand('7cbfffaf', 'Auto archive no-action threads', { place: MISC, asked: 'How should Threadbear keep finished threads that another thread started out of your inbox?' }),
   cand('81d212e9', 'Workbench storage drawers and runners', { place: '/Users/x/dev/workbench' }),
-  cand('3d51b0a1', 'Free up disk space on Tinker Desk', { place: MISC }),
+  cand('3d51b0a1', 'Free up disk space on buildbox', { place: MISC }),
   cand('937dae5f', 'Smart car charging with HA plug', { place: MISC }),
   cand('e3ea8579', 'San Francisco Christmas trip booking', { place: MISC }),
   cand('f3fd09ab', 'Cancel the Muse subscription', { place: MISC }),
@@ -32,10 +32,10 @@ const OPEN: SameWorkCandidate[] = [
   // The rest of his inbox: other work, in other folders.
   ...['Templates showcase submit form', 'Phone agent builds apps', 'Check Qantas flights are joined', 'Android announcement on X',
     'Hiding the blue location arrow', 'Competition email and retired deployment', 'Finishing the Convex Auth v2 video', 'Pixel Art Atlas dataset ideas',
-    'Meaning of the open status', 'Upload and schedule James Shorts', 'Threadbear Slack watch', 'Introducing Hill Climb', 'Freeing space on the MacBook M5',
+    'Meaning of the open status', 'Upload and schedule James Shorts', 'Threadbear Slack watch', 'Introducing Hill Climb', 'Freeing space on the MacBook',
     'Split feedback and Chef packages', 'Meeting Archive wasnt running before a call', 'Get branchial diagrams page drawing', 'Prep for the David meeting',
     'Pegboard wall ideas', 'Stack posts for the channel videos', 'Walkies walk not logged', 'Build native Android app for Pixel', 'Freezing the Swift version',
-    'Tandem check: flag mid-sentence pauses', 'Addressable PWM controllers for lights', 'Busselton clubs and societies research', 'Nuxt Convex module review',
+    'Tandem check: flag mid-sentence pauses', 'Addressable PWM controllers for lights', 'Local clubs and societies research', 'Nuxt Convex module review',
     'Let the app use any reachable backend address', 'Nightly retro', 'Threadbear security scan', 'Shorts series'].map((t, i) => cand(`0000${String(i).padStart(4, '0')}`, t, { place: MISC })),
 ];
 
@@ -47,7 +47,7 @@ test('sameWork: off by default, with a check-in booked', () => {
   assert.match(x?.reminder ?? '', /^[0-9a-f]{8}$/);
 });
 
-test("Mike's own asks find the thread that's on it", () => {
+test("Alex's own asks find the thread that's on it", () => {
   // df5c7153, 12 Nov.
   assert.deepEqual(ids("I don't know whether you've got a thread looking at it already, but I can't select text for some reason at all in the transcript"), ['f712f322', 'df5c7153']);
   // 5d33618f, 12 Nov: one rare word in a same-repo title is enough.
@@ -55,7 +55,7 @@ test("Mike's own asks find the thread that's on it", () => {
   // Another folder still counts, on two good words.
   assert.deepEqual(ids('threads that finish with nothing to do should archive themselves'), ['7cbfffaf']);
   // The other disk-space thread is near enough to look at too, ranked below.
-  assert.deepEqual(ids('how much free disk space is on tinker desk now', MISC), ['3d51b0a1', '00000012']);
+  assert.deepEqual(ids('how much free disk space is on buildbox now', MISC), ['3d51b0a1', '00000012']);
 });
 
 test('a passing word, or nothing open like it, lists nothing', () => {
@@ -69,9 +69,9 @@ test('a passing word, or nothing open like it, lists nothing', () => {
 });
 
 test('a shared project is as near as a shared folder', () => {
-  const c = [cand('aaaaaaaa', 'Poddle widget', { place: '/Users/x/dev/poddle-widget', projectIds: ['p_1'] })];
-  assert.equal(findSameWork('the widget is blank', '/Users/x/dev/poddle', [], c, HOME).length, 0);
-  assert.equal(findSameWork('the widget is blank', '/Users/x/dev/poddle', ['p_1'], c, HOME).length, 1);
+  const c = [cand('aaaaaaaa', 'Pantry widget', { place: '/Users/x/dev/pantry-widget', projectIds: ['p_1'] })];
+  assert.equal(findSameWork('the widget is blank', '/Users/x/dev/pantry', [], c, HOME).length, 0);
+  assert.equal(findSameWork('the widget is blank', '/Users/x/dev/pantry', ['p_1'], c, HOME).length, 1);
 });
 
 test('same place: inside each other, but never through home or the root', () => {
@@ -105,7 +105,7 @@ function setup(on: boolean) {
   return { h, repo, finish };
 }
 
-test("a new thread's first session is told of open threads doing the same work, and Mike sees which", async () => {
+test("a new thread's first session is told of open threads doing the same work, and Alex sees which", async () => {
   const { h, repo, finish } = setup(true);
   const a = h.runner.create({ text: 'Selecting text in the transcript only works with a quick drag', cwd: repo, accountId: 'claude-3' }).thread;
   await finish(a.id);
@@ -119,7 +119,7 @@ test("a new thread's first session is told of open threads doing the same work, 
   assert.match(brief, /Threads open now that may be about the same thing/);
   assert.match(brief, new RegExp(`\\(${a.id.slice(0, 8)}, idle`));
   assert.doesNotMatch(brief, /bathroom/);
-  // The message itself is as Mike wrote it.
+  // The message itself is as Alex wrote it.
   assert.equal(h.adapter.last.sent.at(-1)!.text, "I can't select text in the transcript at all");
   const notes = h.events(b.id).filter((e) => e.type === 'system.note').map((e) => (e as { text: string }).text);
   assert.ok(notes.some((t) => /An open thread may already be on this, so its agent will look first: "Selecting text/.test(t)), notes.join('\n'));

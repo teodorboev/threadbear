@@ -194,7 +194,7 @@ test('a pinned thread never moves: at its limit it waits for its own login and c
   assert.deepEqual(notes(h, thread.id).filter((t) => t.startsWith('Moved')), []);
 });
 
-test('a pinned wait whose login is still out waits again; a message from Mike ends it', async () => {
+test('a pinned wait whose login is still out waits again; a message from Alex ends it', async () => {
   const h = poolHarness();
   const { thread } = h.runner.create({ text: 'x', accountId: 'claude-3' });
   h.adapter.last.init();
@@ -474,7 +474,7 @@ test('a move with nothing to carry on, or carrying on turned off, says the new m
   await tick();
   h.runner.update({ threadId: thread.id, poolId: 'codex' });
   await tick();
-  assert.equal(h.codex.sessions.length, 0, 'nothing runs till Mike writes');
+  assert.equal(h.codex.sessions.length, 0, 'nothing runs till Alex writes');
   assert.match(notes(h, thread.id).at(-1)!, /takes over from your next message\.$/);
 
   // At a limit with "Carry on by itself: No", the menu doesn't override it.
@@ -670,7 +670,7 @@ test('nothing in the pool has room: the thread waits, and the wait outlives a re
   assert.equal(h2.runner.get(thread.id).waitingForRoom, undefined);
 });
 
-test('a wait that finds no room waits again; a message from Mike ends it and goes through the before-a-turn check', async () => {
+test('a wait that finds no room waits again; a message from Alex ends it and goes through the before-a-turn check', async () => {
   const h = poolHarness();
   h.setUsage('claude-main', room(0, 30, true));
   h.setUsage('claude-3', room(0.3));
@@ -686,7 +686,7 @@ test('a wait that finds no room waits again; a message from Mike ends it and goe
   assert.match(notes(h, thread.id).at(-1)!, /^Still no room in Claude\. Carrying on at /);
   assert.ok(h.runner.get(thread.id).waitingForRoom);
   assert.equal(h.adapter.sessions.length, 1);
-  // Mike sends something: the wait ends and the turn starts on the best there is.
+  // Alex sends something: the wait ends and the turn starts on the best there is.
   h.setUsage('claude-main', room(70));
   h.runner.send(thread.id, 'try now');
   await tick();
@@ -785,13 +785,13 @@ test('a new login changes the built-in pools and clients hear pools.updated', ()
 });
 
 test('noted logins get a pool of their own and are never picked for another', () => {
-  const accounts = [...withCodex(), { id: 'claude-2', provider: 'claude' as const, title: 'two@example.com', configDir: '/tmp/two', note: 'Convex work only' }];
+  const accounts = [...withCodex(), { id: 'claude-2', provider: 'claude' as const, title: 'two@example.com', configDir: '/tmp/two', note: 'Work only' }];
   const h = poolHarness({ accounts });
   h.setUsage('claude-2', room(100));
   h.setUsage('claude-main', room(0, 60, true));
   h.setUsage('claude-3', room(0, 60, true));
   const pools = h.runner.listPools().pools;
-  assert.deepEqual(pools.find((p) => p.id === 'convex')?.accountIds, ['claude-2']);
+  assert.deepEqual(pools.find((p) => p.id === 'work')?.accountIds, ['claude-2']);
   const t = h.runner.create({ text: 'x', poolId: 'claude' }).thread;
   assert.notEqual(t.accountId, 'claude-2');
 });

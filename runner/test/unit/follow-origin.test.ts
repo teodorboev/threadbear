@@ -72,7 +72,7 @@ test('up to date says nothing and changes nothing', async () => {
 });
 
 test('a commit made only on this machine is kept, said loudly, and the runner still builds GitHub', async () => {
-  // What stranded bruce for three days: a07a9f01 on its local main.
+  // What stranded mac-mini for three days: a07a9f01 on its local main.
   const { upstream, checkout } = rig();
   const stray = commit(checkout, 'Patch trust tests: a slow check', 'runner/README.md', 'stray\n');
   const tip = commit(upstream, 'on github');

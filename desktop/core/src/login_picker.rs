@@ -244,7 +244,7 @@ mod tests {
 
     #[test]
     fn the_login_line_says_auto_and_who_for_now_or_the_pinned_login() {
-        let accounts = vec![account("claude-main", "claude", "mike@acme.io", None, serde_json::Value::Null), account("claude-1", "claude", "mike@globex.io", None, serde_json::Value::Null)];
+        let accounts = vec![account("claude-main", "claude", "alex@acme.io", None, serde_json::Value::Null), account("claude-1", "claude", "alex@globex.io", None, serde_json::Value::Null)];
         let pool = Pool { id: "claude".into(), title: "Claude".into(), account_ids: vec!["claude-main".into(), "claude-1".into()], icon: None, folders: vec![] };
         assert_eq!(login_line("claude-main", &accounts, Some(&pool)), ("Login: Auto".to_owned(), Some("(acme for now)".to_owned())));
         let other = Pool { account_ids: vec!["claude-1".into()], ..pool.clone() };
@@ -256,10 +256,10 @@ mod tests {
     #[test]
     fn the_list_is_auto_then_the_pools_logins_with_their_room() {
         let accounts = vec![
-            account("claude-main", "claude", "mike@acme.io", None, json!({ "windows": [{ "kind": "five_hour", "title": "5-hour", "remainingPercent": 19 }, { "kind": "weekly", "title": "Weekly", "remainingPercent": 61 }] })),
-            account("claude-1", "claude", "mike@globex.io", None, json!({ "windows": [{ "kind": "weekly", "title": "Weekly", "remainingPercent": 80 }] })),
-            account("claude-2", "claude", "mike@initech.io", None, json!({ "blocked": true, "windows": [] })),
-            account("claude-9", "claude", "mike@umbrella.io", None, serde_json::Value::Null),
+            account("claude-main", "claude", "alex@acme.io", None, json!({ "windows": [{ "kind": "five_hour", "title": "5-hour", "remainingPercent": 19 }, { "kind": "weekly", "title": "Weekly", "remainingPercent": 61 }] })),
+            account("claude-1", "claude", "alex@globex.io", None, json!({ "windows": [{ "kind": "weekly", "title": "Weekly", "remainingPercent": 80 }] })),
+            account("claude-2", "claude", "alex@initech.io", None, json!({ "blocked": true, "windows": [] })),
+            account("claude-9", "claude", "alex@umbrella.io", None, serde_json::Value::Null),
         ];
         let pool = Pool { id: "claude".into(), title: "Claude".into(), account_ids: vec!["claude-main".into(), "claude-1".into(), "claude-2".into()], icon: None, folders: vec![] };
         let rows = pool_login_rows(&pool, &accounts, Some("claude"), None, &now());
@@ -270,7 +270,7 @@ mod tests {
         assert_eq!((rows[2].room_words().as_deref(), &rows[2].badge), (Some("80%"), &None));
         assert_eq!((rows[3].room_words().as_deref(), &rows[3].badge), (Some("limit"), &Some(ChipBadge::Blocked)));
         // A window at 0% with no flag yet is at its limit too.
-        let dry = vec![account("claude-main", "claude", "mike@acme.io", None, json!({ "windows": [{ "kind": "five_hour", "title": "5-hour", "remainingPercent": 0.4 }] }))];
+        let dry = vec![account("claude-main", "claude", "alex@acme.io", None, json!({ "windows": [{ "kind": "five_hour", "title": "5-hour", "remainingPercent": 0.4 }] }))];
         let one = Pool { account_ids: vec!["claude-main".into()], ..pool.clone() };
         assert_eq!(pool_login_rows(&one, &dry, Some("claude"), None, &now())[1].room_words().as_deref(), Some("limit"));
         // Pinned to one of them: that one ticked, Auto not.
@@ -280,7 +280,7 @@ mod tests {
         let outside = pool_login_rows(&pool, &accounts, None, Some("claude-9"), &now());
         assert_eq!((outside[1].title.as_str(), outside[1].is_selected, outside[1].room_words()), ("umbrella", true, None));
         // In another pool: nothing here ticked.
-        assert!(pool_login_rows(&pool, &accounts, Some("convex"), None, &now()).iter().all(|r| !r.is_selected));
+        assert!(pool_login_rows(&pool, &accounts, Some("work"), None, &now()).iter().all(|r| !r.is_selected));
         assert_eq!(
             pool_login_lines(&login_line("claude-main", &accounts, Some(&pool)), &rows[..2]),
             ["--- Login: Auto (acme for now)", &format!("[x] Auto - {AUTO_HELP}"), "[ ] acme - 5h 19% · week 61%"]
@@ -302,10 +302,10 @@ mod tests {
             { "kind": "weekly", "title": "Weekly", "remainingPercent": 78, "resetsAt": "2026-11-12T13:00:00Z" },
             { "kind": "weekly_model", "title": "Weekly Fable", "remainingPercent": 2, "resetsAt": "2026-11-12T13:00:00Z" },
         ] });
-        let main = account("claude-main", "claude", "mike@example.com", Some("Convex work only"), usage);
+        let main = account("claude-main", "claude", "alex@example.com", Some("Work only"), usage);
         // The tighter main window's reset; a model's own week never decides it.
-        assert_eq!(subtitle(&main, &now()).as_deref(), Some("Convex work only · 5h 89% · week 78%, resets tomorrow 1 pm"));
-        let blocked = account("claude-4", "claude", "mike+4@example.com", None, json!({ "blocked": true, "windows": [
+        assert_eq!(subtitle(&main, &now()).as_deref(), Some("Work only · 5h 89% · week 78%, resets tomorrow 1 pm"));
+        let blocked = account("claude-4", "claude", "alex+4@example.com", None, json!({ "blocked": true, "windows": [
             { "kind": "five_hour", "title": "5-hour", "remainingPercent": 0, "resetsAt": "2026-11-11T10:30:00Z" },
             { "kind": "weekly", "title": "Weekly", "remainingPercent": 31, "resetsAt": "2026-11-13T09:00:00Z" },
         ] }));
@@ -317,10 +317,10 @@ mod tests {
     #[test]
     fn the_picker_groups_logins_by_provider_claude_first() {
         let accounts = vec![
-            account("codex-main", "codex", "mike@example.com", None, json!({ "windows": [{ "kind": "weekly", "title": "Weekly", "remainingPercent": 12 }] })),
-            account("claude-main", "claude", "mike@example.com", None, serde_json::Value::Null),
+            account("codex-main", "codex", "alex@example.com", None, json!({ "windows": [{ "kind": "weekly", "title": "Weekly", "remainingPercent": 12 }] })),
+            account("claude-main", "claude", "alex@example.com", None, serde_json::Value::Null),
             account("gemini", "gemini", "g@example.com", None, serde_json::Value::Null),
-            account("claude-2", "", "work@example.com", Some("Convex work only"), json!({ "blocked": true, "windows": [] })),
+            account("claude-2", "", "work@example.com", Some("Work only"), json!({ "blocked": true, "windows": [] })),
         ];
         let sections = login_sections(&accounts, "claude-2", &now());
         assert_eq!(sections.iter().map(|s| s.title.as_str()).collect::<Vec<_>>(), ["Claude", "Codex", "Gemini"]);
@@ -332,10 +332,10 @@ mod tests {
             login_lines(&sections, Some("Usage from Token Stats at 9 am")),
             [
                 "# Claude",
-                "[ ] mike@example.com",
-                "[x] work@example.com - Convex work only · Limit reached",
+                "[ ] alex@example.com",
+                "[x] work@example.com - Work only · Limit reached",
                 "# Codex",
-                "[ ] mike@example.com - week 12%",
+                "[ ] alex@example.com - week 12%",
                 "# Gemini",
                 "[ ] g@example.com",
                 "--- Usage from Token Stats at 9 am",
@@ -346,11 +346,11 @@ mod tests {
     #[test]
     fn unpin_puts_a_thread_in_a_pool_with_its_login() {
         let pool = |id: &str, accounts: &[&str], folders: &[&str]| Pool { id: id.into(), title: id.into(), account_ids: accounts.iter().map(|a| a.to_string()).collect(), icon: None, folders: folders.iter().map(|f| f.to_string()).collect() };
-        let pools = vec![pool("claude", &["claude-main", "claude-3"], &[]), pool("convex", &["claude-2"], &["~/dev/convex"]), pool("side", &["codex-main", "claude-3"], &[])];
-        assert_eq!(unpin_target(&pools, "claude-3", "/Users/m/dev/me", "/Users/m", None).as_deref(), Some("claude"), "the first holding its login");
-        assert_eq!(unpin_target(&pools, "claude-3", "/Users/m/dev/me", "/Users/m", Some("side")).as_deref(), Some("side"), "the last picked, when it holds the login");
-        assert_eq!(unpin_target(&pools, "claude-3", "/Users/m/dev/me", "/Users/m", Some("convex")).as_deref(), Some("claude"), "not one without the login");
-        assert_eq!(unpin_target(&pools, "claude-9", "/Users/m/dev/convex/app", "/Users/m", None).as_deref(), Some("convex"), "no pool holds it: where a new thread there starts");
-        assert_eq!(unpin_target(&[], "claude-3", "/", "/Users/m", None), None);
+        let pools = vec![pool("claude", &["claude-main", "claude-3"], &[]), pool("work", &["claude-2"], &["~/dev/work"]), pool("personal", &["codex-main", "claude-3"], &[])];
+        assert_eq!(unpin_target(&pools, "claude-3", "/Users/alex/code", "/Users/alex", None).as_deref(), Some("claude"), "the first holding its login");
+        assert_eq!(unpin_target(&pools, "claude-3", "/Users/alex/code", "/Users/alex", Some("personal")).as_deref(), Some("personal"), "the last picked, when it holds the login");
+        assert_eq!(unpin_target(&pools, "claude-3", "/Users/alex/code", "/Users/alex", Some("work")).as_deref(), Some("claude"), "not one without the login");
+        assert_eq!(unpin_target(&pools, "claude-9", "/Users/alex/dev/work/app", "/Users/alex", None).as_deref(), Some("work"), "no pool holds it: where a new thread there starts");
+        assert_eq!(unpin_target(&[], "claude-3", "/", "/Users/alex", None), None);
     }
 }

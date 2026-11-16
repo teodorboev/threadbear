@@ -18,7 +18,7 @@ const SHELL_ID: &str = "remote$(printf TB_ID_EXECUTED >&2)";
 const MARKDOWN_ID: &str = "deadbeef) ![local](/tmp/private.png";
 
 fn remote_row(id: &str) -> serde_json::Value {
-    json!({ "runnerId": "bruce", "threadId": id, "title": "t", "createdAt": "2026-11-11T00:00:00Z" })
+    json!({ "runnerId": "mac-mini", "threadId": id, "title": "t", "createdAt": "2026-11-11T00:00:00Z" })
 }
 
 #[test]

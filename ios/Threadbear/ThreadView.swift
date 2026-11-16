@@ -1182,8 +1182,10 @@ struct MarkdownText: View {
         case let .image(alt, src):
             if let image = pictures.image(src: src, seq: seq), let url = URL(string: image.url) {
                 ReplyPicture(url: url, alt: alt, width: image.width, height: image.height)
-            } else if let url = ThreadPictures.webURL(src) {
-                ReplyPicture(url: url, alt: alt)
+            } else if let url = ThreadPictures.webLink(src) {
+                // Never fetched here: a link, like any other in the reply
+                // (Daybreak findings 129 and 133).
+                WebPictureLink(alt: alt, url: url)
             } else {
                 PictureOnMac(alt: alt)
             }

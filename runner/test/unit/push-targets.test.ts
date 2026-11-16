@@ -29,7 +29,7 @@ test('an old phone row with only a token name gets no pushes, whatever tokens ha
 });
 
 test('two phones paired under one name: revoking one leaves its old row no push', () => {
-  // Mike's lost phone has an old name-only row; his new one is paired as
+  // Alex's lost phone has an old name-only row; his new one is paired as
   // "iphone" too, with a row of its own token.
   const lost = { tokenName: 'iphone' };
   const kept = { tokenId: 't2', tokenName: 'iphone' };

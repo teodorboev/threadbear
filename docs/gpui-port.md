@@ -189,7 +189,7 @@ takes the same JSON commands over a local socket. The mock runner and its
 fixtures carry over as they are.
 
 Screenshots use `render_to_image` on Mac and Linux, and a window grab on
-Windows. On the Mac the window stays tucked behind Mike's work. On Linux it's
+Windows. On the Mac a dev-app.sh copy's windows are transparent and at the back, so nobody sees them. On Linux it's
 Xvfb with software Vulkan, as `desktop/scripts/shot.sh` already does.
 
 The scripted screenshot command reads a fresh frame on the app's thread,

@@ -215,7 +215,7 @@ fn testFileToolsTitleTheFileThenItsFolder() {
 #[test]
 fn testFolderNames() {
     let home = text::home_directory();
-    assert_eq!(PathDisplay::folder("/Users/mike/dev/photo-sync/Sources/Upload/UploadTask.swift"), "Sources/Upload");
+    assert_eq!(PathDisplay::folder("/Users/alex/dev/photo-sync/Sources/Upload/UploadTask.swift"), "Sources/Upload");
     assert_eq!(PathDisplay::folder(&format!("{home}/a.txt")), "~");
     assert_eq!(PathDisplay::folder("~/a.txt"), "~");
     assert_eq!(PathDisplay::folder("/a.txt"), "");
@@ -289,7 +289,7 @@ fn approval_request(name: &str, input: Value) -> ApprovalRequest {
 
 #[test]
 fn testApprovalTitlesAndTargets() {
-    let write = approval_request("Write", json!({"file_path": "/Users/mike/dev/photo-sync/scripts/release.sh", "content": "x"}));
+    let write = approval_request("Write", json!({"file_path": "/Users/alex/dev/photo-sync/scripts/release.sh", "content": "x"}));
     assert_eq!(ApprovalText::title(&write), "Write release.sh?");
     assert_eq!(ApprovalText::target(&write), "Write release.sh");
     let bash = approval_request("Bash", json!({"command": "rm -rf .build DerivedData\necho done"}));
@@ -411,12 +411,12 @@ fn testPlanTitles() {
 
 #[test]
 fn testFoldersAreRelativeToTheThreadsFolder() {
-    let root = "/Users/mike/dev/photo-sync";
+    let root = "/Users/alex/dev/photo-sync";
     assert_eq!(PathDisplay::folder_relative(&format!("{root}/scripts/release.sh"), Some(root)), "scripts");
     assert_eq!(PathDisplay::folder_relative(&format!("{root}/Sources/Upload/UploadTask.swift"), Some(&format!("{root}/"))), "Sources/Upload");
     assert_eq!(PathDisplay::folder_relative(&format!("{root}/Package.swift"), Some(root)), "", "a file at the top has no folder");
     // Outside the thread's folder, or no folder: as before.
-    assert_eq!(PathDisplay::folder_relative("/Users/mike/dev/other/Sources/a.swift", Some(root)), "other/Sources");
+    assert_eq!(PathDisplay::folder_relative("/Users/alex/dev/other/Sources/a.swift", Some(root)), "other/Sources");
     assert_eq!(PathDisplay::folder_relative(&format!("{root}-old/a.swift"), Some(root)), "dev/photo-sync-old", "a sibling with the same prefix is outside");
     assert_eq!(PathDisplay::folder_relative(&format!("{root}/scripts/release.sh"), None), "photo-sync/scripts");
     assert_eq!(PathDisplay::folder_relative(&format!("{}/dev/x/a.txt", text::home_directory()), Some("~/dev")), "x");
@@ -425,7 +425,7 @@ fn testFoldersAreRelativeToTheThreadsFolder() {
 
 #[test]
 fn testFileRowsAndTheChangesCardUseTheThreadsFolder() {
-    let root = "/Users/mike/dev/photo-sync";
+    let root = "/Users/alex/dev/photo-sync";
     let path = format!("{root}/scripts/release.sh");
     let model = TranscriptModel::from_events(
         vec![user(1, "Go"), call_with(2, "w", "Write", "write", "Write", json!({"file_path": path, "content": "echo hi\n"})), result(3, "w"), done(4)],
@@ -439,7 +439,7 @@ fn testFileRowsAndTheChangesCardUseTheThreadsFolder() {
 
 #[test]
 fn testFieldKeysLineUpUpToACap() {
-    let fields = vec![Field::new("owner", "mike"), Field::new("pullNumber", "48"), Field::new("repo", "photo-sync")];
+    let fields = vec![Field::new("owner", "alex-example"), Field::new("pullNumber", "48"), Field::new("repo", "photo-sync")];
     assert_eq!(ToolPresentation::key_width(&fields, 16), 11, "\"pullNumber:\" is the widest");
     let mut long = fields;
     long.push(Field::new("a_really_long_parameter_name", "x"));

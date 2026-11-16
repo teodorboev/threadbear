@@ -16,14 +16,18 @@ if [[ -z "$SIM" ]]; then
   BASE=$(xcrun simctl list devices available | grep -E "iPhone 1[6-8] Pro( Max)? \(" | grep -oE "[0-9A-F-]{36}" | head -1)
   SIM=$(xcrun simctl clone "$BASE" "$NAME")
 fi
+DD="$HOME/.cache/threadbear-parity/ios-dd"
+(cd "$ROOT/ios" && xcodebuild -project Threadbear.xcodeproj -scheme Threadbear -configuration Debug -destination "id=$SIM" \
+  -derivedDataPath "$DD" build | grep -E " error:|BUILD (SUCCEEDED|FAILED)")
+# Booted after the build, not before: the 14 Nov run found it booted, built
+# for a minute, and by then it had shut down ("Unable to lookup in current
+# state: Shutdown"), so no pictures at all. A build doesn't need it running,
+# and booting here leaves no time for that.
 if ! xcrun simctl list devices booted | grep -qF "($SIM)"; then
   trap 'xcrun simctl shutdown "$SIM" 2>/dev/null || true' EXIT
   xcrun simctl boot "$SIM"
 fi
 xcrun simctl bootstatus "$SIM" -b >/dev/null
-DD="$HOME/.cache/threadbear-parity/ios-dd"
-(cd "$ROOT/ios" && xcodebuild -project Threadbear.xcodeproj -scheme Threadbear -configuration Debug -destination "id=$SIM" \
-  -derivedDataPath "$DD" build | grep -E " error:|BUILD (SUCCEEDED|FAILED)")
 xcrun simctl ui "$SIM" appearance dark
 xcrun simctl status_bar "$SIM" override --time 9:41 --batteryLevel 100 --batteryState charged --cellularBars 4
 xcrun simctl uninstall "$SIM" com.mikecann.threadbear 2>/dev/null || true

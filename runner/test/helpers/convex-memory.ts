@@ -248,6 +248,12 @@ export function memoryBackend() {
       deleted.push(id);
       files.delete(id);
     },
+    // An HTTP action's store (convex/uploads.ts takeUpload).
+    async store(blob: Blob) {
+      const id = `stored${++next}`;
+      files.add(id);
+      return id;
+    },
   };
   const scheduled: unknown[] = [];
   const ctx = { db, storage, scheduler: { runAfter: async (_ms: number, fn: unknown, args: unknown) => void scheduled.push({ fn: String(fn), args }) } };
@@ -311,4 +317,11 @@ export async function outcome(p: Promise<unknown>): Promise<string> {
     if (kind) return kind;
     throw e;
   }
+}
+
+/** A ticket's claim and finish, as /runner/upload, /phone/upload or /relay/upload has them, with a file already stored. */
+export async function claimAndFinish(ctx: unknown, claim: any, finish: any, a: { ticket: unknown; storageId: string; bytes: number }): Promise<unknown> {
+  const c = await call(ctx, claim, { ticket: a.ticket });
+  if (c === false || c === 'later') return c;
+  return call(ctx, finish, { ticket: a.ticket, claim: c.claim, storageId: a.storageId, bytes: a.bytes });
 }

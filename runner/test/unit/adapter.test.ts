@@ -107,7 +107,7 @@ function start(allowRules: string[] = [], extra: Record<string, unknown> = {}, d
   return { session, state, outputs, approvals, adapter };
 }
 
-test("a folder's own settings load normally; with untrusted Claude settings, only Mike's, plus the rest as flag settings and the folder's CLAUDE.md", async () => {
+test("a folder's own settings load normally; with untrusted Claude settings, only Alex's, plus the rest as flag settings and the folder's CLAUDE.md", async () => {
   const plain = start();
   assert.deepEqual(plain.state.options.settingSources, ['user', 'project', 'local']);
   assert.equal(plain.state.options.settings, undefined);
@@ -601,7 +601,7 @@ test('cardDecisive: file edits and MCP tools show every argument, anything else 
 
 // Eight edits in one reply asked one card at a time, each taking the last
 // one's place, and looked like the same card coming back (8 Nov 2026).
-test("a reply's other calls that will ask queue on the first one's card, and Mike's answers to them apply when each comes up", async () => {
+test("a reply's other calls that will ask queue on the first one's card, and Alex's answers to them apply when each comes up", async () => {
   let release!: (a: ToolApprovalAnswer) => void;
   const { state, approvals, outputs } = start([], {}, {}, () => new Promise((r) => (release = r)));
   const opts = (id: string) => ({ signal: new AbortController().signal, toolUseID: id });

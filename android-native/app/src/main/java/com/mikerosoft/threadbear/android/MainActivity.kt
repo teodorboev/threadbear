@@ -32,6 +32,7 @@ import com.mikerosoft.threadbear.android.ui.PairScreen
 import com.mikerosoft.threadbear.android.ui.ThreadScreen
 import com.mikerosoft.threadbear.android.ui.ThreadbearTheme
 import kotlinx.coroutines.flow.MutableStateFlow
+import com.mikerosoft.threadbear.kit.PairingSource
 
 val LocalModel = staticCompositionLocalOf<AppModel> { error("No model") }
 val LocalSnackbar = staticCompositionLocalOf { SnackbarHostState() }
@@ -71,8 +72,10 @@ class MainActivity : ComponentActivity() {
 
     private fun handle(intent: Intent?) {
         val data = intent?.dataString
+        // No intent filter takes these any more (Daybreak 127), but another
+        // app can still name this activity outright: refused, saying to scan.
         if (data != null && data.startsWith("threadbear://pair")) {
-            if (!model.ask(data)) model.note("That isn't a pairing link Threadbear can use.")
+            if (!model.ask(data, PairingSource.OPENED)) model.note("That isn't a pairing link Threadbear can use.")
         }
         Push.validThreadId(intent?.getStringExtra("threadId"))?.let { openThread.value = it }
     }

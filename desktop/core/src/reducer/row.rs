@@ -555,6 +555,16 @@ impl RowContent {
         let moved = text.starts_with("Moved to ") && text.contains(": ") && !text.contains("The session carries on there");
         moved || text.contains(" Carrying on at ") || text.starts_with("Won't carry on by itself")
     }
+
+    /// The note an early Stop leaves when it keeps Mike's message (and its
+    /// pictures) for his next send (`savedMessage`, runner.ts). It's how he
+    /// knows his words weren't lost, so like a login note it never folds
+    /// into the work: folded, its turn showed nothing at all (the nightly
+    /// parity run, 14 Nov 2026). Another Mac gets it marked `login` and
+    /// this one `savedMessage`, so the runner's words are what's read.
+    pub fn is_saved_message_note(&self) -> bool {
+        matches!(self, RowContent::Note(text) if text.starts_with("Your stopped message"))
+    }
 }
 
 /// What Mike has put in an ask's own box (its Something else): his words

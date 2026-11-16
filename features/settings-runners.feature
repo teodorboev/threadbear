@@ -9,24 +9,24 @@ Feature: Settings › Runners
   @settings.runners
   Scenario: The runners are in my order, with a star where new threads start
     When I open Settings on "runners"
-    Then Settings lists the runners "m5 *: This Mac" and "bruce: Online"
+    Then Settings lists the runners "laptop *: This Mac" and "mac-mini: Online"
     And Settings says new threads start on "This Mac"
 
   @settings.runners
   Scenario: Picking another machine for new threads moves the star
     When I open Settings on "runners"
-    And I pick "bruce" for new threads in Settings
-    Then Settings says new threads start on "bruce"
-    And Settings lists the runners "m5: This Mac" and "bruce *: Online"
+    And I pick "mac-mini" for new threads in Settings
+    Then Settings says new threads start on "mac-mini"
+    And Settings lists the runners "laptop: This Mac" and "mac-mini *: Online"
     When I pick "This Mac" for new threads in Settings
-    Then Settings lists the runners "m5 *: This Mac" and "bruce: Online"
+    Then Settings lists the runners "laptop *: This Mac" and "mac-mini: Online"
 
   # The Swift list moves by a real drag, which its scripts can't make without
   # the real pointer (AGENTS.md, "Tests that need the real screen").
   @settings.runners @swift-pending
   Scenario: Dragging a runner changes the order, here and in the Runners panel
     When I open Settings on "runners"
-    And I drag "bruce" onto "m5" in Settings
-    Then Settings lists the runners "bruce: Online" and "m5 *: This Mac"
+    And I drag "mac-mini" onto "laptop" in Settings
+    Then Settings lists the runners "mac-mini: Online" and "laptop *: This Mac"
     When I open the Runners panel
-    Then the Runners panel lists "bruce" before "m5"
+    Then the Runners panel lists "mac-mini" before "laptop"

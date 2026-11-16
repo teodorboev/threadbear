@@ -1856,8 +1856,9 @@ export function buildThreadbearTools(
         permissionMode: z.enum(['full', 'ask', 'auto']).optional().describe('"full" (default), "ask" before edits and commands, or "auto": a classifier approves or blocks each action and asks only when it can\'t decide, for work on untrusted text (Claude only; on Codex it acts like ask).'),
         why: z.string().optional().describe('A few plain words on why this thread exists, about 6 ("fixing a hook it hit"). The sidebar shows them when the user hovers the mark on its row, as they have none of your context for it.'),
         runner: z.string().optional().describe('Another of the user\'s machines to start it on: its name, or "main". folder is a path there (~ for its home). Where this machine can\'t, it asks the user first and waits.'),
+        nested: z.boolean().optional().describe("false when the new thread isn't part of this thread's work (the user asked for one about something else), so it doesn't sit under this one."),
       },
-      handle(async ({ text, title, folder: f, pool: p, account: acc, model, effort, permissionMode: asked, why, runner }, extra) => {
+      handle(async ({ text, title, folder: f, pool: p, account: acc, model, effort, permissionMode: asked, why, runner, nested }, extra) => {
         // From a thread not in full mode, the new thread gets its mode
         // unless the call says otherwise, and anything above it asks
         // (raising access, above). On another machine too.
@@ -1909,6 +1910,9 @@ export function buildThreadbearTools(
           effort,
           permissionMode,
           startedBy: { kind: 'thread', label: 'Agent', threadId: selfId, ...(why?.trim() ? { why: cutSafely(why.replace(/\s+/g, ' ').trim(), MAX_BYLINE) } : {}) },
+          // Not part of this thread's work: it keeps a row of its own
+          // (docs/protocol.md, "Nested threads").
+          ...(nested === false ? { detached: true as const } : {}),
         });
         const where = r.thread.poolId ? ` It's in the ${r.thread.poolId} pool, so it moves to another login if this one runs dry.` : '';
         const inherited = caller && asked === undefined ? ` It's in ${MODE_NAMES[caller.mode]}, as this thread is${confined ? ', in the sandbox' : ''}.` : '';
@@ -1939,7 +1943,10 @@ export function buildThreadbearTools(
           if (r?.queued) return `Queued for ${id.slice(0, 8)} "${hit.other.t.title}" on ${hit.other.runner}, which hasn't picked it up yet (it may be busy restarting or asleep). It gets it when it next checks in.`;
           return `Sent to ${id.slice(0, 8)} "${hit.other.t.title}" on ${hit.other.runner}.`;
         }
-        await control.send(id, head + text);
+        const sent = (await control.send(id, head + text)) as { turnId: string; held?: boolean };
+        // A report to the thread that started this one, kept until its
+        // other threads finish (docs/protocol.md, "Nested threads").
+        if (sent.held) return `Held for ${id.slice(0, 8)} "${(await control.get(id)).title}": it gets this with the other reports once the threads it started have finished, so there's no need to send it again.`;
         return `Sent to ${id.slice(0, 8)} "${(await control.get(id)).title}".`;
       }),
     ),

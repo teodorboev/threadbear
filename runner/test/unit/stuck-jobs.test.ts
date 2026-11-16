@@ -178,7 +178,7 @@ test('ps, lsof and CLI matching', () => {
 
 test('a browserbear handoff --wait is left alone until its own timeout, then counts', async () => {
   const { h, probe, jobs, thread, s } = setUp();
-  const handoff = { id: 'b2', type: 'local_bash', kind: 'shell' as const, description: 'Wait for Mike to sign in' };
+  const handoff = { id: 'b2', type: 'local_bash', kind: 'shell' as const, description: 'Wait for Alex to sign in' };
   s.out({ kind: 'tasks', tasks: [handoff] });
   s.result('completed');
   const started = h.clock.now();
@@ -416,8 +416,8 @@ test("a quiet shell beside a landing in the same thread is told to leave the lan
 test('which command lines are a landing', () => {
   // As ps showed them on 13 Nov, the installed tb's path with its space included.
   for (const line of [
-    'node /Users/m5-mike/dev/me/threadbear/runner/bin/tb land',
-    'node /Users/m5-mike/Library/Application Support/Threadbear/runner/releases/20261113T003928Z-99ce1163/bin/tb land',
+    'node /Users/alex/code/threadbear/runner/bin/tb land',
+    'node /Users/alex/Library/Application Support/Threadbear/runner/releases/20261113T003928Z-99ce1163/bin/tb land',
     'node ./runner/bin/tb land',
     'node runner/bin/tb land',
     '/opt/homebrew/bin/node /x/bin/tb land --dry-run',

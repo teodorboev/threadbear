@@ -112,7 +112,7 @@ test('a deleted thread is dropped quietly', () => {
   assert.equal(watcher.isWatching(thread.id), false);
 });
 
-test('asks that tell Mike to restart the app count as a request', () => {
+test('asks that tell Alex to restart the app count as a request', () => {
   assert.equal(asksForAppRestart([{ action: 'Click Restart to Update in the Threadbear menu' }]), true);
   assert.equal(asksForAppRestart([{ action: 'Restart Threadbear', where: 'Threadbear menu > Restart to Update' }]), true);
   // The ask is one paragraph now, so the words can be in its why.

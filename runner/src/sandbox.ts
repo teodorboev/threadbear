@@ -59,12 +59,76 @@ export function sandboxFor(sb: SandboxConfig | undefined, cwd: string): SandboxC
   return sb.folders.some((f) => inside(at, real(f))) ? sb : undefined;
 }
 
-// Variables the container gets its own of, rather than the runner's.
-// THREADBEAR_NODE names the host's Node (threadEnv), which isn't in the
-// container: passed in, the repo's scripts would refuse it rather than use
-// the container's own node (Codex's review, 9 Nov 2026). Its old name too,
-// which the scripts turn back into it.
-const OWN_ENV = new Set(['PATH', 'HOME', 'PWD', 'OLDPWD', 'SHLVL', '_', 'TMPDIR', 'USER', 'LOGNAME', 'SHELL', 'THREADBEAR_NODE', 'THREADBARE_NODE']);
+// What of the CLI's environment goes into the container: an allowlist,
+// never "everything but". The runner's environment is the user's login
+// shell's (and whatever launched it), so it can hold any cloud, GitHub,
+// signing or API key, an ssh-agent socket or a proxy with a password in
+// it; forwarded, each was readable by the confined agent and usable over
+// the container's network (Daybreak 124, 15 Nov 2026). So only what Claude
+// Code itself needs to run its session goes in: its config folder (its
+// login, read from there, as the CLI in a Linux container keeps it in a
+// file, not the Keychain), the settings Threadbear and the SDK set for it
+// (each by name),
+// which model, the thread's id, and the terminal's locale. Nothing named
+// like a credential goes in, even under an allowed prefix, so a token the
+// runner's environment hands the CLI (CLAUDE_CODE_OAUTH_TOKEN,
+// ANTHROPIC_API_KEY) stays out too: the sandbox's Claude signs in from its
+// login's folder. THREADBEAR_THREAD_KEY never goes in (a confined thread
+// isn't given one, and nothing in the sandbox should reach the runner).
+// PATH, HOME, TMPDIR, USER and the like are the container's own, and
+// THREADBEAR_NODE names the host's Node, which isn't in it: passed in,
+// the repo's scripts would refuse it rather than use the container's own
+// node (Codex's review, 9 Nov 2026). A new name here needs a reason it
+// can't carry a secret; sandbox.test.ts lists what a sandboxed agent sees.
+const SANDBOX_ENV = new Set([
+  'CLAUDE_CONFIG_DIR',
+  'CLAUDE_SECURESTORAGE_CONFIG_DIR',
+  // What the runner sets for the CLI (adapter.ts), and what the Agent SDK
+  // adds as it spawns it (sdk.mjs), by name: a prefix let through
+  // CLAUDE_CODE_REMOTE_MCP_CONFIG (a remote MCP server's tokens),
+  // CLAUDE_CODE_EXTRA_BODY and the like whenever the runner's environment
+  // had them (Grok's review, 15 Nov 2026).
+  'CLAUDE_AGENT_SDK_CLIENT_APP',
+  'CLAUDE_AGENT_SDK_VERSION',
+  'CLAUDE_CODE_ENTRYPOINT',
+  'CLAUDE_CODE_TERMINAL_MCP_TOOLS',
+  'CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD',
+  'CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING',
+  'CLAUDE_CODE_SDK_READS_SESSION_STATE',
+  'CLAUDE_CODE_SDK_READS_STARTUP_MARKS',
+  'CLAUDE_CODE_QUESTION_PREVIEW_FORMAT',
+  'CLAUDE_CODE_SDK_HAS_OAUTH_REFRESH',
+  'CLAUDE_CODE_SDK_HAS_HOST_AUTH_REFRESH',
+  'ANTHROPIC_MODEL',
+  'ANTHROPIC_SMALL_FAST_MODEL',
+  'THREADBEAR_THREAD_ID',
+  'THREADBARE_THREAD_ID',
+  'THREADBEAR_RUNNER_VERSION',
+  'LANG',
+  'LANGUAGE',
+  'TERM',
+  'COLORTERM',
+  'TZ',
+  'NO_COLOR',
+  'FORCE_COLOR',
+]);
+// The model defaults, and the locale's categories.
+const SANDBOX_ENV_PREFIX = /^(ANTHROPIC_DEFAULT_[A-Z0-9_]*_MODEL$|LC_[A-Z]+$)/;
+// Anything that looks like it carries a secret or reaches elsewhere stays
+// out, whatever its prefix. Matched on the name's words, upper-cased.
+const SANDBOX_ENV_DENY = /(^|_)(TOKEN|TOKENS|KEY|KEYS|SECRET|SECRETS|PASSWORD|PASSWD|PASS|PWD|CREDENTIAL|CREDENTIALS|CREDS|AUTH|OAUTH|AUTHORIZATION|COOKIE|PRIVATE|CERT|SOCK|SOCKET|PROXY|HEADERS|URL)($|_)/;
+// Flags the SDK sets that only say what it can do ("1"), whose names
+// happen to say AUTH.
+const SANDBOX_ENV_FLAGS = new Set(['CLAUDE_CODE_SDK_HAS_OAUTH_REFRESH', 'CLAUDE_CODE_SDK_HAS_HOST_AUTH_REFRESH']);
+
+// Whether the CLI's variable `name` is handed into the sandbox.
+export function sandboxEnvAllowed(name: string): boolean {
+  if (SANDBOX_ENV_FLAGS.has(name)) return true;
+  const n = name.toUpperCase();
+  if (n !== name) return false; // a lower-case http_proxy and friends
+  if (SANDBOX_ENV_DENY.test(n)) return false;
+  return SANDBOX_ENV.has(n) || SANDBOX_ENV_PREFIX.test(n);
+}
 
 export type DockerRun = { command: string; args: string[]; name: string };
 
@@ -101,7 +165,7 @@ export function dockerRun(
   // Anything else the CLI is handed by absolute path that's on this machine.
   for (const a of spawn.args) if (path.isAbsolute(a) && ctx.exists(a)) mount(ctx.realpath(a), 'ro');
   const env: string[] = [];
-  for (const k of Object.keys(spawn.env)) if (spawn.env[k] !== undefined && !OWN_ENV.has(k)) env.push('-e', k);
+  for (const k of Object.keys(spawn.env).sort()) if (spawn.env[k] !== undefined && sandboxEnvAllowed(k)) env.push('-e', k);
   const args = [
     'run', '-i', '--rm', '--init', '--name', name,
     '--user', `${ctx.uid}:${ctx.gid}`,

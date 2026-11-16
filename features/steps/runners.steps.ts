@@ -1,5 +1,5 @@
 // The Runners panel (features/runners.feature). Its lines are what it draws:
-// the summary first, then a line a runner ("bruce: Online, up 1d, 51ae514",
+// the summary first, then a line a runner ("mac-mini: Online, up 1d, 51ae514",
 // with " *" after the name where new threads start), and under each, indented,
 // its figures while its details are open and the threads running on it.
 import { Then, When } from '@cucumber/cucumber';
@@ -28,12 +28,12 @@ Then('the Runners panel shows {string} online on {string}', async function (this
   await this.until(`${name} online on ${build}`, (d) => d.runners?.lines.some((l) => line.test(l)));
 });
 
-When("I open bruce's details in the Runners panel", async function (this: ThreadbearWorld) {
-  await this.app.do({ cmd: 'click', tipPrefix: "Show bruce's CPU, memory and disk" });
+When("I open mac-mini's details in the Runners panel", async function (this: ThreadbearWorld) {
+  await this.app.do({ cmd: 'click', tipPrefix: "Show mac-mini's CPU, memory and disk" });
 });
 
-When("I close bruce's details in the Runners panel", async function (this: ThreadbearWorld) {
-  await this.app.do({ cmd: 'click', tipPrefix: "Hide bruce's details" });
+When("I close mac-mini's details in the Runners panel", async function (this: ThreadbearWorld) {
+  await this.app.do({ cmd: 'click', tipPrefix: "Hide mac-mini's details" });
 });
 
 // Asked for now, as the panel does every 10 s while its window can be seen,

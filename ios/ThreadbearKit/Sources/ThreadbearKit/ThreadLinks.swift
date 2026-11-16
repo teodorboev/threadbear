@@ -113,7 +113,7 @@ public enum ThreadLinks {
     }
 
     /// Lowercase, one space, and home as the runner's step lines write it, so
-    /// `/Users/mike/a.md` finds "Edited ~/a.md".
+    /// `/Users/alex/a.md` finds "Edited ~/a.md".
     private static func normal(_ text: String) -> String {
         text.replacing(/\/Users\/[^\/\s]+/, with: "~")
             .lowercased()

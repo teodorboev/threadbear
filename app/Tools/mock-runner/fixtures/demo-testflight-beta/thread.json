@@ -1,7 +1,7 @@
 {
   "id": "demo_testflight_beta",
   "title": "Ship the beta to TestFlight",
-  "cwd": "/Users/mike/dev/me/misc",
+  "cwd": "/Users/alex/code/misc",
   "accountId": "claude-main",
   "provider": "claude",
   "permissionMode": "full",

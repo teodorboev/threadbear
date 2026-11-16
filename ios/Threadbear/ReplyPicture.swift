@@ -44,7 +44,8 @@ nonisolated final class LoadedPicture: Sendable {
     }
 }
 
-/// Pictures from file storage or the web. Their own cache on disk, as
+/// Pictures from the backend's file storage (a web address an agent wrote is
+/// never loaded here: WebPictureLink). Their own cache on disk, as
 /// URLCache.shared won't keep anything much bigger than half a megabyte, and
 /// a picture shouldn't be fetched again each time it scrolls back into view.
 actor PictureLoader {
@@ -402,6 +403,24 @@ struct PictureOnMac: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
         .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+    }
+}
+
+/// A picture an agent or another Mac wrote as a web address, which isn't one
+/// of the thread's stored pictures: the app never fetches it, as the address
+/// could be anyone's server or one on Mike's own network (Daybreak findings
+/// 129 and 133). A tap opens it through the thread's links, like any other.
+struct WebPictureLink: View {
+    var alt: String
+    var url: URL
+    @Environment(\.openURL) private var openURL
+
+    var body: some View {
+        Button { openURL(url) } label: {
+            PictureOnMac(alt: alt, note: "Picture on \(url.host() ?? "the web"), not loaded. Tap to open it.")
+        }
+        .buttonStyle(.plain)
+        .accessibilityHint("Opens the picture's web address")
     }
 }
 

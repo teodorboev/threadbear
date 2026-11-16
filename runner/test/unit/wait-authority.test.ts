@@ -75,7 +75,7 @@ test('quietInbox: a helper with as much access is still waited on, and its reply
   assert.equal(heard(parent), true);
 });
 
-test('quietInbox: raised to Full while it waits, it wakes for Mike without passing the reply on', async () => {
+test('quietInbox: raised to Full while it waits, it wakes for Alex without passing the reply on', async () => {
   const { h, make, finish, heard, notes } = setup();
   const parent = make('Plan the port', 'ask');
   const child = make('Fix the panel reload', 'ask', parent);

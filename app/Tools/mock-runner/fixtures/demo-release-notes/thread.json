@@ -1,7 +1,7 @@
 {
   "id": "demo_release_notes",
   "title": "Draft the release notes for 0.4",
-  "cwd": "/Users/mike/dev/me/misc",
+  "cwd": "/Users/alex/code/misc",
   "accountId": "claude-main",
   "provider": "claude",
   "permissionMode": "full",

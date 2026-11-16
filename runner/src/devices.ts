@@ -1,8 +1,9 @@
 // devices.list, devices.pair and devices.revoke (docs/protocol.md,
 // "Devices"): the Settings window's Phone & browser tab. Each is a call to
 // the backend through the mirror's client (sync.ts), so pairing a phone or
-// signing a browser in needs no Convex CLI. The token a pair issues goes
-// back in the reply, inside the link the app draws or opens, and nowhere
+// signing a browser in needs no Convex CLI. A browser's token goes back in
+// the reply, inside the sign-in link the app opens, and a phone's one-use
+// pairing code inside the text its QR code draws, and nowhere
 // else: not the log, not a file, and no tb command prints one, since a
 // thread's transcript can command agents.
 import type { ConvexSync, Device, DeviceKind } from './sync.ts';
@@ -21,17 +22,37 @@ export type Pairing = { device: Device; pairingLink?: string; signInLink?: strin
 // URL has no site.
 export { siteOf } from './convex-admin.ts';
 
-// What the iPhone app scans (ios/ThreadbearKit Pairing.swift): the
-// deployment and the token in a threadbear://pair link, and a
-// `key=<runnerId>:<public key>` for each runner whose secret-box key the
-// phone may seal to. The phone takes runner keys only from here, as they
-// come straight from this Mac and not through the mirror.
-export function pairingLink(url: string, token: string, keys: { runnerId: string; key: string }[] = []): string {
-  const u = new URL('threadbear://pair');
-  u.searchParams.set('url', url);
-  u.searchParams.set('token', token);
-  for (const k of keys) u.searchParams.append('key', `${k.runnerId}:${k.key}`);
-  return u.toString();
+// What the phone apps scan (ios/ThreadbearKit Pairing.swift, the Android
+// kit's Pairing.kt): `TBPAIR1_` and then, base64url without padding, the
+// query `url=<deployment>&code=<one-use code>&key=<runnerId>:<public key>…`,
+// a `key` for each runner whose secret-box key the phone may seal to. The
+// phone takes runner keys only from here, as they come straight from this
+// Mac and not through the mirror.
+//
+// Not a link, on purpose (Daybreak finding 127, 15 Nov 2026). It used to be
+// `threadbear://pair?url=…&token=…`, and any app on the phone can claim the
+// threadbear scheme, so pointing the Camera at the code could hand another
+// app a 90-day token. This has no scheme for anything to claim, no dots for
+// a link finder to take for a web address, and only a code that's good for
+// ten minutes and once, which the phone's own scanner trades for its token
+// (convex/tokens.ts, claim). `_`, letters and digits only, so the frozen
+// Swift app's URL decoding of `pairingLink` still takes it as it is.
+export const PAIRING_PREFIX = 'TBPAIR1_';
+
+export function pairingText(url: string, code: string, keys: { runnerId: string; key: string }[] = []): string {
+  const q = new URLSearchParams();
+  q.set('url', url);
+  q.set('code', code);
+  for (const k of keys) q.append('key', `${k.runnerId}:${k.key}`);
+  return PAIRING_PREFIX + Buffer.from(q.toString(), 'utf8').toString('base64url');
+}
+
+/** The query inside a pairing text, for tests and `tb`: undefined for anything else. */
+export function readPairingText(text: string): URLSearchParams | undefined {
+  if (!text.startsWith(PAIRING_PREFIX)) return undefined;
+  const body = text.slice(PAIRING_PREFIX.length);
+  if (!/^[A-Za-z0-9_-]+$/.test(body)) return undefined;
+  return new URLSearchParams(Buffer.from(body, 'base64url').toString('utf8'));
 }
 
 // What the website takes (web/src/token.ts): the token in the #fragment,
@@ -69,6 +90,21 @@ export function devicesMethods(sync: ConvexSync, onPaired?: (kind: DeviceKind) =
       if (kind === 'phone' && localOnly(url)) throw new RpcError(ErrorCode.other, LOCAL_ONLY_PHONE);
       const site = sync.site();
       if (kind === 'browser' && !site) throw new RpcError(ErrorCode.other, `This runner doesn't know where the website is for ${url}. A self-hosted backend needs sync.site in runner.json (docs/self-hosting.md).`);
+      if (kind === 'phone') {
+        // A one-use code, never the token (pairingText says why). The
+        // phone's token is made when it trades the code, so the device it
+        // will be shows in devices.list from then; `device` here stands for
+        // it, with the code's id and a 90-day guess at its expiry.
+        let issued: { id: string; code: string; expiresAt: string };
+        try {
+          issued = await sync.issuePairingCode({ name: name.trim(), days });
+        } catch (e) {
+          throw new RpcError(ErrorCode.other, (e as Error).message);
+        }
+        onPaired?.('phone');
+        const device: Device = { id: issued.id, kind: 'phone', name: name.trim(), createdAt: new Date().toISOString(), expiresAt: new Date(Date.now() + days * 86_400_000).toISOString(), expired: false };
+        return { device, pairingLink: pairingText(url, issued.code, sync.pairingKeys()) };
+      }
       let issued: { id: string; token: string; expiresAt: string };
       try {
         issued = await sync.issueToken({ kind: kind as DeviceKind, name: name.trim(), days });
@@ -77,7 +113,7 @@ export function devicesMethods(sync: ConvexSync, onPaired?: (kind: DeviceKind) =
       }
       onPaired?.(kind as DeviceKind);
       const device: Device = { id: issued.id, kind: kind as DeviceKind, name: name.trim(), createdAt: new Date().toISOString(), expiresAt: issued.expiresAt, expired: false };
-      return kind === 'phone' ? { device, pairingLink: pairingLink(url, issued.token, sync.pairingKeys()) } : { device, signInLink: signInLink(site!, issued.token) };
+      return { device, signInLink: signInLink(site!, issued.token) };
     },
     'devices.revoke': async (p): Promise<DeviceList> => {
       const id = p.deviceId;

@@ -106,7 +106,7 @@ fn testADoneTurnGetsTheDoneCardAndHidesItsEndTurn() {
     let mut model = from_events(vec![
         event_turn(1, "turn.started", json!({"turnId": "t1"}), Some("t1")),
         end_turn(2, "c1"),
-        result_with(3, "c1", false, "Not ended: Mike hasn't had a reply this turn.", json!([])),
+        result_with(3, "c1", false, "Not ended: the user hasn't had a reply this turn.", json!([])),
         text(4, "m1", "Built it."),
         end_turn(5, "c2"),
         result_text(6, "c2", "Noted: this thread is done."),
@@ -127,9 +127,9 @@ fn testADoneTurnGetsTheDoneCardAndHidesItsEndTurn() {
 /// dropped.
 #[test]
 fn testTheDoneCardCarriesTheSuggestedNextSteps() {
-    let model = from_events(vec![needs_nothing(1, "t1", json!(["Show Bruce pictures", 7, "Start Bruce threads"]))]);
+    let model = from_events(vec![needs_nothing(1, "t1", json!(["Show Mac mini pictures", 7, "Start Mac mini threads"]))]);
     assert_eq!(card(&model, "ak:1").map(|c| c.is_done()), Some(true));
-    assert_eq!(card(&model, "ak:1").map(|c| c.next.clone()), Some(vec!["Show Bruce pictures".to_owned(), "Start Bruce threads".to_owned()]));
+    assert_eq!(card(&model, "ak:1").map(|c| c.next.clone()), Some(vec!["Show Mac mini pictures".to_owned(), "Start Mac mini threads".to_owned()]));
 }
 
 /// Ticking follow-ups shows on the done card, and survives a rebuild of the

@@ -50,13 +50,8 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
-            <!-- Pairing links: threadbear://pair?url=…&token=… (asked about before use). -->
-            <intent-filter>
-                <action android:name="android.intent.action.VIEW" />
-                <category android:name="android.intent.category.DEFAULT" />
-                <category android:name="android.intent.category.BROWSABLE" />
-                <data android:scheme="threadbear" android:host="pair" />
-            </intent-filter>
+            <!-- No threadbear://pair links: any app can claim the scheme, so the
+                 Mac's pairing code is read by the app's own scanner (Daybreak 127). -->
         </activity>
         <!-- Notifications through the push relay (Push.kt). -->
         <service

@@ -23,12 +23,12 @@ function fakeCli(key = 'dev:calm-cat-1|secretsecret') {
 test('a deploy key is made once per deployment, kept private, and made again on renew', async () => {
   const dir = path.join(tmpDir(), 'secrets', 'convex-panels');
   const cli = fakeCli();
-  const keys = new ConvexKeys(dir, cli.run, 'Mikes-MacBook.local');
+  const keys = new ConvexKeys(dir, cli.run, 'Alexs-MacBook.local');
   const [a, b] = await Promise.all([keys.key('calm-cat-1', '/proj'), keys.key('calm-cat-1', '/proj')]);
   assert.equal(a, 'dev:calm-cat-1|secretsecret');
   assert.equal(b, a);
   assert.equal(cli.calls.length, 1, 'two panels opening together make one key');
-  const name = /token create (threadbear-panel-mikes-macbook-[0-9a-f]{6}) --deployment calm-cat-1 --save-env '/.exec(cli.calls[0].command)?.[1];
+  const name = /token create (threadbear-panel-alexs-macbook-[0-9a-f]{6}) --deployment calm-cat-1 --save-env '/.exec(cli.calls[0].command)?.[1];
   assert.ok(name, cli.calls[0].command);
   assert.ok(cli.calls[0].command.startsWith(`${CONVEX_CLI} deployment token create `), cli.calls[0].command);
   assert.equal(cli.calls[0].cwd, '/proj');
@@ -42,7 +42,7 @@ test('a deploy key is made once per deployment, kept private, and made again on 
   // (names are unique on a deployment).
   await keys.key('calm-cat-1', '/proj', true);
   assert.equal(cli.calls[1].command, `${CONVEX_CLI} deployment token delete ${name} --deployment calm-cat-1`);
-  assert.match(cli.calls[2].command, /token create threadbear-panel-mikes-macbook-[0-9a-f]{6} /);
+  assert.match(cli.calls[2].command, /token create threadbear-panel-alexs-macbook-[0-9a-f]{6} /);
   assert.ok(!cli.calls[2].command.includes(name!));
   assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).name, /token create (\S+)/.exec(cli.calls[2].command)![1]);
 });
@@ -59,9 +59,9 @@ const failing = (text: string) => async (): Promise<CommandOutcome> => ({ ok: fa
 test('a failed CLI call says why in plain words, with a code the panel acts on, and makes no key file', async () => {
   const dir = path.join(tmpDir(), 'convex-panels');
   // Real convex 1.48 output, signed out.
-  const out = new ConvexKeys(dir, failing('\x1b[31m✖ Creating a deploy key requires being logged in with a personal access token. Run npx convex login and try again.\x1b[0m\n'), 'bruce.tail1234.ts.net', { configFile: loginFile(false) });
+  const out = new ConvexKeys(dir, failing('\x1b[31m✖ Creating a deploy key requires being logged in with a personal access token. Run npx convex login and try again.\x1b[0m\n'), 'mac-mini.tail1234.ts.net', { configFile: loginFile(false) });
   await assert.rejects(out.key('calm-cat-1', '/proj'), (e: RpcError) => e.code === ErrorCode.convexSignedOut
-    && /The Convex CLI on bruce isn't signed in to Convex/.test(e.message) && !e.message.includes('tail1234'));
+    && /The Convex CLI on mac-mini isn't signed in to Convex/.test(e.message) && !e.message.includes('tail1234'));
   assert.deepEqual(fs.readdirSync(dir), []);
   // An expired login still has a token in the file: the CLI's 401 says so.
   const expired = new ConvexKeys(dir, failing('✖ Error fetching GET https://api.convex.dev/api/x 401 Unauthorized: MissingAccessToken'), 'mac', { configFile: loginFile() });

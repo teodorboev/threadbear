@@ -29,7 +29,23 @@
 //     sent `import 'zod'` to a script of the repo's, unasked (Gautam's
 //     scan, 6 Nov); a workspace package (node_modules links to
 //     packages/x, which Node follows) is one of the repo's files too.
-// The files keep their own paths, so `import.meta.url` means what it did.
+//
+// Each trusted version of a patch is a graph of its own: every file in it
+// (the patch, its helpers, the packages its repo commits) is a module at
+// its own path with the graph's id as the query, `file:///…/h.ts?tb=<id>`,
+// and its edges, bytes and repo are kept under those URLs. Only the patch
+// had a versioned URL once; its helpers were modules at their plain path,
+// once per process, and their edges a map by path that the next version
+// wrote over. So a newer trusted patch got an older trusted version's
+// helper (Node had already loaded it), and an older one's late `import()`
+// followed the newer one's edges: code that was in neither version anyone
+// trusted (Daybreak 131, 15 Nov 2026). Now nothing is shared between
+// graphs, and nothing a graph noted is changed by another. The query
+// doesn't change the path, so `import.meta.filename`, `.dirname` and
+// `new URL('./x', import.meta.url)` mean what they did (`import.meta.url`
+// itself carries the query). CommonJS has no graph of its own in Node's
+// cache, so a trusted patch's graph refuses it (load, below).
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { registerHooks } from 'node:module';
@@ -37,43 +53,54 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { cutQueryAndHash } from './linear-text.ts';
 import { repoTopOf, unhashedPackageFile } from './tracked-packages.ts';
 
-// Module URL (the patch file's with its ?v= query, a helper's plain) to
-// the bytes to serve for it.
+// A module's graph-scoped URL to the bytes to serve for it.
 const sources = new Map<string, Buffer>();
-// A served module's plain URL to its local specifiers' targets (URLs).
+// A served module's URL to its local specifiers' targets (URLs, in the
+// same graph).
 const edges = new Map<string, Map<string, string>>();
-// A served module's plain URL to its patch's repo top.
+// A served module's URL to its patch's repo top.
 const tops = new Map<string, string>();
 let installed = false;
 
 const plain = (url: string) => cutQueryAndHash(url);
 
+// The graph a served module's URL is in, by its `tb` query.
+function graphOf(url: string): string | undefined {
+  const q = url.indexOf('?');
+  if (q < 0) return undefined;
+  return new URLSearchParams(url.slice(q + 1).split('#')[0]).get('tb') ?? undefined;
+}
+
+// A file's URL in graph `g`.
+const inGraph = (file: string, g: string) => `${pathToFileURL(file).href}?tb=${g}`;
+
 // The URL to import a trusted patch at, after noting its code. `root` is
 // the patch file's real path, `hash` its trust hash (so a new version is
-// a new module), `code` its import graph by real path, `links` each of
+// a new graph), `code` its import graph by real path, `links` each of
 // those files' local specifiers to the real path the hash followed.
 export function verifiedUrl(root: string, hash: string, code: Map<string, Buffer>, links: Map<string, Map<string, string>>): string {
   install();
-  const url = `${pathToFileURL(root).href}?v=${hash}`;
+  // By the patch's path as well as its hash, so two patches whose graphs
+  // hash alike still share nothing.
+  const g = crypto.createHash('sha256').update(`${root}\0${hash}`).digest('hex').slice(0, 40);
+  const url = inGraph(root, g);
+  // Noted already: the same path and hash is the same bytes and edges.
+  if (sources.has(url)) return url;
   const top = repoTopOf(root);
   for (const [file, bytes] of code) {
-    // A helper is a module once per process (as before): the first
-    // verified version noted is the one Node loads.
-    sources.set(file === root ? url : pathToFileURL(file).href, bytes);
-    if (!tops.has(pathToFileURL(file).href)) tops.set(pathToFileURL(file).href, top);
+    sources.set(inGraph(file, g), bytes);
+    tops.set(inGraph(file, g), top);
   }
-  // The patch file's plain URL too, so a helper importing it back is
-  // served the hashed bytes.
-  if (!sources.has(pathToFileURL(root).href)) sources.set(pathToFileURL(root).href, code.get(root)!);
   for (const [from, specs] of links) {
-    const to = new Map([...specs].map(([spec, target]) => [spec, pathToFileURL(target).href]));
-    edges.set(pathToFileURL(from).href, to);
+    const to = new Map([...specs].map(([spec, target]) => [spec, inGraph(target, g)]));
+    edges.set(inGraph(from, g), to);
   }
   return url;
 }
 
+// Only ever by the whole URL, graph and all: a plain path is no graph's.
 function served(url: string): Buffer | undefined {
-  return sources.get(url) ?? sources.get(plain(url));
+  return sources.get(url);
 }
 
 // How a specifier is written: local (a path or file: URL) or bare.
@@ -132,6 +159,27 @@ function ownPackage(file: string): string | undefined {
   }
 }
 
+// Why the package.json files Node resolved a committed package's file by
+// aren't this graph's, or undefined when each is: every one in a folder
+// under a node_modules between the file and the repo's top, as it is on
+// disk now, must be one the graph has, byte for byte.
+function packageJsonsDiffer(file: string, top: string, mine: (f: string) => Buffer | undefined): string | undefined {
+  for (let d = path.dirname(file); d.startsWith(top) && d !== top; d = path.dirname(d)) {
+    if (!path.relative(top, d).split(path.sep).includes('node_modules')) break;
+    const pj = path.join(d, 'package.json');
+    let now: Buffer;
+    try {
+      now = fs.readFileSync(pj);
+    } catch {
+      if (fs.existsSync(pj)) return `${pj} can't be read`;
+      continue;
+    }
+    const kept = mine(pj);
+    if (!kept || !kept.equals(now)) return `${pj} isn't the package.json patch trust hashed`;
+  }
+  return undefined;
+}
+
 function describe(url: string): string {
   try {
     return url.startsWith('file:') ? fileURLToPath(plain(url)) : url;
@@ -153,16 +201,33 @@ function install(): void {
         const out = nextResolve(specifier, context);
         if (!isPackageUrl(out.url, specifier)) throw new Error(`${fileURLToPath(plain(parent))} imports ${specifier}, which resolves to ${describe(out.url)}, not a package in node_modules, and patch trust didn't hash it: not loaded.`);
         // One the repo commits loads only from hashed bytes (patchHash
-        // hashes them all once a patch has a bare import).
-        const top = tops.get(plain(parent));
+        // hashes them all once a patch has a bare import), and from this
+        // graph's: it's a module of the graph, like a helper.
+        const top = tops.get(parent);
+        const g = graphOf(parent)!;
         if (top && out.url.startsWith('file:')) {
-          const why = unhashedPackageFile(fileURLToPath(plain(out.url)), top, (f) => !!served(pathToFileURL(f).href));
+          const file = fileURLToPath(plain(out.url));
+          const why = unhashedPackageFile(file, top, (f) => !!served(inGraph(f, g)));
           if (why) throw new Error(`${fileURLToPath(plain(parent))} imports ${specifier}, and ${why}: not loaded.`);
+          if (served(inGraph(file, g))) {
+            // Node picked the file by the package.json on disk now, which
+            // may be another trusted version's: its `exports` could send
+            // this version's import to a file this version never loaded as
+            // that (Grok's review of Daybreak 131). So the package.json it
+            // went by must be this graph's, byte for byte.
+            // Every package.json under node_modules on the way up from the
+            // file counts, a nested package's and the one above it: an
+            // `exports` can name ./node_modules/helper/index.js (Grok's
+            // second review).
+            const why = packageJsonsDiffer(file, top, (f) => served(inGraph(f, g)));
+            if (why) throw new Error(`${fileURLToPath(plain(parent))} imports ${specifier}, and ${why}: not loaded.`);
+            return { url: inGraph(file, g), format: out.format, shortCircuit: true };
+          }
         }
         return out;
       }
       const key = specifier.startsWith('file:') ? fileURLToPath(specifier) : specifier;
-      const target = edges.get(plain(parent))?.get(key);
+      const target = edges.get(parent)?.get(key);
       const from = fileURLToPath(plain(parent));
       if (!target || !served(target)) throw new Error(`${from} imports ${specifier}, which patch trust didn't hash: not loaded.`);
       return { url: target, format: undefined, shortCircuit: true };
@@ -176,6 +241,12 @@ function install(): void {
       // there would hang).
       if (!fs.statSync(fileURLToPath(plain(url))).isFile()) throw new Error(`${fileURLToPath(plain(url))} isn't a file now: not loaded.`);
       const out = nextLoad(url, context);
+      // CommonJS is kept by Node once per process by its path, query or
+      // not, so two trusted versions of one would share whichever ran
+      // first: a graph of its own can only be ES modules (Grok's review of
+      // Daybreak 131, 15 Nov 2026). A `.ts` or `.js` written with
+      // import/export is one, as Node detects it.
+      if (typeof out.format === 'string' && out.format.includes('commonjs')) throw new Error(`${fileURLToPath(plain(url))} is CommonJS, which Node loads once per process whichever version of it was trusted, so a trusted patch can't load it: not loaded. Make it an ES module (import and export, or .mjs).`);
       return { ...out, source: bytes, shortCircuit: true };
     },
   });

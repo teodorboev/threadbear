@@ -18,7 +18,7 @@ Feature: Crash reports
   Scenario: A panic is kept with where it happened, and without the words it had
     When something in the app panics with the message:
       """
-      couldn't open "Fix the share button" in /Users/mike/Secret Project/plan.md: not found
+      couldn't open "Fix the share button" in /Users/alex/Secret Project/plan.md: not found
       """
     Then the app has kept that panic, written as:
       """

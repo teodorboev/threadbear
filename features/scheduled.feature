@@ -20,11 +20,11 @@ Feature: Scheduled messages
     When I click "Scheduled" in the activity bar
     Then the schedule "Check the CI run again" runs "in 40m"
     And the schedule "Check the CI run again" sends to "Why is the build slow on CI?"
-    And the schedule "Photo library check" runs on "bruce" and sends to "New thread in Photos"
-    And the schedule "Disk space report" notes "Waiting for bruce to run it"
+    And the schedule "Photo library check" runs on "mac-mini" and sends to "New thread in Photos"
+    And the schedule "Disk space report" notes "Waiting for mac-mini to run it"
     And the schedule "Weekly dependency check" notes "Skipped last run: the last thread it started was still running"
     And the schedule "Nightly backup report" runs "Paused"
-    And the schedule "Nightly backup report" notes "Last run failed: the folder /Users/mike/dev/old-backups is gone"
+    And the schedule "Nightly backup report" notes "Last run failed: the folder /Users/alex/dev/old-backups is gone"
 
   @schedule.page
   Scenario: The page beside the list says what's next and counts them
@@ -71,7 +71,7 @@ Feature: Scheduled messages
   Scenario: Another Mac's schedule is asked of that Mac
     When I click "Scheduled" in the activity bar
     And I hover the row "Photo library check"
-    Then the row "Photo library check" offers the buttons "Ask bruce to run it now, Pause, Delete"
+    Then the row "Photo library check" offers the buttons "Ask mac-mini to run it now, Pause, Delete"
 
   @schedule.editor
   Scenario: New schedule opens the editor on weekdays at 9
@@ -83,4 +83,4 @@ Feature: Scheduled messages
   Scenario: A schedule opens in the editor with what it sends and when
     When I click "Scheduled" in the activity bar
     And I open the schedule "Weekly dependency check" in the editor
-    Then the schedule editor is open on "Look for outdated npm and Swift packages in ~/dev/me and list the ones worth updating." repeating on "0 10 * * 1"
+    Then the schedule editor is open on "Look for outdated npm and Swift packages in ~/code and list the ones worth updating." repeating on "0 10 * * 1"

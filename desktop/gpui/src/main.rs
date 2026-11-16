@@ -300,7 +300,8 @@ fn main() {
                 window_min_size: Some(size(px(760.), px(480.))),
                 app_id: Some("threadbear".into()),
                 focus,
-                show: !hidden,
+                // A dev-app.sh copy is ordered in unseen (scripted.rs).
+                show: !hidden && !scripted::unseen(),
                 ..Default::default()
             },
             cx,
@@ -311,7 +312,7 @@ fn main() {
         // window is in front (window_menu.rs).
         window.update(cx, |_, w, cx| window_menu::install(w, cx)).ok();
         if scripted::keep_behind() {
-            window.update(cx, |_, w, _| scripted::send_behind(w)).ok();
+            window.update(cx, |_, w, _| scripted::place(w)).ok();
         }
         if hidden {
             window.update(cx, |_, w, _| handover::conceal(w)).ok();

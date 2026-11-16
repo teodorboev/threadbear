@@ -875,10 +875,10 @@ mod tests {
     #[test]
     fn a_thread_whose_folder_isnt_here_gets_the_home_shell_and_says_why() {
         let mut t = thread("t1", "/work/repo");
-        t.runner_id = Some("bruce".into());
-        let target = target_for(Some(&t), "/Users/me", Some("Bruce"), |_| true);
+        t.runner_id = Some("mac-mini".into());
+        let target = target_for(Some(&t), "/Users/me", Some("Mac mini"), |_| true);
         assert_eq!(target.key, TerminalKey::Home);
-        assert_eq!(target.note.as_deref(), Some("This thread runs on Bruce, so this terminal is on this Mac, in your home folder."));
+        assert_eq!(target.note.as_deref(), Some("This thread runs on Mac mini, so this terminal is on this Mac, in your home folder."));
         assert!(target_for(Some(&t), "/h", None, |_| true).note.unwrap().contains("on another machine"));
         let mut archived = thread("t2", "/work/repo");
         archived.archived_at = Some("2026-11-10T00:00:00Z".into());
@@ -896,11 +896,11 @@ mod tests {
         archived_local.archived_at = Some("2026-11-10T00:00:00Z".into());
         let mut archived_remote = thread("b", "/x");
         archived_remote.archived_at = Some("2026-11-10T00:00:00Z".into());
-        archived_remote.runner_id = Some("bruce".into());
+        archived_remote.runner_id = Some("mac-mini".into());
         // Another runner's row called "home", archived.
         let mut home_row = thread("home", "/x");
         home_row.archived_at = Some("2026-11-10T00:00:00Z".into());
-        home_row.runner_id = Some("bruce".into());
+        home_row.runner_id = Some("mac-mini".into());
         for t in [archived_local, archived_remote, home_row, thread("c", "/x")] {
             threads.insert(t.id.clone(), t);
         }
@@ -917,7 +917,7 @@ mod tests {
         // A block in a thread open in a panel of its own, not the main panel.
         assert!(!can_put(Some("t2"), Some("t1"), &own));
         assert!(!can_put(None, Some("t1"), &own));
-        let home = Target { key: TerminalKey::Home, cwd: "/h".into(), note: Some("This thread runs on Bruce…".into()) };
+        let home = Target { key: TerminalKey::Home, cwd: "/h".into(), note: Some("This thread runs on Mac mini…".into()) };
         assert!(!can_put(Some("t1"), Some("t1"), &home));
     }
 

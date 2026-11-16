@@ -21,6 +21,8 @@ const HOSTS: Record<Provider, string> = {
   cursor: 'api2.cursor.sh',
   // Its free models; a login's own provider may be elsewhere.
   opencode: 'opencode.ai',
+  // Its CLI's requests go through Grok's own chat proxy.
+  grok: 'cli-chat-proxy.grok.com',
 };
 
 // How long a probe may take in all, whatever arrives meanwhile: a proxy

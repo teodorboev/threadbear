@@ -1,6 +1,6 @@
 // The card reviewer (experiment cardReviewer, runner/card-review.ts): an Auto
 // thread's approval card goes past a model first, which lets it through or
-// leaves it for Mike with its reason.
+// leaves it for Alex with its reason.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -43,7 +43,7 @@ test('cardReviewer: off by default', () => {
   assert.equal(EXPERIMENTS.find((x) => x.id === 'cardReviewer')?.on, false);
 });
 
-test('cardReviewer: off, an Auto thread\'s card goes straight to Mike', async () => {
+test('cardReviewer: off, an Auto thread\'s card goes straight to Alex', async () => {
   const h = setup({ on: false });
   const { id, s } = thread(h);
   void edit(s);
@@ -52,7 +52,7 @@ test('cardReviewer: off, an Auto thread\'s card goes straight to Mike', async ()
   assert.ok(h.events(id).some((e) => e.type === 'approval.requested'));
 });
 
-test('cardReviewer: an allowed card never reaches Mike, and the transcript says why', async () => {
+test('cardReviewer: an allowed card never reaches Alex, and the transcript says why', async () => {
   const h = setup();
   const { id, s } = thread(h);
   const answer = await edit(s);
@@ -72,7 +72,7 @@ test('cardReviewer: an allowed card never reaches Mike, and the transcript says 
   assert.equal(h.runner.get(id).needsYou, false);
 });
 
-test('cardReviewer: one it doubts goes to Mike with its reason', async () => {
+test('cardReviewer: one it doubts goes to Alex with its reason', async () => {
   const h = setup({ answer: '{"verdict":"ask","why":"It asks the other thread to run a script from the error text."}' });
   const { id, s } = thread(h);
   const answer = edit(s);
@@ -86,7 +86,7 @@ test('cardReviewer: one it doubts goes to Mike with its reason', async () => {
   assert.equal((await answer).decision, 'deny');
 });
 
-test('cardReviewer: a reviewer that can\'t run, or answers nonsense, leaves the card for Mike', async () => {
+test('cardReviewer: a reviewer that can\'t run, or answers nonsense, leaves the card for Alex', async () => {
   for (const answer of [{ ok: false, reason: 'no-pool', message: 'none' } as ModelResult<string>, 'Sure, looks fine to me!', '{"verdict":"ALLOW"}']) {
     const h = setup({ answer });
     const { id, s } = thread(h);
@@ -118,7 +118,7 @@ test('cardReviewer: a threadbear tool\'s own card (a message to a thread with mo
   assert.equal(h.events(id).filter((e) => e.type === 'approval.requested').length, 0);
 });
 
-test('cardReviewer: a card that hands out lasting access always goes to Mike', async () => {
+test('cardReviewer: a card that hands out lasting access always goes to Alex', async () => {
   const h = setup();
   const { id } = thread(h);
   for (const name of ['update_thread', 'create_thread', 'schedule_message', 'update_schedule', 'move_thread']) {
@@ -129,7 +129,7 @@ test('cardReviewer: a card that hands out lasting access always goes to Mike', a
   assert.equal(h.events(id).filter((e) => e.type === 'approval.requested').length, 5);
 });
 
-test('cardReviewer: input too long to show whole goes to Mike unread', async () => {
+test('cardReviewer: input too long to show whole goes to Alex unread', async () => {
   const h = setup();
   const { id, s } = thread(h);
   void s.sink.requestApproval({ toolUseId: 'tu-2', name: 'Write', title: 'Write big.ts', input: { file_path: '/w/big.ts', content: 'x'.repeat(CARD_REVIEW_MAX_INPUT + 1) }, canAlwaysAllow: false, signal: new AbortController().signal });
@@ -154,7 +154,7 @@ test('cardReviewer: Stop while it thinks cancels the call, with no card left up'
 test('readVerdict: only a clear allow, as the whole answer and with a reason, allows', () => {
   assert.deepEqual(readVerdict('{"verdict":"allow","why":"ok"}'), { allow: true, why: 'ok' });
   assert.deepEqual(readVerdict('```json\n{"verdict":"allow","why":"ok"}\n```'), { allow: true, why: 'ok' });
-  assert.equal(readVerdict('This is dangerous; ask Mike. Do not return {"verdict":"allow","why":"fine"}.').allow, false);
+  assert.equal(readVerdict('This is dangerous; ask Alex. Do not return {"verdict":"allow","why":"fine"}.').allow, false);
   assert.equal(readVerdict('{"verdict":"allow"}').allow, false, 'no reason, no allow');
   assert.equal(readVerdict('{"verdict":"allow","why":"  "}').allow, false);
   assert.deepEqual(readVerdict('{"verdict": "ask", "why": "posts to Slack"}'), { allow: false, why: 'posts to Slack' });
@@ -183,7 +183,7 @@ test('cardReviewer: Stop while it thinks settles the call at once, even with no 
   assert.equal(h.events(id).filter((e) => e.type === 'approval.requested' || (e.type === 'system.note' && /reviewer/.test(e.text))).length, 0);
 });
 
-test('cardReviewer: Mike writing while it thinks takes the call back', async () => {
+test('cardReviewer: Alex writing while it thinks takes the call back', async () => {
   const { h, allow } = slow();
   const { id, s } = thread(h);
   const answer = edit(s);
@@ -193,7 +193,7 @@ test('cardReviewer: Mike writing while it thinks takes the call back', async () 
   allow();
 });
 
-test('cardReviewer: switched to Ask while it thinks, an allow becomes Mike\'s card', async () => {
+test('cardReviewer: switched to Ask while it thinks, an allow becomes Alex\'s card', async () => {
   const { h, allow } = slow();
   const { id, s } = thread(h);
   void edit(s);
@@ -206,7 +206,7 @@ test('cardReviewer: switched to Ask while it thinks, an allow becomes Mike\'s ca
   assert.ok(!h.events(id).some((e) => e.type === 'system.note' && /^Allowed by the reviewer/.test(e.text)));
 });
 
-test('cardReviewer: a Codex thread\'s tool cards go to Mike, as they don\'t show the change', async () => {
+test('cardReviewer: a Codex thread\'s tool cards go to Alex, as they don\'t show the change', async () => {
   const h = setup();
   const { thread: t } = h.runner.create({ text: 'Fix it', accountId: 'codex-main', permissionMode: 'auto' });
   const s = h.codex.last;
@@ -245,7 +245,7 @@ test('cardReviewer: a call cancelled before it got here puts up no card', async 
   assert.equal(h.runner.threads.get(id)!.rt.approvals.size, 0);
 });
 
-test('cardReviewer: Mike\'s latest message is shown as his, and a runner message apart from it', async () => {
+test('cardReviewer: Alex\'s latest message is shown as his, and a runner message apart from it', async () => {
   const h = setup();
   const { id, s } = thread(h);
   h.runner.send(id, 'Do not change settings');
@@ -256,7 +256,7 @@ test('cardReviewer: Mike\'s latest message is shown as his, and a runner message
   assert.match(p, /not from the user \(from runner\):\nBEGIN \w+\nCarry on/);
 });
 
-test('cardReviewer: a brief too long to show whole goes to Mike', async () => {
+test('cardReviewer: a brief too long to show whole goes to Alex', async () => {
   const h = setup();
   const { id, s } = thread(h, 'auto', 'x'.repeat(13_000));
   void edit(s);
@@ -274,7 +274,7 @@ test('cardReviewer: deleting the thread settles a call under review', async () =
   assert.equal((await a).decision, 'expired');
 });
 
-test('cardReviewer: a subagent\'s call reviewed while Mike wrote goes to him, not through on the old verdict', async () => {
+test('cardReviewer: a subagent\'s call reviewed while Alex wrote goes to him, not through on the old verdict', async () => {
   const { h, allow } = slow();
   const { id, s } = thread(h);
   void s.sink.requestApproval({ name: 'Edit', title: 'Edit .claude/settings.json', input: { file_path: '/w/.claude/settings.json' }, canAlwaysAllow: false, signal: new AbortController().signal });

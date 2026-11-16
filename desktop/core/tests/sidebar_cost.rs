@@ -15,7 +15,7 @@ fn summary(i: usize, project: &str) -> ThreadSummary {
     let open = i < 42;
     let at = format!("2026-11-{:02}T{:02}:{:02}:{:02}.{:03}Z", 1 + i % 12, i % 24, i % 60, (i * 7) % 60, i % 1000);
     let v: Value = json!({
-        "id": format!("th_{i}"), "title": format!("{project} task {i}"), "cwd": format!("/Users/mike/dev/me/{project}"),
+        "id": format!("th_{i}"), "title": format!("{project} task {i}"), "cwd": format!("/Users/alex/code/{project}"),
         "accountId": "claude-main", "provider": "claude", "permissionMode": "full", "status": "idle", "live": false,
         "needsYou": false, "createdAt": at, "updatedAt": at, "lastActivityAt": at, "lastSeq": 40, "lastSeenSeq": 40,
         "preview": "Worked on the thing and it's done now.", "keywords": format!("{project} task build release fix tidy"),
@@ -23,8 +23,8 @@ fn summary(i: usize, project: &str) -> ThreadSummary {
         "projects": [{ "id": project, "title": project, "by": "librarian", "at": at }],
         "patches": [
             { "id": "convex", "source": "builtin" },
-            { "id": "store", "source": "project", "file": format!("/Users/mike/dev/me/{project}/.threadbear/patches/store.ts"), "icon": "pawprint", "liveError": "node scripts/status.mjs failed (exit 1)" },
-            { "id": "checks", "source": "project", "file": format!("/Users/mike/dev/me/{project}/.threadbear/patches/checks.ts"), "icon": "pawprint" },
+            { "id": "store", "source": "project", "file": format!("/Users/alex/code/{project}/.threadbear/patches/store.ts"), "icon": "pawprint", "liveError": "node scripts/status.mjs failed (exit 1)" },
+            { "id": "checks", "source": "project", "file": format!("/Users/alex/code/{project}/.threadbear/patches/checks.ts"), "icon": "pawprint" },
             { "id": "worktree", "source": "builtin" }
         ],
         "panels": [

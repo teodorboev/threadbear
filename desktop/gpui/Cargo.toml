@@ -99,7 +99,7 @@ libc = "=0.2.191"
 # Close as AppKit's own, and what AppKit adds to the menus, for the specs
 # (window_menu.rs).
 objc2 = "0.6"
-objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSWorkspace", "NSAccessibility", "NSImage", "NSColor", "NSColorSpace", "NSAppearance", "objc2-core-foundation", "NSApplication", "NSResponder", "NSDockTile", "NSSound", "NSAlert", "NSButton", "NSControl", "NSCell", "NSView", "NSPasteboard", "NSRunningApplication", "NSEvent", "NSWindow", "NSPanel", "NSMenu", "NSMenuItem"] }
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "block2", "NSWorkspace", "NSAccessibility", "NSImage", "NSColor", "NSColorSpace", "NSAppearance", "objc2-core-foundation", "NSApplication", "NSResponder", "NSDockTile", "NSSound", "NSAlert", "NSButton", "NSControl", "NSCell", "NSView", "NSPasteboard", "NSRunningApplication", "NSEvent", "NSWindow", "NSPanel", "NSMenu", "NSMenuItem", "NSTextField", "NSGraphics"] }
 objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSString", "NSArray", "NSDateFormatter", "NSLocale", "NSURL", "NSBundle", "NSData", "NSUserDefaults"] }
 # A window's CAMetalLayer tagged as sRGB (colour_space.rs). Both already in
 # the build through GPUI's macOS renderer, at these versions and features.

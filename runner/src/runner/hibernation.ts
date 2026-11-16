@@ -349,9 +349,12 @@ export const hibernationPart = {
     const text = waits.every((x) => x.quiet)
       ? `Threadbear hibernated this thread after your last turn, as all it had left open was the thread${one ? '' : 's'} it started. ${one ? 'It has' : 'They have'} finished now.\n\n${parts.join('\n\n')}\n\nIf that leaves something to do, or to tell the user, do it now; if not, say so in a line. read_thread has the rest of ${one ? 'it' : 'them'}.`
       : `The thread${one ? '' : 's'} you hibernated to wait on ${one ? 'has' : 'have'} finished.\n\n${parts.join('\n\n')}\n\nCarry on from here. read_thread has the rest of ${one ? 'it' : 'them'}.`;
+    // Reports held for it while they worked come with this wake rather than
+    // as a second one (runner/nested.ts).
+    const reports = this.takeHeld(st);
     this.wake(st, { why });
     this.armSnoozeTimer();
-    this.sendTo(st, text, [], { origin: 'runner', queue: true });
+    this.sendTo(st, reports ? `${text}\n\n${reports}` : text, [], { origin: 'runner', queue: true });
     this.log.info('woke after waiting on threads', { threadId: st.rec.id, on: waits.map((x) => x.threadId) });
   },
 

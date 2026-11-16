@@ -157,7 +157,7 @@ mod windows_path_tests {
     fn windows_paths_get_forward_slashes_and_others_stay_as_they_are() {
         assert_eq!(forward_slashes(r"C:\work\site\docs\a.md"), "C:/work/site/docs/a.md");
         assert_eq!(forward_slashes(r"\\server\share\a.md"), "//server/share/a.md");
-        assert_eq!(forward_slashes(r"/Users/mike/odd\name.txt"), r"/Users/mike/odd\name.txt");
+        assert_eq!(forward_slashes(r"/Users/alex/odd\name.txt"), r"/Users/alex/odd\name.txt");
         assert_eq!(forward_slashes(r"notes\today.md"), r"notes\today.md");
     }
 }

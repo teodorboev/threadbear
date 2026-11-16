@@ -3,7 +3,7 @@ import { Then, When } from '@cucumber/cucumber';
 import type { ThreadbearWorld } from '../support/world.ts';
 
 /** The Settings window while it's open, from either app's dump. */
-type SettingsInfo = { tab: string; keepAwake?: boolean | null; fullSync?: boolean | null; privateFolders?: string[] | null };
+type SettingsInfo = { tab: string; keepAwake?: boolean | null; fullSync?: boolean | null; privateFolders?: string[] | null; labReviewers?: string[] | null };
 const shown = (d: unknown) => (d as { settingsWindow?: SettingsInfo | null }).settingsWindow;
 
 When('I open Settings', async function (this: ThreadbearWorld) {
@@ -50,6 +50,12 @@ Then('Settings lists the private folder {string}', async function (this: Threadb
 
 Then('Settings lists no private folders', async function (this: ThreadbearWorld) {
   await this.until('no private folders', (d) => shown(d)?.privateFolders?.length === 0);
+});
+
+// Who reviews code, by provider, in order (Settings > General > Code review).
+Then('Settings lists the reviewers {string}', async function (this: ThreadbearWorld, list: string) {
+  const want = list.split(',').map((p) => p.trim());
+  await this.until(`reviewers ${list}`, (d) => JSON.stringify(shown(d)?.labReviewers) === JSON.stringify(want));
 });
 
 // Where the keyboard is in the Settings window: its list of sections, as it opens.

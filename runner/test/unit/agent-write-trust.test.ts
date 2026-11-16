@@ -85,7 +85,7 @@ for (const mode of ['auto', 'ask'] as const) {
     s.result('completed');
     const t = await settle(h, thread.id);
     assert.equal(fs.existsSync(mark), false, 'none of its code ran');
-    assert.equal(t.patches?.find((p) => p.id === 'notes')?.untrusted, 'new', 'it waits for Mike in Patches');
+    assert.equal(t.patches?.find((p) => p.id === 'notes')?.untrusted, 'new', 'it waits for Alex in Patches');
     assert.equal(t.actions, undefined);
     const saved = path.join(home, 'patch-trust.json');
     const stored = fs.existsSync(saved) ? JSON.parse(fs.readFileSync(saved, 'utf8')).folders : {};
@@ -103,7 +103,7 @@ test('F1: the mode is the one recorded with the call: a write let through in Ask
   await tick();
   const s = h.adapter.last;
   s.init();
-  // Mike switches to Full access while the write is going through.
+  // Alex switches to Full access while the write is going through.
   h.runner.update({ threadId: thread.id, permissionMode: 'full' });
   assert.equal(h.runner.get(thread.id).permissionMode, 'full');
   const askMark = path.join(marks, 'ask.ran');
@@ -258,7 +258,7 @@ function session(mode: PermissionMode, runsAsCode?: (file: string) => CodeWrite)
     output: (o) => outputs.push(o),
     requestApproval: async (req) => {
       approvals.push(req);
-      // Mike (or an older client) picks Always allow where it can.
+      // Alex (or an older client) picks Always allow where it can.
       return { decision: 'allowAlways' };
     },
     requestQuestion: async () => ({ answers: null }),
@@ -370,7 +370,7 @@ for (const mode of ['ask', 'auto'] as const) {
   });
 }
 
-test("Full access: an agent's patch write doesn't ask (Mike's own workflow)", async () => {
+test("Full access: an agent's patch write doesn't ask (Alex's own workflow)", async () => {
   const a = session('full');
   assert.deepEqual(await a.hook('c1', path.join(a.dir, '.threadbear', 'patches', 'notes.ts'), 'bypassPermissions'), {});
   a.state.close!();
@@ -609,7 +609,7 @@ test('F21 case 2: in a cloned repo, a small Edit to its patch trusts none of it;
   assert.deepEqual(trust.trustAgentWrite(fresh, shaOf(mine), null, folder), [fresh]);
 });
 
-test('F21 through the real normalizer: a Full access Edit of an untrusted patch leaves it waiting; of one Mike trusted, it carries on', async () => {
+test('F21 through the real normalizer: a Full access Edit of an untrusted patch leaves it waiting; of one Alex trusted, it carries on', async () => {
   const root = tmpDir();
   const marks = tmpDir();
   const project = path.join(root, 'cloned');
@@ -640,7 +640,7 @@ test('F21 through the real normalizer: a Full access Edit of an untrusted patch 
   let t = await settle(h, thread.id);
   assert.equal(t.patches?.[0].untrusted, 'new');
   assert.equal(fs.existsSync(mark), false);
-  // Mike reads it and trusts it; the agent's next Edit carries on.
+  // Alex reads it and trusts it; the agent's next Edit carries on.
   await h.runner.trustPatches(thread.id, [{ file, hash: t.patches![0].hash! }]);
   assert.equal(fs.existsSync(mark), true);
   edit('e2', '"Ship"', '"Ship it"');
@@ -661,7 +661,7 @@ test("F21 for Claude settings: an Edit of settings with untrusted hooks doesn't 
   put(settings, edited);
   assert.equal(trust.trustClaudeEdit(dir, settings, shaOf(edited), shaOf(theirs)), false);
   assert.ok(!trust.checkClaude(dir).trusted);
-  // Trusted by Mike, then a pull changes the script, then a small Edit.
+  // Trusted by Alex, then a pull changes the script, then a small Edit.
   const v = trust.checkClaude(dir);
   assert.ok(!v.trusted);
   trust.trustClaude(dir, v.hash);
@@ -830,7 +830,7 @@ test("strings a patch can't run, and a worktree's own setup and check, don't mak
   put(path.join(project, '.threadbear', 'patches', 'p.ts'), `export default {
   worktree: { setup: './setup.sh', check: './check.sh --quick', keep: ['app/.build'] },
   actions: [
-    { title: "Mike's chip", prompt: "Don't stop at what's there; it's only a thought (really)." },
+    { title: "Alex's chip", prompt: "Don't stop at what's there; it's only a thought (really)." },
     { title: 'Site', url: 'https://example.com/a?b=1' },
   ],
   hooks: [{ title: 'Types', on: 'turn.end', run: 'true', edited: 'src/**/*.ts' }],

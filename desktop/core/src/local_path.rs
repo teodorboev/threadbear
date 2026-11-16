@@ -120,12 +120,7 @@ impl LocalPath {
     }
 
     pub(crate) fn identity(&self) -> io::Result<[u64; 3]> {
-        // FILE_ID_INFO: volume serial number, then the opaque 128-bit ID.
-        let mut id = [0u64; 3];
-        if unsafe { GetFileInformationByHandleEx(self.file()?.as_raw_handle(), 18, id.as_mut_ptr().cast(), 24) } == 0 {
-            return Err(io::Error::last_os_error());
-        }
-        Ok(id)
+        identity_of(self.file()?)
     }
 
     pub(crate) fn writable(&self) -> io::Result<File> {
@@ -471,4 +466,14 @@ fn link_target(file: &File) -> io::Result<PathBuf> {
         return Err(refused());
     }
     Ok(path)
+}
+
+/// An open file's identity: FILE_ID_INFO's volume serial number, then the
+/// opaque 128-bit ID (the open gate's `FileId` on Windows).
+pub(crate) fn identity_of(file: &File) -> io::Result<[u64; 3]> {
+    let mut id = [0u64; 3];
+    if unsafe { GetFileInformationByHandleEx(file.as_raw_handle(), 18, id.as_mut_ptr().cast(), 24) } == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(id)
 }

@@ -9,9 +9,9 @@ import { buildThreadbearTools } from '../../src/threadbear-mcp.ts';
 import type { PersistedEvent } from '../../src/protocol.ts';
 import { commitsIn, emptyHighlights, linksIn, observe, openTargets, pinItem, pushedBranches, remove, unpin, upsert, view, HIGHLIGHTS_KEPT } from '../../src/highlights.ts';
 
-const HOME = '/Users/mike';
-const CWD = '/Users/mike/dev/app';
-const FILES = new Set(['/Users/mike/dev/app/docs/plan.md', '/Users/mike/dev/app/mock.html', '/Users/mike/notes/todo.md']);
+const HOME = '/Users/alex';
+const CWD = '/Users/alex/dev/app';
+const FILES = new Set(['/Users/alex/dev/app/docs/plan.md', '/Users/alex/dev/app/mock.html', '/Users/alex/notes/todo.md']);
 const ctx = { cwd: CWD, home: HOME, exists: (p: string) => FILES.has(p) };
 
 let seq = 0;
@@ -23,9 +23,9 @@ function ev(body: Record<string, unknown>): PersistedEvent {
 test('links, PRs and existing files in a reply are found; code blocks and missing files are not', () => {
   const found = linksIn(
     [
-      'The PR is [#19](https://github.com/mikecann/poddle/pull/19), preview at https://next-abc.vercel.app.',
-      'Plan in `~/dev/app/docs/plan.md` and [the mockup](/Users/mike/dev/app/mock.html), notes at `/Users/mike/notes/todo.md:12`.',
-      '`/Users/mike/missing.md` is gone.',
+      'The PR is [#19](https://github.com/alex-example/pantry/pull/19), preview at https://next-abc.vercel.app.',
+      'Plan in `~/dev/app/docs/plan.md` and [the mockup](/Users/alex/dev/app/mock.html), notes at `/Users/alex/notes/todo.md:12`.',
+      '`/Users/alex/missing.md` is gone.',
       '```',
       'https://example.com/in-a-code-block',
       '```',
@@ -34,15 +34,15 @@ test('links, PRs and existing files in a reply are found; code blocks and missin
     { cwd: CWD, home: HOME, isFile: ctx.exists },
   );
   assert.deepEqual(found.map((f) => f.id), [
-    'pr:https://github.com/mikecann/poddle/pull/19',
-    'file:/Users/mike/dev/app/mock.html',
-    'file:/Users/mike/dev/app/docs/plan.md',
-    'file:/Users/mike/notes/todo.md',
+    'pr:https://github.com/alex-example/pantry/pull/19',
+    'file:/Users/alex/dev/app/mock.html',
+    'file:/Users/alex/dev/app/docs/plan.md',
+    'file:/Users/alex/notes/todo.md',
     'link:https://next-abc.vercel.app',
     'link:http://localhost:5173',
     'link:https://moose.convex.site',
   ]);
-  assert.equal(found[0]!.title, 'mikecann/poddle#19');
+  assert.equal(found[0]!.title, 'alex-example/pantry#19');
   assert.equal(found[1]!.title, 'the mockup');
   assert.equal(found[2]!.title, 'plan.md');
 });
@@ -64,28 +64,28 @@ test('a thread\'s events become highlights: written review files, opens, PRs, co
   const state = emptyHighlights();
   const events = [
     ev({ type: 'tool.call', itemId: 'w1', name: 'Write', kind: 'write', title: 'Write', input: { file_path: 'docs/plan.md' } }),
-    ev({ type: 'tool.call', itemId: 'w2', name: 'Write', kind: 'write', title: 'Write', input: { file_path: '/Users/mike/dev/app/src/x.ts' } }),
+    ev({ type: 'tool.call', itemId: 'w2', name: 'Write', kind: 'write', title: 'Write', input: { file_path: '/Users/alex/dev/app/src/x.ts' } }),
     ev({ type: 'edit.diff', itemId: 'e1', path: 'src/y.ts', hunks: [] }),
     ev({ type: 'tool.call', itemId: 'o1', name: 'Bash', kind: 'command', title: 'open', input: { command: 'open mock.html' } }),
     ev({ type: 'tool.call', itemId: 'c1', name: 'Bash', kind: 'command', title: 'git', input: { command: 'git add x && git commit -m "Add x"' } }),
     ev({ type: 'tool.result', itemId: 'c1', ok: true, text: '[feat 1234567] Add x\n 1 file changed', truncated: false, images: [] }),
     ev({ type: 'tool.call', itemId: 'p1', name: 'Bash', kind: 'command', title: 'gh', input: { command: 'git push -u origin feat && gh pr create --fill' } }),
-    ev({ type: 'tool.result', itemId: 'p1', ok: true, text: ' * [new branch]      feat -> feat\nhttps://github.com/mikecann/app/pull/7\n', truncated: false, images: [] }),
-    ev({ type: 'assistant.text', itemId: 'a1', text: 'Opened https://github.com/mikecann/app/pull/7 for you.' }),
+    ev({ type: 'tool.result', itemId: 'p1', ok: true, text: ' * [new branch]      feat -> feat\nhttps://github.com/alex-example/app/pull/7\n', truncated: false, images: [] }),
+    ev({ type: 'assistant.text', itemId: 'a1', text: 'Opened https://github.com/alex-example/app/pull/7 for you.' }),
   ];
   assert.equal(observe(state, events, ctx), true);
   const v = view(state);
   const byId = Object.fromEntries(v.highlights.map((h) => [h.id, h]));
-  assert.equal(byId['file:/Users/mike/dev/app/docs/plan.md']?.how, 'written');
-  assert.equal(byId['file:/Users/mike/dev/app/src/x.ts'], undefined, 'code goes in edited, not the list');
-  assert.equal(byId['file:/Users/mike/dev/app/mock.html']?.how, 'opened');
+  assert.equal(byId['file:/Users/alex/dev/app/docs/plan.md']?.how, 'written');
+  assert.equal(byId['file:/Users/alex/dev/app/src/x.ts'], undefined, 'code goes in edited, not the list');
+  assert.equal(byId['file:/Users/alex/dev/app/mock.html']?.how, 'opened');
   const commit = byId['commit:1234567']!;
   assert.deepEqual([commit.branch, commit.title, commit.pushed], ['feat', 'Add x', true]);
-  const pr = byId['pr:https://github.com/mikecann/app/pull/7']!;
+  const pr = byId['pr:https://github.com/alex-example/app/pull/7']!;
   assert.equal(pr.how, 'created', 'a later mention keeps how it was found');
   assert.equal(pr.lastSeq, 9);
   assert.equal(v.highlights[0]!.id, pr.id, 'newest mention first');
-  assert.deepEqual(v.edited, ['/Users/mike/dev/app/src/y.ts', '/Users/mike/dev/app/src/x.ts', '/Users/mike/dev/app/docs/plan.md']);
+  assert.deepEqual(v.edited, ['/Users/alex/dev/app/src/y.ts', '/Users/alex/dev/app/src/x.ts', '/Users/alex/dev/app/docs/plan.md']);
   assert.equal(state.pending, undefined);
   // Seen events aren't read twice.
   assert.equal(observe(state, events, ctx), false);
@@ -95,28 +95,28 @@ test('Codex file changes and shell commands count too', () => {
   seq = 0;
   const state = emptyHighlights();
   observe(state, [
-    ev({ type: 'tool.call', itemId: 'f', name: 'apply_patch', kind: 'write', title: 'Add', input: { paths: ['/Users/mike/notes/todo.md'] } }),
-    ev({ type: 'tool.call', itemId: 's', name: 'shell', kind: 'command', title: 'open', input: { command: 'open plan.md', cwd: '/Users/mike/dev/app/docs' } }),
+    ev({ type: 'tool.call', itemId: 'f', name: 'apply_patch', kind: 'write', title: 'Add', input: { paths: ['/Users/alex/notes/todo.md'] } }),
+    ev({ type: 'tool.call', itemId: 's', name: 'shell', kind: 'command', title: 'open', input: { command: 'open plan.md', cwd: '/Users/alex/dev/app/docs' } }),
   ], ctx);
   assert.deepEqual(view(state).highlights.map((h) => [h.id, h.how]).sort(), [
-    ['file:/Users/mike/dev/app/docs/plan.md', 'opened'],
-    ['file:/Users/mike/notes/todo.md', 'written'],
+    ['file:/Users/alex/dev/app/docs/plan.md', 'opened'],
+    ['file:/Users/alex/notes/todo.md', 'written'],
   ]);
 });
 
 test('pins come first, merge with a found item, and unpin or remove take them off', () => {
   seq = 0;
   const state = emptyHighlights();
-  observe(state, [ev({ type: 'assistant.text', itemId: 'a', text: 'See `/Users/mike/dev/app/mock.html` and https://a.dev/x' })], ctx);
-  upsert(state, pinItem({ path: '/Users/mike/dev/app/mock.html', title: 'Sidebar mockup', note: 'Pick one of the three', show: true }, 5, '2026-10-27T10:01:00.000Z'));
+  observe(state, [ev({ type: 'assistant.text', itemId: 'a', text: 'See `/Users/alex/dev/app/mock.html` and https://a.dev/x' })], ctx);
+  upsert(state, pinItem({ path: '/Users/alex/dev/app/mock.html', title: 'Sidebar mockup', note: 'Pick one of the three', show: true }, 5, '2026-10-27T10:01:00.000Z'));
   const v = view(state);
   assert.equal(v.highlights.length, 2);
   assert.deepEqual([v.highlights[0]!.how, v.highlights[0]!.title, v.highlights[0]!.note, v.highlights[0]!.show, v.highlights[0]!.seq], ['pinned', 'Sidebar mockup', 'Pick one of the three', undefined, 5]);
-  assert.equal(unpin(state, 'file:/Users/mike/dev/app/mock.html'), true);
+  assert.equal(unpin(state, 'file:/Users/alex/dev/app/mock.html'), true);
   assert.equal(unpin(state, 'link:https://a.dev/x'), false, 'only pins unpin');
   assert.equal(remove(state, 'link:https://a.dev/x'), true);
-  observe(state, [ev({ type: 'assistant.text', itemId: 'b', text: 'Again: https://a.dev/x and `/Users/mike/dev/app/mock.html`' })], ctx);
-  assert.deepEqual(view(state).highlights.map((h) => h.id), ['file:/Users/mike/dev/app/mock.html'], 'a removed one never comes back; an unpinned one can');
+  observe(state, [ev({ type: 'assistant.text', itemId: 'b', text: 'Again: https://a.dev/x and `/Users/alex/dev/app/mock.html`' })], ctx);
+  assert.deepEqual(view(state).highlights.map((h) => h.id), ['file:/Users/alex/dev/app/mock.html'], 'a removed one never comes back; an unpinned one can');
 });
 
 test('the list keeps the newest found items and every pin', () => {
@@ -140,11 +140,11 @@ test('the runner keeps a thread\'s highlights from its events, pins from the too
   const s = h.adapter.last;
   s.init();
   s.out({ kind: 'event', event: { type: 'tool.call', itemId: 'w', name: 'Write', kind: 'write', title: 'Write', input: { file_path: path.join(dir, 'mock.html') } } });
-  s.text('m1', 'Done: [PR](https://github.com/mikecann/app/pull/3).');
+  s.text('m1', 'Done: [PR](https://github.com/alex-example/app/pull/3).');
   s.result('completed');
   const first = h.runner.highlights(thread.id);
   assert.deepEqual(first.highlights.map((x) => [x.id, x.how]), [
-    ['pr:https://github.com/mikecann/app/pull/3', 'mentioned'],
+    ['pr:https://github.com/alex-example/app/pull/3', 'mentioned'],
     [`file:${path.join(dir, 'mock.html')}`, 'written'],
   ]);
   assert.deepEqual(first.edited, [path.join(dir, 'mock.html')]);
@@ -172,18 +172,18 @@ test('the runner keeps a thread\'s highlights from its events, pins from the too
   const pinned = h.runner.highlights(thread.id).highlights[0]!;
   assert.deepEqual([pinned.how, pinned.note, pinned.show], ['pinned', 'Pick a layout', undefined]);
 
-  h.runner.removeHighlight(thread.id, 'pr:https://github.com/mikecann/app/pull/3');
+  h.runner.removeHighlight(thread.id, 'pr:https://github.com/alex-example/app/pull/3');
   assert.deepEqual(h.runner.highlights(thread.id).highlights.map((x) => x.kind), ['file']);
   assert.throws(() => h.runner.removeHighlight(thread.id, 'pr:nope'), /no highlight/);
 
-  h.runner.setBrief(thread.id, '  Waiting on Mike to pick a layout.  ');
-  assert.deepEqual(h.runner.highlights(thread.id).brief?.text, 'Waiting on Mike to pick a layout.');
+  h.runner.setBrief(thread.id, '  Waiting on Alex to pick a layout.  ');
+  assert.deepEqual(h.runner.highlights(thread.id).brief?.text, 'Waiting on Alex to pick a layout.');
 
   // Kept with the thread across a restart, and not read twice.
   h.runner.flush();
   const rec = JSON.parse(fs.readFileSync(path.join(h.home, 'threads', thread.id, 'thread.json'), 'utf8'));
   assert.equal(rec.highlights.items.length, 1);
-  assert.equal(rec.brief.text, 'Waiting on Mike to pick a layout.');
+  assert.equal(rec.brief.text, 'Waiting on Alex to pick a layout.');
 });
 
 test('a quiet commit shown with git log --oneline, and a quiet push', () => {
@@ -193,7 +193,7 @@ test('a quiet commit shown with git log --oneline, and a quiet push', () => {
     ev({ type: 'tool.call', itemId: 'c', name: 'Bash', kind: 'command', title: 'git', input: { command: "git add -A && git commit -q -F - <<'EOF'\nFind one episode\nEOF\ngit log --oneline -1" } }),
     ev({ type: 'tool.result', itemId: 'c', ok: true, text: '456680b (HEAD -> single-episode) Find one episode\n', truncated: false, images: [] }),
     ev({ type: 'tool.call', itemId: 'p', name: 'Bash', kind: 'command', title: 'git', input: { command: 'git push -q -u origin single-episode' } }),
-    ev({ type: 'tool.result', itemId: 'p', ok: true, text: 'remote: https://github.com/mikecann/poddle/pull/new/single-episode\n', truncated: false, images: [] }),
+    ev({ type: 'tool.result', itemId: 'p', ok: true, text: 'remote: https://github.com/alex-example/pantry/pull/new/single-episode\n', truncated: false, images: [] }),
     ev({ type: 'tool.call', itemId: 'l', name: 'Bash', kind: 'command', title: 'git', input: { command: 'git log --oneline -3' } }),
     ev({ type: 'tool.result', itemId: 'l', ok: true, text: 'aaaaaaa Not a commit this thread made\n', truncated: false, images: [] }),
   ], ctx);

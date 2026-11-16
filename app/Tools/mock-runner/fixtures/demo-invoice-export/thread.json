@@ -1,7 +1,7 @@
 {
   "id": "demo_invoice_export",
   "title": "Export last quarter's invoices as CSV",
-  "cwd": "/Users/mike/dev/me/misc",
+  "cwd": "/Users/alex/code/misc",
   "accountId": "claude-main",
   "provider": "claude",
   "permissionMode": "full",

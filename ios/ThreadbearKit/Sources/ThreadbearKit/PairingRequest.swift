@@ -13,7 +13,8 @@ public struct PairingRequest: Sendable, Equatable, Identifiable {
     /// Each request is its own, even for the same link twice, so a yes is
     /// only ever for the one that was shown.
     public let id = UUID()
-    public let link: URL
+    /// What was scanned or pasted, as it came.
+    public let text: String
     public let pairing: Pairing
     /// The server the phone is paired with now, when the link names another one.
     public let replacesHost: String?
@@ -30,9 +31,9 @@ public struct PairingRequest: Sendable, Equatable, Identifiable {
     /// Nil for a link that isn't a pairing link. `keys` is the runner key
     /// store for the link's server; it's only read, never written: nothing
     /// is kept until Mike says yes.
-    public init?(link: URL, allowLocal: Bool, current: Pairing?, keys: (Pairing) -> any RunnerKeyStore) {
-        guard let pairing = Pairing.parse(link, allowLocal: allowLocal) else { return nil }
-        self.link = link
+    public init?(text: String, allowLocal: Bool, current: Pairing?, keys: (Pairing) -> any RunnerKeyStore) {
+        guard let pairing = Pairing.parse(text, allowLocal: allowLocal) else { return nil }
+        self.text = text
         self.pairing = pairing
         let newHost = Self.host(pairing.deploymentURL)
         let currentHost = current.map { Self.host($0.deploymentURL) }
@@ -47,6 +48,10 @@ public struct PairingRequest: Sendable, Equatable, Identifiable {
         }
         addedKeys = added
         changedKeys = changed
+    }
+
+    public init?(link: URL, allowLocal: Bool, current: Pairing?, keys: (Pairing) -> any RunnerKeyStore) {
+        self.init(text: link.absoluteString, allowLocal: allowLocal, current: current, keys: keys)
     }
 
     public var title: String { "Pair with \(host)?" }
@@ -75,6 +80,16 @@ public struct PairingRequest: Sendable, Equatable, Identifiable {
     static func macs(_ n: Int) -> String { n == 1 ? "1 Mac" : "\(n) Macs" }
 }
 
+/// Where a pairing code or link came from.
+public enum PairingSource: Sendable, Equatable {
+    /// The app's own scanner, on its pairing screen.
+    case scanned
+    /// The clipboard, from the pairing screen's Paste button.
+    case pasted
+    /// A link another app, a web page or the Camera opened the app with.
+    case opened
+}
+
 /// Holds a pairing link until Mike answers. Nothing about the pairing is
 /// saved from here: asking only reads, cancelling forgets the link, and
 /// only `accept` hands it back to be paired with.
@@ -87,6 +102,17 @@ public final class PairingGate {
         /// Another link is already waiting for an answer. It isn't swapped
         /// for this one, so a yes is always for the server that was shown.
         case busy
+        /// A pairing link another app opened the app with: never taken, as
+        /// any app can claim the threadbear scheme and be handed the same
+        /// link (Daybreak finding 127). Scan the code in the app instead.
+        case opened
+        /// An older Mac's `threadbear://pair` link with the token in it:
+        /// never taken, from anywhere. The token may have reached another
+        /// app on its way (the Camera hands that link to whichever app
+        /// claims the scheme), and the clipboard is anyone's to fill, so
+        /// an app that read the Mac's one-use code could swap in a link
+        /// with the token it claimed. Update Threadbear on the Mac.
+        case oldLink
     }
 
     public private(set) var pending: PairingRequest?
@@ -94,8 +120,13 @@ public final class PairingGate {
     public init() {}
 
     @discardableResult
-    public func ask(_ link: URL, allowLocal: Bool, current: Pairing?, keys: (Pairing) -> any RunnerKeyStore) -> Asked {
-        guard let request = PairingRequest(link: link, allowLocal: allowLocal, current: current, keys: keys) else { return .notPairing }
+    public func ask(_ text: String, from source: PairingSource, allowLocal: Bool, current: Pairing?, keys: (Pairing) -> any RunnerKeyStore) -> Asked {
+        // Anything that would pair, opened from outside, is refused before
+        // it's looked at further: what the link carried may have reached
+        // another app too, so it's no proof of anything.
+        guard source != .opened else { return Pairing.parse(text, allowLocal: allowLocal) == nil ? .notPairing : .opened }
+        guard let request = PairingRequest(text: text, allowLocal: allowLocal, current: current, keys: keys) else { return .notPairing }
+        guard request.pairing.code != nil else { return .oldLink }
         guard pending == nil else { return .busy }
         pending = request
         return .asking
@@ -110,6 +141,11 @@ public final class PairingGate {
         guard let pending, pending.id == shown.id else { return nil }
         self.pending = nil
         return Task { await pair(pending) }
+    }
+
+    @discardableResult
+    public func ask(_ link: URL, from source: PairingSource, allowLocal: Bool, current: Pairing?, keys: (Pairing) -> any RunnerKeyStore) -> Asked {
+        ask(link.absoluteString, from: source, allowLocal: allowLocal, current: current, keys: keys)
     }
 
     public func cancel() { pending = nil }

@@ -1,5 +1,6 @@
 // settings.get and settings.update (docs/protocol.md): the runner's side
 // of the Settings window. Everything lives in runner.json.
+import { DEFAULT_LAB_REVIEWERS, labReviewerProblem, parseLabReviewers, type LabReviewer } from './lab-reviewers.ts';
 import fs from 'node:fs';
 import path from 'node:path';
 import type { Config } from './config.ts';
@@ -30,6 +31,9 @@ export type Settings = {
   oneReply: boolean;
   // Review by another lab (runner/lab-review.ts).
   labReview: boolean;
+  // Who reviews, in order (lab-reviewers.ts): runner.json's list, or the
+  // default when it has none.
+  labReviewers: LabReviewer[];
   // Keep the Mac awake while threads work (keep-awake.ts). Only on a Mac:
   // left out elsewhere, so Settings shows no switch for it.
   keepAwake?: boolean;
@@ -55,6 +59,7 @@ export type SettingsUpdate = {
   bulletReplies?: boolean;
   oneReply?: boolean;
   labReview?: boolean;
+  labReviewers?: LabReviewer[];
   keepAwake?: boolean;
   bringIn?: BringInSetting;
   fullSync?: boolean;
@@ -87,6 +92,7 @@ export class SettingsService {
       bulletReplies: this.cfg.bulletReplies,
       oneReply: this.cfg.oneReply,
       labReview: this.cfg.labReview,
+      labReviewers: (this.cfg.labReviewers ?? DEFAULT_LAB_REVIEWERS).map((r) => ({ ...r })),
       ...(process.platform === 'darwin' ? { keepAwake: this.cfg.keepAwake } : {}),
       bringIn: bringInSetting(this.cfg.home),
       fullSync: peekRunnerJson(this.cfg.home).sync?.full === true,
@@ -138,6 +144,10 @@ export class SettingsService {
     if (u.bulletReplies !== undefined) json.bulletReplies = this.cfg.bulletReplies = u.bulletReplies;
     if (u.oneReply !== undefined) json.oneReply = this.cfg.oneReply = u.oneReply;
     if (u.labReview !== undefined) json.labReview = this.cfg.labReview = u.labReview;
+    if (u.labReviewers !== undefined) {
+      this.cfg.labReviewers = u.labReviewers.map((r) => ({ ...r }));
+      json.labReviewers = u.labReviewers;
+    }
     if (u.keepAwake !== undefined) json.keepAwake = this.cfg.keepAwake = u.keepAwake;
     // Read each time it's needed (bring-in.ts), so this takes effect at once.
     if (u.bringIn !== undefined) json.releases = { ...json.releases, bringIn: u.bringIn };
@@ -189,6 +199,12 @@ export function settingsMethods(s: SettingsService): Record<string, (p: Record<s
       if (p.labReview !== undefined) {
         if (typeof p.labReview !== 'boolean') throw bad('labReview must be a boolean');
         u.labReview = p.labReview;
+      }
+      if (p.labReviewers !== undefined) {
+        if (!Array.isArray(p.labReviewers)) throw bad('labReviewers must be a list');
+        const problem = p.labReviewers.map(labReviewerProblem).find(Boolean);
+        if (problem) throw bad(problem);
+        u.labReviewers = parseLabReviewers(p.labReviewers);
       }
       if (p.keepAwake !== undefined) {
         if (typeof p.keepAwake !== 'boolean') throw bad('keepAwake must be a boolean');

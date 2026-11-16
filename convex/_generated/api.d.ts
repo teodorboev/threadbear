@@ -27,6 +27,7 @@ import type * as runnerAccess from "../runnerAccess.js";
 import type * as share from "../share.js";
 import type * as sync from "../sync.js";
 import type * as tokens from "../tokens.js";
+import type * as uploads from "../uploads.js";
 import type * as version from "../version.js";
 import type * as wakes from "../wakes.js";
 
@@ -56,6 +57,7 @@ declare const fullApi: ApiFromModules<{
   share: typeof share;
   sync: typeof sync;
   tokens: typeof tokens;
+  uploads: typeof uploads;
   version: typeof version;
   wakes: typeof wakes;
 }>;

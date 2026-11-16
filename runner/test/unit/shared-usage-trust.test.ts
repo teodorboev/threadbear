@@ -11,12 +11,12 @@ import assert from 'node:assert/strict';
 import { call, load, memoryBackend } from '../helpers/convex-memory.ts';
 
 const OWNER = 'owner-key';
-const BRUCE_KEY = 'tbr_bruce';
-const PIXEL_KEY = 'tbr_pixel';
-const M5 = 'm5runner0001';
-const BRUCE = 'cb921b2447ea';
-const PIXEL = 'a2a95e35639c';
-const MINE = 'mike@example.com';
+const MINI_KEY = 'tbr_mac-mini';
+const PHONE_KEY = 'tbr_phone';
+const LAPTOP = 'laptop000001';
+const MINI = 'cb921b2447ea';
+const PHONE = 'a2a95e35639c';
+const MINE = 'alex@example.com';
 const OTHER = 'work@example.com';
 
 const { sha256 } = load('lib') as { sha256: (s: string) => Promise<string> };
@@ -27,8 +27,8 @@ async function setup() {
   process.env.RUNNER_KEY = OWNER;
   delete process.env.RUNNER_KEY_NEXT;
   const b = memoryBackend();
-  await b.ctx.db.insert('runnerKeys', { runnerId: BRUCE, keyHash: await sha256(BRUCE_KEY), name: 'bruce', createdAt: 1 });
-  await b.ctx.db.insert('runnerKeys', { runnerId: PIXEL, keyHash: await sha256(PIXEL_KEY), name: 'Pixel', createdAt: 2 });
+  await b.ctx.db.insert('runnerKeys', { runnerId: MINI, keyHash: await sha256(MINI_KEY), name: 'mac-mini', createdAt: 1 });
+  await b.ctx.db.insert('runnerKeys', { runnerId: PHONE, keyHash: await sha256(PHONE_KEY), name: 'Phone', createdAt: 2 });
   return b;
 }
 
@@ -48,33 +48,33 @@ const shared = async (s: Awaited<ReturnType<typeof setup>>, key: string, runnerI
 test('F1: a runner key\'s reading of a login the owner hasn\'t listed for it never reaches the main Mac', async () => {
   const s = await setup();
   const real = usage({ readAt: iso(Date.now() - 60_000), week: 60, resetsAt: iso(Date.now() + 3 * DAY) });
-  await call(s.ctx, sync.setAccounts, { key: OWNER, runnerId: M5, accounts: [account('claude-main', MINE, real)] });
-  // Bruce's key names the main Mac's login (pools hands any key the emails).
-  await call(s.ctx, sync.setAccounts, { key: BRUCE_KEY, runnerId: BRUCE, accounts: [account('claude-main', MINE, FAKE)] });
-  await call(s.ctx, sync.upsertAccounts, { key: PIXEL_KEY, runnerId: PIXEL, accounts: [account('claude-1', MINE, FAKE)], removed: [] });
-  assert.deepEqual(await shared(s, OWNER, M5), []);
+  await call(s.ctx, sync.setAccounts, { key: OWNER, runnerId: LAPTOP, accounts: [account('claude-main', MINE, real)] });
+  // Mac mini's key names the main Mac's login (pools hands any key the emails).
+  await call(s.ctx, sync.setAccounts, { key: MINI_KEY, runnerId: MINI, accounts: [account('claude-main', MINE, FAKE)] });
+  await call(s.ctx, sync.upsertAccounts, { key: PHONE_KEY, runnerId: PHONE, accounts: [account('claude-1', MINE, FAKE)], removed: [] });
+  assert.deepEqual(await shared(s, OWNER, LAPTOP), []);
   // A runner from before API 45 sends no runner id: still none of theirs.
-  assert.deepEqual((await call(s.ctx, sync.sharedUsage, { key: OWNER }) as any[]).map((r) => r.runnerId), [M5]);
+  assert.deepEqual((await call(s.ctx, sync.sharedUsage, { key: OWNER }) as any[]).map((r) => r.runnerId), [LAPTOP]);
 });
 
 test("F1: even listed, a runner key's reading never reaches the main Mac, nor goes on through it", async () => {
   const s = await setup();
-  await call(s.ctx, sync.setRunnerLogins, { key: OWNER, runnerId: BRUCE, logins: [{ provider: 'claude', email: MINE }] });
-  await call(s.ctx, sync.setRunnerLogins, { key: OWNER, runnerId: PIXEL, logins: [{ provider: 'claude', email: MINE }] });
+  await call(s.ctx, sync.setRunnerLogins, { key: OWNER, runnerId: MINI, logins: [{ provider: 'claude', email: MINE }] });
+  await call(s.ctx, sync.setRunnerLogins, { key: OWNER, runnerId: PHONE, logins: [{ provider: 'claude', email: MINE }] });
   // One window the main Mac hasn't read, at 0% with no reset: as good as blocked.
   const fiveHour = { windows: [{ kind: 'five_hour', title: '5h', remainingPercent: 0 }], readAt: iso(Date.now() - 1000), source: 'live' };
-  await call(s.ctx, sync.setAccounts, { key: BRUCE_KEY, runnerId: BRUCE, accounts: [account('claude-main', MINE, FAKE), account('c2', MINE, fiveHour as any)] });
-  assert.deepEqual(await shared(s, OWNER, M5), []);
+  await call(s.ctx, sync.setAccounts, { key: MINI_KEY, runnerId: MINI, accounts: [account('claude-main', MINE, FAKE), account('c2', MINE, fiveHour as any)] });
+  assert.deepEqual(await shared(s, OWNER, LAPTOP), []);
   assert.deepEqual(await call(s.ctx, sync.sharedUsage, { key: OWNER }), [], 'nor to an owner runner from before API 45');
-  assert.deepEqual(await shared(s, PIXEL_KEY, PIXEL), []);
+  assert.deepEqual(await shared(s, PHONE_KEY, PHONE), []);
 });
 
 test('F1: a runner key\'s readings are stored read no later than now, with resets inside their windows, by setAccounts and upsertAccounts', async () => {
   const s = await setup();
   const now = Date.now();
   const odd = { ...FAKE, windows: [...FAKE.windows, { kind: 'five_hour', title: '5h', remainingPercent: 250, resetsAt: '2099-01-01T00:00:00Z' }, { kind: 'monthly', title: 'M', remainingPercent: 5, resetsAt: 'not a date' }] };
-  await call(s.ctx, sync.setAccounts, { key: BRUCE_KEY, runnerId: BRUCE, accounts: [account('a', MINE, odd), account('b', OTHER, usage({ readAt: 'whenever', week: 5 }))] });
-  await call(s.ctx, sync.upsertAccounts, { key: PIXEL_KEY, runnerId: PIXEL, accounts: [account('c', MINE, FAKE)], removed: [] });
+  await call(s.ctx, sync.setAccounts, { key: MINI_KEY, runnerId: MINI, accounts: [account('a', MINE, odd), account('b', OTHER, usage({ readAt: 'whenever', week: 5 }))] });
+  await call(s.ctx, sync.upsertAccounts, { key: PHONE_KEY, runnerId: PHONE, accounts: [account('c', MINE, FAKE)], removed: [] });
   const by = (id: string) => s.rows('accounts').find((r) => r.id === id)!;
   for (const id of ['a', 'c']) {
     const u = by(id).usage;
@@ -87,59 +87,59 @@ test('F1: a runner key\'s readings are stored read no later than now, with reset
   assert.equal(a.windows[2].resetsAt, undefined, "a reset that isn't a time goes");
   assert.equal(by('b').usage, undefined, "a reading with no time isn't kept");
   // The owner key's own writes are as it sent them.
-  await call(s.ctx, sync.setAccounts, { key: OWNER, runnerId: M5, accounts: [account('m', MINE, FAKE)] });
+  await call(s.ctx, sync.setAccounts, { key: OWNER, runnerId: LAPTOP, accounts: [account('m', MINE, FAKE)] });
   assert.equal(by('m').usage.readAt, FAKE.readAt);
 });
 
 test("F3: a runner key's own accounts rows don't let it read the main Mac's readings, nor learn its runner id", async () => {
   const s = await setup();
   const real = usage({ readAt: iso(Date.now() - 60_000), week: 42, resetsAt: iso(Date.now() + DAY) });
-  await call(s.ctx, sync.setAccounts, { key: OWNER, runnerId: M5, accounts: [account('claude-main', MINE, real), account('claude-2', OTHER, real)] });
+  await call(s.ctx, sync.setAccounts, { key: OWNER, runnerId: LAPTOP, accounts: [account('claude-main', MINE, real), account('claude-2', OTHER, real)] });
   // Guesses of the main Mac's logins, written as its own.
-  await call(s.ctx, sync.setAccounts, { key: BRUCE_KEY, runnerId: BRUCE, accounts: [account('g1', MINE, real), account('g2', OTHER, real), account('g3', 'x@y.z', real)] });
-  assert.deepEqual(await shared(s, BRUCE_KEY, BRUCE), [], 'nothing until the owner lists a login for it');
-  assert.deepEqual(await call(s.ctx, sync.sharedUsage, { key: BRUCE_KEY }), []);
-  // The owner says Bruce has one of them: only that one, the owner's reading, no runner id.
-  await call(s.ctx, sync.setRunnerLogins, { key: OWNER, runnerId: BRUCE, logins: [{ provider: 'claude', email: MINE }] });
-  const rows = await shared(s, BRUCE_KEY, BRUCE);
+  await call(s.ctx, sync.setAccounts, { key: MINI_KEY, runnerId: MINI, accounts: [account('g1', MINE, real), account('g2', OTHER, real), account('g3', 'x@y.z', real)] });
+  assert.deepEqual(await shared(s, MINI_KEY, MINI), [], 'nothing until the owner lists a login for it');
+  assert.deepEqual(await call(s.ctx, sync.sharedUsage, { key: MINI_KEY }), []);
+  // The owner says Mac mini has one of them: only that one, the owner's reading, no runner id.
+  await call(s.ctx, sync.setRunnerLogins, { key: OWNER, runnerId: MINI, logins: [{ provider: 'claude', email: MINE }] });
+  const rows = await shared(s, MINI_KEY, MINI);
   assert.deepEqual(rows, [{ provider: 'claude', email: MINE, usage: real, byOwnerKey: true }]);
-  assert.equal(JSON.stringify(rows).includes(M5), false, 'never the main Mac\'s runner id');
+  assert.equal(JSON.stringify(rows).includes(LAPTOP), false, 'never the main Mac\'s runner id');
 });
 
 test("F1/F3: a runner key never gets another runner key's reading, even of a login both are listed for", async () => {
   const s = await setup();
-  await call(s.ctx, sync.setRunnerLogins, { key: OWNER, runnerId: BRUCE, logins: [{ provider: 'claude', email: MINE }] });
-  await call(s.ctx, sync.setRunnerLogins, { key: OWNER, runnerId: PIXEL, logins: [{ provider: 'claude', email: MINE }] });
-  await call(s.ctx, sync.setAccounts, { key: PIXEL_KEY, runnerId: PIXEL, accounts: [account('claude-1', MINE, FAKE)] });
-  assert.deepEqual(await shared(s, BRUCE_KEY, BRUCE), []);
+  await call(s.ctx, sync.setRunnerLogins, { key: OWNER, runnerId: MINI, logins: [{ provider: 'claude', email: MINE }] });
+  await call(s.ctx, sync.setRunnerLogins, { key: OWNER, runnerId: PHONE, logins: [{ provider: 'claude', email: MINE }] });
+  await call(s.ctx, sync.setAccounts, { key: PHONE_KEY, runnerId: PHONE, accounts: [account('claude-1', MINE, FAKE)] });
+  assert.deepEqual(await shared(s, MINI_KEY, MINI), []);
 });
 
 test("a runner whose key was revoked: its rows still aren't the owner's, and its list went with the key", async () => {
   const s = await setup();
-  await call(s.ctx, sync.setRunnerLogins, { key: OWNER, runnerId: BRUCE, logins: [{ provider: 'claude', email: MINE }] });
-  await call(s.ctx, sync.setAccounts, { key: BRUCE_KEY, runnerId: BRUCE, accounts: [account('claude-main', MINE, FAKE)] });
-  assert.equal(await call(s.ctx, sync.revokeRunnerKey, { key: OWNER, runnerId: BRUCE }), 1);
+  await call(s.ctx, sync.setRunnerLogins, { key: OWNER, runnerId: MINI, logins: [{ provider: 'claude', email: MINE }] });
+  await call(s.ctx, sync.setAccounts, { key: MINI_KEY, runnerId: MINI, accounts: [account('claude-main', MINE, FAKE)] });
+  assert.equal(await call(s.ctx, sync.revokeRunnerKey, { key: OWNER, runnerId: MINI }), 1);
   assert.equal(s.rows('runnerLogins').length, 0);
-  // Pixel is listed for the login, and Bruce's old rows are still there.
-  await call(s.ctx, sync.setRunnerLogins, { key: OWNER, runnerId: PIXEL, logins: [{ provider: 'claude', email: MINE }] });
-  assert.deepEqual(await shared(s, PIXEL_KEY, PIXEL), [], "a revoked key's rows aren't the owner's word");
-  assert.deepEqual(await shared(s, OWNER, M5), []);
+  // Phone is listed for the login, and Mac mini's old rows are still there.
+  await call(s.ctx, sync.setRunnerLogins, { key: OWNER, runnerId: PHONE, logins: [{ provider: 'claude', email: MINE }] });
+  assert.deepEqual(await shared(s, PHONE_KEY, PHONE), [], "a revoked key's rows aren't the owner's word");
+  assert.deepEqual(await shared(s, OWNER, LAPTOP), []);
 });
 
 test('only the owner key lists logins, only for a runner with a live key, and a new key for the id starts with none', async () => {
   const s = await setup();
-  await assert.rejects(call(s.ctx, sync.setRunnerLogins, { key: BRUCE_KEY, runnerId: BRUCE, logins: [{ provider: 'claude', email: MINE }] }), /forbidden|only the main Mac/);
-  await assert.rejects(call(s.ctx, sync.runnerLogins, { key: BRUCE_KEY }), /forbidden|only the main Mac/);
-  await assert.rejects(call(s.ctx, sync.setRunnerLogins, { key: OWNER, runnerId: M5, logins: [] }), /no live key/);
-  await assert.rejects(call(s.ctx, sync.setRunnerLogins, { key: OWNER, runnerId: BRUCE, logins: [{ provider: 'claude', email: 'not an email' }] }), /Not a login/);
-  await assert.rejects(call(s.ctx, sync.setRunnerLogins, { key: OWNER, runnerId: BRUCE, logins: Array.from({ length: 21 }, (_, i) => ({ provider: 'claude', email: `m${i}@x.com` })) }), /at most 20/);
-  assert.equal(await call(s.ctx, sync.setRunnerLogins, { key: OWNER, runnerId: BRUCE, logins: [{ provider: 'Claude', email: ' Mike@Example.com ' }, { provider: 'claude', email: MINE }, { provider: 'codex', email: MINE }] }), 2);
-  await call(s.ctx, sync.setAccounts, { key: BRUCE_KEY, runnerId: BRUCE, accounts: [account('claude-main', MINE, FAKE), account('x', OTHER, FAKE)] });
+  await assert.rejects(call(s.ctx, sync.setRunnerLogins, { key: MINI_KEY, runnerId: MINI, logins: [{ provider: 'claude', email: MINE }] }), /forbidden|only the main Mac/);
+  await assert.rejects(call(s.ctx, sync.runnerLogins, { key: MINI_KEY }), /forbidden|only the main Mac/);
+  await assert.rejects(call(s.ctx, sync.setRunnerLogins, { key: OWNER, runnerId: LAPTOP, logins: [] }), /no live key/);
+  await assert.rejects(call(s.ctx, sync.setRunnerLogins, { key: OWNER, runnerId: MINI, logins: [{ provider: 'claude', email: 'not an email' }] }), /Not a login/);
+  await assert.rejects(call(s.ctx, sync.setRunnerLogins, { key: OWNER, runnerId: MINI, logins: Array.from({ length: 21 }, (_, i) => ({ provider: 'claude', email: `m${i}@x.com` })) }), /at most 20/);
+  assert.equal(await call(s.ctx, sync.setRunnerLogins, { key: OWNER, runnerId: MINI, logins: [{ provider: 'Claude', email: ' Alex@Example.com ' }, { provider: 'claude', email: MINE }, { provider: 'codex', email: MINE }] }), 2);
+  await call(s.ctx, sync.setAccounts, { key: MINI_KEY, runnerId: MINI, accounts: [account('claude-main', MINE, FAKE), account('x', OTHER, FAKE)] });
   const list = (await call(s.ctx, sync.runnerLogins, { key: OWNER })) as any[];
-  const bruce = list.find((r) => r.runnerId === BRUCE);
-  assert.deepEqual(bruce, { runnerId: BRUCE, name: 'bruce', live: true, shared: [{ provider: 'claude', email: MINE }, { provider: 'codex', email: MINE }], claimed: [{ provider: 'claude', email: MINE }, { provider: 'claude', email: OTHER }] });
+  const mini = list.find((r) => r.runnerId === MINI);
+  assert.deepEqual(mini, { runnerId: MINI, name: 'mac-mini', live: true, shared: [{ provider: 'claude', email: MINE }, { provider: 'codex', email: MINE }], claimed: [{ provider: 'claude', email: MINE }, { provider: 'claude', email: OTHER }] });
   // tb runner add --replace: a new key under the id, perhaps another Mac.
-  await call(s.ctx, sync.addRunnerKey, { key: OWNER, runnerId: BRUCE, name: 'bruce', ownerRunnerId: M5, replace: true });
+  await call(s.ctx, sync.addRunnerKey, { key: OWNER, runnerId: MINI, name: 'mac-mini', ownerRunnerId: LAPTOP, replace: true });
   assert.equal(s.rows('runnerLogins').length, 0);
 });
 
@@ -150,26 +150,26 @@ test("F1: a forged reading an older main Mac copied into its own row before the 
   // An owner-key runner that took a runner key's 2099 reading in and wrote it as its own.
   await call(s.ctx, sync.setAccounts, { key: OWNER, runnerId: OLD, accounts: [account('claude-main', MINE, FAKE), account('ok', OTHER, real)] });
   await call(s.ctx, sync.setAccounts, { key: OWNER, runnerId: 'oldowner0002', accounts: [account('a', MINE, usage({ readAt: iso(Date.now() - 60_000), week: 0, resetsAt: '2099-01-01T00:00:00Z' }))] });
-  assert.deepEqual((await shared(s, OWNER, M5)).map((r) => `${r.runnerId}:${r.email}`), [`${OLD}:${OTHER}`]);
+  assert.deepEqual((await shared(s, OWNER, LAPTOP)).map((r) => `${r.runnerId}:${r.email}`), [`${OLD}:${OTHER}`]);
 });
 
 test('pools: a runner key sees members named by email and its own runner id, never another runner\'s id', async () => {
   const s = await setup();
-  const members = [{ provider: 'claude', email: MINE }, { provider: 'claude', runnerId: M5, accountId: 'claude-x' }, { provider: 'codex', runnerId: BRUCE, accountId: 'codex-main' }];
-  await call(s.ctx, sync.savePools, { key: OWNER, runnerId: M5, pools: [{ id: 'claude', title: 'Claude', members }] });
-  const bruce = (await call(s.ctx, sync.pools, { key: BRUCE_KEY })) as any[];
-  assert.deepEqual(bruce[0].members, [members[0], members[2]]);
-  assert.equal(JSON.stringify(bruce).includes(M5), false);
+  const members = [{ provider: 'claude', email: MINE }, { provider: 'claude', runnerId: LAPTOP, accountId: 'claude-x' }, { provider: 'codex', runnerId: MINI, accountId: 'codex-main' }];
+  await call(s.ctx, sync.savePools, { key: OWNER, runnerId: LAPTOP, pools: [{ id: 'claude', title: 'Claude', members }] });
+  const mini = (await call(s.ctx, sync.pools, { key: MINI_KEY })) as any[];
+  assert.deepEqual(mini[0].members, [members[0], members[2]]);
+  assert.equal(JSON.stringify(mini).includes(LAPTOP), false);
   assert.deepEqual(((await call(s.ctx, sync.pools, { key: OWNER })) as any[])[0].members, members);
 });
 
 test('pools: a member with an email and an id goes to every runner key, without another runner\'s id (API 75)', async () => {
   const s = await setup();
-  const members = [{ provider: 'claude', email: MINE, runnerId: M5, accountId: 'claude-2' }, { provider: 'claude', email: MINE, runnerId: BRUCE, accountId: 'claude-1' }];
-  await call(s.ctx, sync.savePools, { key: OWNER, runnerId: M5, pools: [{ id: 'work', title: 'Work', members }] });
-  const bruce = (await call(s.ctx, sync.pools, { key: BRUCE_KEY })) as any[];
-  assert.deepEqual(bruce[0].members, [{ provider: 'claude', email: MINE }, members[1]], "the Mac's by email alone, bruce's own as saved");
-  assert.equal(JSON.stringify(bruce).includes(M5), false);
+  const members = [{ provider: 'claude', email: MINE, runnerId: LAPTOP, accountId: 'claude-2' }, { provider: 'claude', email: MINE, runnerId: MINI, accountId: 'claude-1' }];
+  await call(s.ctx, sync.savePools, { key: OWNER, runnerId: LAPTOP, pools: [{ id: 'work', title: 'Work', members }] });
+  const mini = (await call(s.ctx, sync.pools, { key: MINI_KEY })) as any[];
+  assert.deepEqual(mini[0].members, [{ provider: 'claude', email: MINE }, members[1]], "the Mac's by email alone, mac-mini's own as saved");
+  assert.equal(JSON.stringify(mini).includes(LAPTOP), false);
   assert.deepEqual(((await call(s.ctx, sync.pools, { key: OWNER })) as any[])[0].members, members);
 });
 

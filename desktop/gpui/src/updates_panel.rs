@@ -46,7 +46,7 @@ pub(crate) struct UpdatesPanelState {
     pub(crate) bringing_in: bool,
     /// Port this on its way, by commit.
     pub(crate) porting: HashSet<String>,
-    /// Reinstall now is on its way to the runner (runner.reinstall), until
+    /// Update it is on its way to the runner (runner.reinstall), until
     /// its answer brings the runner's own word of it.
     pub(crate) reinstalling: bool,
     /// The icon's right-click popover is up, and its keyboard (Return
@@ -243,8 +243,8 @@ impl Threadbear {
         .detach();
     }
 
-    /// Reinstall now (or Try again): the runner reinstalls its LaunchAgent
-    /// once no thread is busy (protocol "Runner updates"). The button spins
+    /// Update it (or Try again): the runner stages its LaunchAgent
+    /// without stopping anything (protocol "Runner updates"). The button spins
     /// and takes no clicks from the press until the runner says where it's
     /// got to; an error puts it back, with the error.
     fn reinstall_runner(&mut self, cx: &mut Context<Self>) {
@@ -264,9 +264,9 @@ impl Threadbear {
                             r.reinstall = rules::Reinstall::decode(&v["reinstall"]);
                         }
                     }
-                    // A runner from before Reinstall now: it gets it with
+                    // A runner from before Update it: it gets it with
                     // its next update from main, a few minutes after this app.
-                    Err(e) if e.code == -32601 => t.show_error("This runner can't reinstall itself yet. It can once it updates to main, in a few minutes; try again then.".to_owned(), cx),
+                    Err(e) if e.code == -32601 => t.show_error("This runner can't update Threadbear Runner yet. It can once it updates to main, in a few minutes; try again then.".to_owned(), cx),
                     Err(e) => t.show_error(e.message, cx),
                 }
                 cx.notify();
@@ -527,7 +527,7 @@ impl Threadbear {
                     h_flex()
                         .gap(px(6.))
                         .child(push_button("updates-reinstall", label, tip, false, busy, cx, |t, _, cx| t.reinstall_runner(cx)))
-                        .children(log.map(|file| push_button("updates-reinstall-log", "Show the Log", "Open the reinstall's output, to see why it didn't work", false, false, cx, move |_, _, cx| crate::open_gate::open_own(std::path::Path::new(&file), cx))))
+                        .children(log.map(|file| push_button("updates-reinstall-log", "Show the Log", "Open the update's output, to see why it didn't work", false, false, cx, move |_, _, cx| crate::open_gate::open_own(std::path::Path::new(&file), cx))))
                         .into_any_element(),
                 );
             }

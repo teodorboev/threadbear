@@ -4,7 +4,7 @@
 // which the owning runner applies (step 3 of docs/convex-backend.md) and
 // marks done or failed. Nothing here touches a runner directly.
 import { ConvexError, v, type Infer } from 'convex/values';
-import { internalMutation, internalQuery, mutation, query, type MutationCtx, type QueryCtx } from './_generated/server';
+import { internalMutation, mutation, query, type MutationCtx, type QueryCtx } from './_generated/server';
 import type { Doc, Id } from './_generated/dataModel';
 import { messageButton, threadFields, views } from './schema';
 import { checkPhoneToken, hasLiveKey, pageLimit, readRunnerOrder, runnerStatsRows, saveRunnerOrder, sha256, watchRunnersFor } from './lib';
@@ -15,6 +15,7 @@ import { deleteIfUnused, endCommandFiles, eventBodyAnswer, finishedArgs, readEve
 import { docBytes, holdReviewNumbers, holdThreadTimes, isReadableTime } from './runnerAccess';
 import { HEADS_MARK } from './projectHeads';
 import { notesOf } from './projectNotes';
+import { UPLOAD_CLAIM_MS, newClaim } from './uploads';
 
 // A runner not heard from for this long is offline, and a command with no
 // runnerId goes to the main one still online (mainRunner).
@@ -942,26 +943,45 @@ async function livePhoneTicket(ctx: QueryCtx, ticket: string) {
   return t && !t.revokedAt && t.expiresAt >= Date.now() ? row : null;
 }
 
-// For /phone/upload, before it stores anything.
-export const phoneTicketOk = internalQuery({
+// /phone/upload's first step, before it reads the body (uploads.ts
+// takeUpload): the ticket is spent here, so of many requests with one
+// ticket only the first reads anything. "later": the day's bytes are
+// already used up, so nothing is read.
+export const claimPhoneUpload = internalMutation({
   args: { ticket: v.string() },
-  returns: v.boolean(),
-  handler: async (ctx, { ticket }) => (await livePhoneTicket(ctx, ticket)) !== null,
-});
-
-// The stored file is the ticket's token's. False (the route then deletes the
-// file): a dead or used ticket, or a file over the size cap. "later": over
-// the day's bytes, which time fixes (429).
-export const redeemPhoneUpload = internalMutation({
-  args: { ticket: v.string(), storageId: v.id('_storage'), bytes: v.number() },
-  returns: v.union(v.boolean(), v.literal('later')),
-  handler: async (ctx, { ticket, storageId, bytes }) => {
+  returns: v.union(v.object({ claim: v.string() }), v.literal(false), v.literal('later')),
+  handler: async (ctx, { ticket }) => {
     const row = await livePhoneTicket(ctx, ticket);
     if (!row) return false;
     const now = Date.now();
-    // Spent whatever happens: a refused ticket can't be tried again.
-    await ctx.db.patch(row._id, { usedAt: now, bytes: Number.isFinite(bytes) && bytes >= 0 ? bytes : 0 });
-    if (!(bytes >= 0) || bytes > PHONE_UPLOADS.maxBytes) return false;
+    if ((await uploadsOf(ctx, row.tokenId, now, row._id)).bytes >= PHONE_UPLOADS.bytesPerDay) {
+      await ctx.db.patch(row._id, { usedAt: now, bytes: 0 });
+      return 'later';
+    }
+    const claim = newClaim();
+    await ctx.db.patch(row._id, { usedAt: now, bytes: 0, claim });
+    return { claim };
+  },
+});
+
+// /phone/upload's last step: the stored file is the claim's token's. False
+// (the route then deletes the file): not this request's claim, the phone
+// revoked meanwhile, or no file (too big, or it broke off), which still
+// counts what came against the day. "later": over the day's bytes, which
+// time fixes (429).
+export const finishPhoneUpload = internalMutation({
+  args: { ticket: v.string(), claim: v.string(), storageId: v.optional(v.id('_storage')), bytes: v.number() },
+  returns: v.union(v.boolean(), v.literal('later')),
+  handler: async (ctx, { ticket, claim, storageId, bytes }) => {
+    if (!/^[0-9a-f]{48}$/.test(ticket) || !claim) return false;
+    const hash = await sha256(ticket);
+    const row = await ctx.db.query('phoneUploads').withIndex('by_hash', (q) => q.eq('ticketHash', hash)).first();
+    const now = Date.now();
+    if (!row || row.claim !== claim || !row.usedAt || row.usedAt <= now - UPLOAD_CLAIM_MS) return false;
+    const t = await ctx.db.get(row.tokenId);
+    if (!t || t.revokedAt || t.expiresAt < now) return false;
+    await ctx.db.patch(row._id, { claim: undefined, bytes: Number.isFinite(bytes) && bytes >= 0 ? bytes : 0 });
+    if (!storageId || !(bytes >= 0) || bytes > PHONE_UPLOADS.maxBytes) return false;
     if ((await uploadsOf(ctx, row.tokenId, now, row._id)).bytes + bytes > PHONE_UPLOADS.bytesPerDay) return 'later';
     await ctx.db.patch(row._id, { storageId });
     return true;

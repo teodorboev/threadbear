@@ -55,13 +55,13 @@ class NewThreadChoicesTest {
      * the picker starts on the first runner online in Mike's order.
      */
     @Test fun runnerIsTheFirstOnlineInOrder() {
-        val asleep = runner("m5", "M5", secondsAgo = 600, placed = true, main = true)
-        val draining = runner("tinker", "Tinker", draining = true, placed = true)
-        val bruce = runner("bruce", "Bruce", placed = true)
-        assertEquals("bruce", NewThreadChoices.runner(listOf(asleep, draining, bruce), now)?.runnerId)
-        assertEquals("bruce", NewThreadChoices.runner(listOf(bruce, asleep), now)?.runnerId)
+        val asleep = runner("laptop", "Laptop", secondsAgo = 600, placed = true, main = true)
+        val draining = runner("build-box", "Build box", draining = true, placed = true)
+        val mini = runner("mac-mini", "Mac mini", placed = true)
+        assertEquals("mac-mini", NewThreadChoices.runner(listOf(asleep, draining, mini), now)?.runnerId)
+        assertEquals("mac-mini", NewThreadChoices.runner(listOf(mini, asleep), now)?.runnerId)
         // None online: the main Mac, to wait for.
-        assertEquals("m5", NewThreadChoices.runner(listOf(asleep, draining), now)?.runnerId)
+        assertEquals("laptop", NewThreadChoices.runner(listOf(asleep, draining), now)?.runnerId)
         assertNull(NewThreadChoices.runner(emptyList(), now))
     }
 
@@ -70,19 +70,19 @@ class NewThreadChoicesTest {
      * order (Codex's review): with no order, the main Mac, asleep or not.
      */
     @Test fun anUnplacedRunnerIsNeverPickedForHim() {
-        val asleep = runner("m5", "M5", secondsAgo = 600, main = true)
-        val bruce = runner("bruce", "Bruce")
-        assertEquals("m5", NewThreadChoices.runner(listOf(bruce, asleep), now)?.runnerId)
+        val asleep = runner("laptop", "Laptop", secondsAgo = 600, main = true)
+        val mini = runner("mac-mini", "Mac mini")
+        assertEquals("laptop", NewThreadChoices.runner(listOf(mini, asleep), now)?.runnerId)
         // No main Mac known: nothing picked, so the backend decides.
-        assertNull(NewThreadChoices.runner(listOf(bruce, runner("m5", "M5")), now))
+        assertNull(NewThreadChoices.runner(listOf(mini, runner("laptop", "Laptop")), now))
     }
 
     @Test fun modelsFollowTheRunner() {
         val accounts = listOf(
-            PhoneAccount("claude-m5", runnerId = "m5", provider = "claude", title = "1", models = listOf(PhoneModelChoice("opus", "Opus"))),
-            PhoneAccount("codex-bruce", runnerId = "bruce", provider = "codex", title = "C", models = listOf(PhoneModelChoice("astra", "Astra"))),
+            PhoneAccount("claude-laptop", runnerId = "laptop", provider = "claude", title = "1", models = listOf(PhoneModelChoice("opus", "Opus"))),
+            PhoneAccount("codex-mini", runnerId = "mac-mini", provider = "codex", title = "C", models = listOf(PhoneModelChoice("astra", "Astra"))),
         )
-        assertEquals(listOf("astra"), NewThreadChoices.models(accounts, "bruce").map { it.id })
+        assertEquals(listOf("astra"), NewThreadChoices.models(accounts, "mac-mini").map { it.id })
         assertEquals(listOf("opus", "astra"), NewThreadChoices.models(accounts, null).map { it.id })
         // A runner with no logins mirrored yet offers none, rather than another Mac's.
         assertTrue(NewThreadChoices.models(accounts, "cloud").isEmpty())
@@ -92,11 +92,11 @@ class NewThreadChoicesTest {
         val zone = java.time.ZoneId.systemDefault()
         val clock = RelativeTime.clock(now.minusSeconds(600), now, zone)
         assertNull(NewThreadChoices.offlineText(emptyList(), now))
-        assertEquals("Mac offline since $clock", NewThreadChoices.offlineText(listOf(runner("m5", "M5", 600)), now))
-        assertEquals("Bruce offline since $clock", NewThreadChoices.offlineText(listOf(runner("m5", "M5", 900), runner("bruce", "Bruce", 600)), now))
-        assertNull(NewThreadChoices.offlineText(listOf(runner("m5", "M5", 900), runner("bruce", "Bruce")), now))
-        assertEquals("M5 offline since $clock", NewThreadChoices.offlineText(runner("m5", "M5", 600), now))
-        assertNull(NewThreadChoices.offlineText(runner("m5", "M5"), now))
+        assertEquals("Mac offline since $clock", NewThreadChoices.offlineText(listOf(runner("laptop", "Laptop", 600)), now))
+        assertEquals("Mac mini offline since $clock", NewThreadChoices.offlineText(listOf(runner("laptop", "Laptop", 900), runner("mac-mini", "Mac mini", 600)), now))
+        assertNull(NewThreadChoices.offlineText(listOf(runner("laptop", "Laptop", 900), runner("mac-mini", "Mac mini")), now))
+        assertEquals("Laptop offline since $clock", NewThreadChoices.offlineText(runner("laptop", "Laptop", 600), now))
+        assertNull(NewThreadChoices.offlineText(runner("laptop", "Laptop"), now))
     }
 }
 

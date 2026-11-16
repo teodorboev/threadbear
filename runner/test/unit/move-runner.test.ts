@@ -24,10 +24,10 @@ test('a thread moves whole: its log, its queue and its Claude session carry on i
   const work = tmpDir('tb-move-work-');
   const sDir = tmpDir('tb-move-claude-s-');
   const tDir = tmpDir('tb-move-claude-t-');
-  const s = machine([{ id: 'claude-main', provider: 'claude', title: 'S login', email: 'mike@example.com', configDir: sDir }]);
+  const s = machine([{ id: 'claude-main', provider: 'claude', title: 'S login', email: 'alex@example.com', configDir: sDir }]);
   const t = machine([
     { id: 'claude-9', provider: 'claude', title: 'other', email: 'other@example.com', configDir: tmpDir() },
-    { id: 'claude-1', provider: 'claude', title: 'T login', email: 'Mike@example.com', configDir: tDir },
+    { id: 'claude-1', provider: 'claude', title: 'T login', email: 'Alex@example.com', configDir: tDir },
   ]);
   const id = s.runner.create({ text: 'Fix the tests', accountId: 'claude-main', cwd: work }).thread.id;
   const cli = s.adapter.last;
@@ -55,7 +55,7 @@ test('a thread moves whole: its log, its queue and its Claude session carry on i
   assert.equal(s.runner.threads.get(id)!.rec.queue.length, 1);
 
   const info = (await s.runner.describeForMove(id, 0))!;
-  assert.equal(info.email, 'mike@example.com');
+  assert.equal(info.email, 'alex@example.com');
   assert.equal(info.sessionId, sid);
   const r = row(id, { info });
   const plan = await t.runner.planMove(r);
@@ -124,25 +124,25 @@ test("with no transcript to carry, the next turn starts afresh with the handoff 
 
 test('the plan says why a thread has nowhere to go, and finds its repo by origin', async () => {
   const t = machine([{ id: 'claude-1', provider: 'claude', title: 'T', configDir: tmpDir() }]);
-  const base = { title: 'x', home: '/Users/mike', accountId: 'a', permissionMode: 'full', worktree: false, schedules: 0 };
+  const base = { title: 'x', home: '/Users/alex', accountId: 'a', permissionMode: 'full', worktree: false, schedules: 0 };
   const plan = (info: Record<string, unknown>, extra: Partial<MoveRow> = {}) => t.runner.planMove(row('t', { info: { ...base, ...info } as never, ...extra }));
-  assert.deepEqual(await plan({ cwd: '/Users/mike/nowhere-at-all', provider: 'claude' }), { problem: "There's no folder " + path.join(process.env.HOME!, 'nowhere-at-all') + ' on T1. Pick one to move it into.' });
+  assert.deepEqual(await plan({ cwd: '/Users/alex/nowhere-at-all', provider: 'claude' }), { problem: "There's no folder " + path.join(process.env.HOME!, 'nowhere-at-all') + ' on T1. Pick one to move it into.' });
   assert.deepEqual(await plan({ cwd: '/x', provider: 'codex' }), { problem: 'T1 has no Codex login.' });
   assert.deepEqual(await plan({ cwd: '/x', provider: 'claude' }, { accountId: 'nope' }), { problem: 'T1 has no login nope.' });
 
   // A repo T has a thread in, under a different path from S's.
   const repo = tmpDir('tb-move-repo-');
   execFileSync('git', ['-C', repo, 'init', '-q']);
-  execFileSync('git', ['-C', repo, 'remote', 'add', 'origin', 'https://github.com/mikecann/foo']);
+  execFileSync('git', ['-C', repo, 'remote', 'add', 'origin', 'https://github.com/alex-example/foo']);
   fs.mkdirSync(path.join(repo, 'app'));
   t.runner.create({ text: 'x', accountId: 'claude-1', cwd: repo });
-  const found = await plan({ cwd: '/Users/mike/dev/foo/app', provider: 'claude', origin: 'git@github.com:mikecann/foo.git', repoTop: '/Users/mike/dev/foo', subdir: 'app' });
+  const found = await plan({ cwd: '/Users/alex/dev/foo/app', provider: 'claude', origin: 'git@github.com:alex-example/foo.git', repoTop: '/Users/alex/dev/foo', subdir: 'app' });
   assert.ok(!('problem' in found));
   assert.equal(!('problem' in found) && found.cwd, path.join(realpath(repo), 'app'));
   // Nowhere it knows, but S's path under this home has room: cloned there.
   const home = process.env.HOME!;
   const parent = tmpDir('tb-move-parent-');
-  const cloned = await plan({ cwd: `/Users/mike/x/new/app`, provider: 'claude', origin: 'git@github.com:mikecann/other.git', repoTop: path.join(parent, 'new'), subdir: 'app', home: '/nowhere' });
+  const cloned = await plan({ cwd: `/Users/alex/x/new/app`, provider: 'claude', origin: 'git@github.com:alex-example/other.git', repoTop: path.join(parent, 'new'), subdir: 'app', home: '/nowhere' });
   assert.ok(!('problem' in cloned) && cloned.clone?.to === path.join(parent, 'new'), JSON.stringify(cloned));
   void home;
 });

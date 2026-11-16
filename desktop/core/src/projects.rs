@@ -1397,14 +1397,14 @@ mod tests {
     #[test]
     fn a_project_reads_whole_and_tolerates_what_it_doesnt_know() {
         let p = Project::decode(&json!({
-            "id": "p_3b1d9e20", "title": "Threadbear", "folders": ["/Users/mike/dev/me/threadbear", 5, "/Users/mike/dev/me/notes"],
-            "goals": "Mike's own agent app.", "createdBy": "librarian", "createdByThread": "th1",
+            "id": "p_3b1d9e20", "title": "Threadbear", "folders": ["/Users/alex/code/threadbear", 5, "/Users/alex/code/notes"],
+            "goals": "An agent app.", "createdBy": "librarian", "createdByThread": "th1",
             "createdAt": "2026-10-20T10:00:00Z", "updatedAt": "2026-10-27T10:00:00Z", "threadCount": "7",
             "lastActivityAt": "2026-10-27T11:00:00Z", "colour": "teal", "parentId": "",
             "links": [{ "title": "Live site", "url": "https://cruise.example/" }, { "url": "https://www.cruise.example/admin/" }, { "title": "no url" }, "https://loose.example"],
         }))
         .unwrap();
-        assert_eq!(p.folders, ["/Users/mike/dev/me/threadbear", "/Users/mike/dev/me/notes"], "a folder that isn't a string is skipped");
+        assert_eq!(p.folders, ["/Users/alex/code/threadbear", "/Users/alex/code/notes"], "a folder that isn't a string is skipped");
         assert_eq!(p.created_by, Author::Librarian);
         assert_eq!(p.thread_count, 7);
         assert_eq!(p.last_activity_ms, parse_ms("2026-10-27T11:00:00Z"));
@@ -1648,8 +1648,8 @@ mod tests {
     #[test]
     fn searching_cards_looks_through_what_a_project_is_about() {
         let projects = vec![
-            Project { state: "The deterrent speaks through a Pi".into(), ..project("state", "Sammy Cam") },
-            Project { folders: vec!["/Users/mike/dev/me/mike-pod-site".into()], ..project("folder", "Podcast site") },
+            Project { state: "The deterrent speaks through a Pi".into(), ..project("state", "Porch Cam") },
+            Project { folders: vec!["/Users/alex/code/alex-pod-site".into()], ..project("folder", "Podcast site") },
             Project { goals: "Sell coffee".into(), ..project("goals", "Café") },
             Project { notes: "Moored by the café".into(), ..project("notes", "Boat") },
             Project { links: vec![Link { title: "Admin".into(), url: "https://example.com/x".into() }], ..project("link", "Shop") },
@@ -1659,9 +1659,9 @@ mod tests {
         let found = |q: &str| matching(all.clone(), q).iter().map(|c| c.project.id.clone()).collect::<Vec<_>>();
         assert_eq!(found("  \n").len(), 6, "nothing typed leaves every card");
         assert_eq!(found("deterrent"), ["title", "state"], "a title match goes above one in the state");
-        assert_eq!(found("DETERRENT sammy"), ["state"], "every word has to match, in any field");
+        assert_eq!(found("DETERRENT porch"), ["state"], "every word has to match, in any field");
         assert_eq!(found("cafe"), ["goals", "notes"], "case and accents don't count");
-        assert_eq!(found("mike-pod"), ["folder"]);
+        assert_eq!(found("alex-pod"), ["folder"]);
         assert!(found("users").is_empty(), "a folder's name counts, not the path every project shares");
         assert_eq!(found("admin"), ["link"]);
         assert_eq!(match_count(3, 76), "3 of 76 projects");
@@ -1671,9 +1671,9 @@ mod tests {
 
     #[test]
     fn titles_sort_as_finder_does() {
-        let mut titles = vec!["poddle 10", "Poddle 2", "apple", "Walkies"];
+        let mut titles = vec!["kennel 10", "Kennel 2", "apple", "Walkies"];
         titles.sort_by(|a, b| standard_compare(a, b));
-        assert_eq!(titles, ["apple", "Poddle 2", "poddle 10", "Walkies"]);
+        assert_eq!(titles, ["apple", "Kennel 2", "kennel 10", "Walkies"]);
     }
 
     #[test]
@@ -1684,11 +1684,11 @@ mod tests {
         let p = Project { created_ms: created, created_by: Author::Librarian, thread_count: 5, ..project("p", "P") };
         assert_eq!(made_by(&p, 2, &now), "Made by the librarian on 20 Oct · 5 threads", "the runner's count when it knows more");
         assert_eq!(made_by(&Project { archived: true, created_by: Author::Mike, thread_count: 0, ..p.clone() }, 1, &now), "Made by you on 20 Oct · 1 thread · Archived");
-        assert_eq!(icon_help(&p, "/Users/mike"), "No icon yet: the librarian looks in the project's folders for one. Click to choose a picture.");
-        let found = Project { icon: Some(Icon { from: Some("/Users/mike/dev/x/icon.png".into()), ..Default::default() }), ..p.clone() };
-        assert_eq!(icon_help(&found, "/Users/mike"), "An agent chose this (from ~/dev/x/icon.png). Click to change it.");
+        assert_eq!(icon_help(&p, "/Users/alex"), "No icon yet: the librarian looks in the project's folders for one. Click to choose a picture.");
+        let found = Project { icon: Some(Icon { from: Some("/Users/alex/dev/x/icon.png".into()), ..Default::default() }), ..p.clone() };
+        assert_eq!(icon_help(&found, "/Users/alex"), "An agent chose this (from ~/dev/x/icon.png). Click to change it.");
         let symbol = Project { icon: Some(Icon { symbol: Some("film".into()), by: Author::Librarian, ..Default::default() }), ..p };
-        assert_eq!(icon_help(&symbol, "/Users/mike"), "The librarian found this (the film symbol) and keeps it up to date. Click to choose another.");
+        assert_eq!(icon_help(&symbol, "/Users/alex"), "The librarian found this (the film symbol) and keeps it up to date. Click to choose another.");
         let kept = Membership { pinned: true, ..member("a") };
         assert_eq!(put_here_by(&kept), "The librarian put it here and you kept it");
         assert_eq!(put_here_by(&Membership { by: "mike".into(), ..member("a") }), "You put it here");

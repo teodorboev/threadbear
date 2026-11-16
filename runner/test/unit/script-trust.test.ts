@@ -228,8 +228,8 @@ test("an action's script can't stop the follow either: what comes after it wasn'
 
 // Mike's own hooks, as poddle and mikecann.blog have them (5 Nov): they
 // must keep loading, and what they run is covered.
-test("poddle's and mikecann.blog's hook scripts load, and changing anything they run asks again", async () => {
-  const poddle = () =>
+test("pantry's and alex.blog's hook scripts load, and changing anything they run asks again", async () => {
+  const pantry = () =>
     repo(`export default { hooks: [{ title: "BDD pairing", on: "turn.end", run: "./scripts/bdd-check.sh", edited: "features/**", tell: "failures" }] };\n`, {
       'scripts/bdd-check.sh': '#!/bin/zsh\n# The "BDD pairing" hook.\ncd "$(dirname "$0")/.." || exit 1\nnpm run -s test:bdd-check\n',
       'package.json': JSON.stringify({ scripts: { check: 'npm run typecheck && npm test', 'test:bdd-check': 'node scripts/verify-bdd-pairing.mjs && node scripts/bdd-drift.mjs' } }),
@@ -246,7 +246,7 @@ test("poddle's and mikecann.blog's hook scripts load, and changing anything they
       'public/images/fallback-post-header.png': 'png',
     });
   for (const [make, script, changes] of [
-    [poddle, 'scripts/bdd-check.sh', ['scripts/bdd-drift.mjs', 'scripts/verify-bdd-pairing.mjs', 'package.json']],
+    [pantry, 'scripts/bdd-check.sh', ['scripts/bdd-drift.mjs', 'scripts/verify-bdd-pairing.mjs', 'package.json']],
     [blog, 'scripts/validate-posts.sh', ['scripts/validatePosts.ts', 'scripts/lib/images.ts', 'utils/posts.ts', 'package.json']],
   ] as const) {
     const { folder, file } = make();

@@ -127,6 +127,10 @@ pub struct ThreadSummary {
     pub projects: Option<Vec<Project>>,
     #[serde(default, deserialize_with = "crate::wire::field")]
     pub started_by: Option<Value>,
+    /// A thread another thread started that Mike moved out from under it in
+    /// the sidebar (protocol "Nested threads"): `true`, else absent.
+    #[serde(default, deserialize_with = "crate::wire::field")]
+    pub detached: Option<bool>,
     #[serde(default, deserialize_with = "crate::wire::field")]
     pub schedule: Option<Value>,
     #[serde(default, deserialize_with = "crate::wire::field")]
@@ -568,9 +572,25 @@ pub fn thread_in_tag(tag: &str) -> Option<&str> {
 /// (`inbox::wakes`): one that's idle with nothing for Mike waits for it under
 /// Hibernating rather than sitting in the Inbox.
 pub fn sections_ordered<'a, T: Borrow<ThreadSummary> + Clone + 'a>(threads: impl IntoIterator<Item = &'a T>, now_ms: i64, order: InboxOrder, wakes: &HashMap<String, Wake>) -> Vec<Section<T>> {
+    sections_with(threads, now_ms, order, wakes, None)
+}
+
+/// `sections_ordered` with nested threads (the nestedThreads experiment,
+/// nested.rs): a nested thread has no row of its own, and a starter's row goes
+/// where its group does, ordered by the group's most urgent and newest member.
+pub fn sections_nested<'a, T: Borrow<ThreadSummary> + Clone + 'a>(threads: impl IntoIterator<Item = &'a T>, now_ms: i64, order: InboxOrder, wakes: &HashMap<String, Wake>, nesting: &crate::nested::Nesting) -> Vec<Section<T>> {
+    sections_with(threads, now_ms, order, wakes, Some(nesting))
+}
+
+fn sections_with<'a, T: Borrow<ThreadSummary> + Clone + 'a>(threads: impl IntoIterator<Item = &'a T>, now_ms: i64, order: InboxOrder, wakes: &HashMap<String, Wake>, nesting: Option<&crate::nested::Nesting>) -> Vec<Section<T>> {
     let (mut starred, mut inbox, mut running, mut hibernating, mut archived) = (vec![], vec![], vec![], vec![], vec![]);
     for row in threads {
-        let section = match section_of(summary(row), now_ms, wakes) {
+        let t = summary(row);
+        if nesting.is_some_and(|n| n.is_nested(&t.id)) {
+            continue;
+        }
+        let key = nesting.and_then(|n| n.group(&t.id)).map(|g| g.section).unwrap_or_else(|| section_of(t, now_ms, wakes));
+        let section = match key {
             "archived" => &mut archived,
             "starred" => &mut starred,
             "hibernating" => &mut hibernating,
@@ -579,7 +599,12 @@ pub fn sections_ordered<'a, T: Borrow<ThreadSummary> + Clone + 'a>(threads: impl
         };
         section.push(row.clone());
     }
-    sort_sections(starred, inbox, running, hibernating, archived, order, wakes)
+    // A group's row sorts by its most urgent and newest member.
+    let keys = |t: &ThreadSummary| match nesting.and_then(|n| n.group(&t.id)) {
+        Some(g) => (g.urgency, g.activity_ms),
+        None => (t.urgency(), t.activity_ms()),
+    };
+    sort_sections(starred, inbox, running, hibernating, archived, order, wakes, &keys)
 }
 
 /// Which section a thread goes under: "starred", "inbox", "running",
@@ -610,21 +635,21 @@ pub(crate) fn summary<T: Borrow<ThreadSummary>>(row: &T) -> &ThreadSummary {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn sort_sections<T: Borrow<ThreadSummary>>(mut starred: Vec<T>, mut inbox: Vec<T>, mut running: Vec<T>, mut hibernating: Vec<T>, mut archived: Vec<T>, order: InboxOrder, wakes: &HashMap<String, Wake>) -> Vec<Section<T>> {
+fn sort_sections<T: Borrow<ThreadSummary>>(mut starred: Vec<T>, mut inbox: Vec<T>, mut running: Vec<T>, mut hibernating: Vec<T>, mut archived: Vec<T>, order: InboxOrder, wakes: &HashMap<String, Wake>, keys: &dyn Fn(&ThreadSummary) -> (u8, i64)) -> Vec<Section<T>> {
     // Sorted by keys worked out once per thread: a time is text to be read,
     // and comparing two threads by reading theirs again each time cost the
     // app more than drawing a frame does (the activity bar's badge counts the
     // Inbox with this on every frame).
     use std::cmp::Reverse;
-    let newest_first = |t: &ThreadSummary| (Reverse(t.activity_ms()), t.id.clone());
+    let newest_first = |t: &ThreadSummary| (Reverse(keys(t).1), t.id.clone());
     starred.sort_by(|a, b| {
         let (a, b) = (summary(a), summary(b));
         a.starred_at.cmp(&b.starred_at).then_with(|| a.id.cmp(&b.id))
     });
     match order {
-        InboxOrder::NeedsYou => inbox.sort_by_cached_key(|t| (summary(t).urgency(), newest_first(summary(t)))),
+        InboxOrder::NeedsYou => inbox.sort_by_cached_key(|t| (keys(summary(t)).0, newest_first(summary(t)))),
         InboxOrder::Newest => inbox.sort_by_cached_key(|t| newest_first(summary(t))),
-        InboxOrder::Oldest => inbox.sort_by_cached_key(|t| (summary(t).activity_ms(), Reverse(summary(t).id.clone()))),
+        InboxOrder::Oldest => inbox.sort_by_cached_key(|t| (keys(summary(t)).1, Reverse(summary(t).id.clone()))),
     }
     running.sort_by_cached_key(|t| newest_first(summary(t)));
     // A snooze's time, or for one waiting on a schedule its next run. Back on
@@ -800,9 +825,9 @@ mod tests {
 
     #[test]
     fn a_thread_on_its_way_to_another_machine_says_so_in_its_box() {
-        let moving = |state: &str| thread(1, json!({ "moving": { "moveId": "m1", "to": "r2", "toName": "bruce", "state": state } }));
-        assert_eq!(moving("copying").moving_line().as_deref(), Some("Moving to bruce…"));
-        assert_eq!(moving("ready").moving_line().as_deref(), Some("Moving to bruce once this turn ends…"));
+        let moving = |state: &str| thread(1, json!({ "moving": { "moveId": "m1", "to": "r2", "toName": "mac-mini", "state": state } }));
+        assert_eq!(moving("copying").moving_line().as_deref(), Some("Moving to mac-mini…"));
+        assert_eq!(moving("ready").moving_line().as_deref(), Some("Moving to mac-mini once this turn ends…"));
         assert_eq!(moving("failed").moving_line(), None, "a failed move gives the box back");
         assert_eq!(moving("cancelled").moving_line(), None);
         assert_eq!(thread(2, json!({})).moving_line(), None);
@@ -810,7 +835,7 @@ mod tests {
 
     fn thread(n: u32, over: Value) -> ThreadSummary {
         let mut v = json!({
-            "id": format!("t{n}"), "title": format!("Thread {n}"), "cwd": "/home/mike/dev/x",
+            "id": format!("t{n}"), "title": format!("Thread {n}"), "cwd": "/home/alex/dev/x",
             "provider": "claude", "status": "idle", "needsYou": false,
             "lastActivityAt": format!("2026-11-06T10:{n:02}:00Z"), "preview": "", "lastSeq": 10, "lastSeenSeq": 10
         });
@@ -943,8 +968,8 @@ mod tests {
         assert_eq!(parse_ms("1970-01-01T00:00:01.123456Z"), Some(1123));
         assert_eq!(parse_ms("1970-01-01T00:00:01.Z"), Some(1000));
         assert_eq!(parse_ms("2026-11-06T12:00:00Z").unwrap() - parse_ms("2026-11-06T11:00:00Z").unwrap(), 3_600_000);
-        assert_eq!(folder_name("/home/mike/dev/x/"), "x");
-        assert_eq!(folder_name(r"C:\Users\mike\dev\y"), "y");
+        assert_eq!(folder_name("/home/alex/dev/x/"), "x");
+        assert_eq!(folder_name(r"C:\Users\alex\dev\y"), "y");
         assert_eq!(ago(now() - 5 * 60_000, now()), "5m");
     }
 

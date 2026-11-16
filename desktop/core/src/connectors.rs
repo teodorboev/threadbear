@@ -249,9 +249,9 @@ mod tests {
 
     /// What the mock runner's gateway says (app/Tools/mock-runner/server.mjs).
     fn mock() -> ConnectorsStatus {
-        ConnectorsStatus::decode(&json!({ "state": "ok", "url": "https://bruce.example.ts.net:8443", "version": "0.2.0", "checkedAt": "2026-11-11T01:00:00.000Z", "services": [
+        ConnectorsStatus::decode(&json!({ "state": "ok", "url": "https://mac-mini.example.ts.net:8443", "version": "0.2.0", "checkedAt": "2026-11-11T01:00:00.000Z", "services": [
             { "id": "notion", "title": "Notion", "state": "connected" },
-            { "id": "sentry", "title": "Sentry", "state": "signed_out", "message": "The sign-in expired.", "connectUrl": "https://bruce.example.ts.net:8443/admin/connect/sentry" },
+            { "id": "sentry", "title": "Sentry", "state": "signed_out", "message": "The sign-in expired.", "connectUrl": "https://mac-mini.example.ts.net:8443/admin/connect/sentry" },
             { "id": "cloudflare", "state": "connected" },
             { "title": "No id" },
         ]}))
@@ -269,11 +269,11 @@ mod tests {
         assert_eq!(state_line(&s.services[1]), "Signed out");
         assert_eq!(button_title(&s.services[1]), Some("Connect"));
         assert_eq!(button_title(&s.services[0]), None);
-        assert_eq!(host(Some(&s)).as_deref(), Some("bruce"));
-        assert_eq!(manage_url(Some(&s)).as_deref(), Some("https://bruce.example.ts.net:8443/admin"));
-        assert_eq!(service_url(Some(&s), &s.services[1]).as_deref(), Some("https://bruce.example.ts.net:8443/admin/connect/sentry"));
-        assert_eq!(service_url(Some(&s), &s.services[0]).as_deref(), Some("https://bruce.example.ts.net:8443/admin/connect/notion"), "a signed-in one gets its page on the gateway");
-        assert!(about(Some(&s))[0].contains("Connectors gateway on bruce."));
+        assert_eq!(host(Some(&s)).as_deref(), Some("mac-mini"));
+        assert_eq!(manage_url(Some(&s)).as_deref(), Some("https://mac-mini.example.ts.net:8443/admin"));
+        assert_eq!(service_url(Some(&s), &s.services[1]).as_deref(), Some("https://mac-mini.example.ts.net:8443/admin/connect/sentry"));
+        assert_eq!(service_url(Some(&s), &s.services[0]).as_deref(), Some("https://mac-mini.example.ts.net:8443/admin/connect/notion"), "a signed-in one gets its page on the gateway");
+        assert!(about(Some(&s))[0].contains("Connectors gateway on mac-mini."));
     }
 
     #[test]
@@ -284,10 +284,10 @@ mod tests {
         assert!(quiet(Some(&s)));
         assert_eq!(button_title(&s.services[1]), Some("Reconnect"));
         assert_eq!(tooltip(Some(&s)), "Connectors\nSentry has a problem");
-        let down = ConnectorsStatus::decode(&json!({ "state": "unreachable", "url": "https://bruce.example.ts.net:8443", "error": "timed out", "services": [] }));
+        let down = ConnectorsStatus::decode(&json!({ "state": "unreachable", "url": "https://mac-mini.example.ts.net:8443", "error": "timed out", "services": [] }));
         assert!(quiet(Some(&down)));
         assert_eq!(tooltip(Some(&down)), "Connectors\nCan't reach the gateway");
-        assert_eq!(empty_line(Some(&down)).as_deref(), Some("Can't reach bruce: timed out."));
+        assert_eq!(empty_line(Some(&down)).as_deref(), Some("Can't reach mac-mini: timed out."));
         let fine = ConnectorsStatus { services: vec![ConnectorService { id: "n".into(), title: "Notion".into(), state: "connected".into(), ..Default::default() }], ..mock() };
         assert_eq!(tooltip(Some(&fine)), "Connectors\nEverything is signed in");
         assert!(!needs_you(Some(&fine)) && !quiet(Some(&fine)));

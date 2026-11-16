@@ -1,4 +1,4 @@
-// Where Mike's standing instructions are kept, and what makes them count
+// Where Alex's standing instructions are kept, and what makes them count
 // (instructions.ts; docs/protocol.md, "Standing instructions"): only what
 // instructions.set saved reaches a session, however else the file changes.
 import { test } from 'node:test';

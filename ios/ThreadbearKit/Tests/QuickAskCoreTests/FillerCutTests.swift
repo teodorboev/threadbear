@@ -9,10 +9,10 @@ struct FillerCutTests {
 
     @Test func archiveAnswerNeverCuts() {
         var plan = FillerCut()
-        #expect(plan.sentence("Yesterday you worked on Walkies.", at: 0) == [.speak(id: 0, text: "Yesterday you worked on Walkies.")])
+        #expect(plan.sentence("Yesterday you worked on Pebble.", at: 0) == [.speak(id: 0, text: "Yesterday you worked on Pebble.")])
         plan.started(0, at: 0.1)
-        #expect(plan.sentence("Then Stash It.", at: 0.5) == [.speak(id: 1, text: "Then Stash It.")])
-        #expect(plan.sentence("And Poddle.", at: 0.6) == [.speak(id: 2, text: "And Poddle.")])
+        #expect(plan.sentence("Then Recipe Box.", at: 0.5) == [.speak(id: 1, text: "Then Recipe Box.")])
+        #expect(plan.sentence("And Lantern.", at: 0.6) == [.speak(id: 2, text: "And Lantern.")])
         #expect(plan.finished(0, quiet: false, at: 2) == [])
         #expect(plan.finished(1, quiet: false, at: 3) == [])
         #expect(!plan.isIdle)

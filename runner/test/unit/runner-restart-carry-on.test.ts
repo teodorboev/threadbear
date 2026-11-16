@@ -1,6 +1,6 @@
 // Threads a restart, a crash or the Mac restarting cut off mid-turn carry
 // on by themselves once the next runner is up (Runner.carryOnStopped),
-// once: a carry-on that's cut off too is left for Mike, as are threads put
+// once: a carry-on that's cut off too is left for Alex, as are threads put
 // away, ones with a message of their own and ones stopped long ago.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -24,7 +24,7 @@ test('a crash mid-turn: the next runner carries the thread on, once', async () =
   assert.equal(h2.adapter.last.opts.resume, true);
   assert.equal(runnerMessages(h2, thread.id).length, 1);
   assert.ok(h2.notes.some((n) => n.method === 'runner.notice' && /carrying on by itself/.test((n.params as any).message)));
-  // The carry-on dies with the runner too: left for Mike this time.
+  // The carry-on dies with the runner too: left for Alex this time.
   h2.adapter.last.init();
   const h3 = h2.restart();
   h3.runner.carryOnStopped();

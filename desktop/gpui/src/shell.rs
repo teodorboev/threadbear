@@ -827,6 +827,8 @@ impl Threadbear {
                 self.sidebar_settings_changed(cx);
             }
         }
+        // A nested thread's group opens so its row is there to see.
+        self.open_group_of(id, cx);
         self.mode = SidebarMode::Inbox;
         // Its row in view, wherever the list was scrolled to.
         self.reveal_row(id, cx);
@@ -1193,7 +1195,14 @@ impl Threadbear {
 
     /// The window's title (Window menu, Mission Control), as `windowTitle`.
     pub(crate) fn sync_window_title(&mut self, window: &mut Window) {
-        let title = self.main_panel_title();
+        let mut title = self.main_panel_title();
+        // A scripted copy anyone can see says so wherever macOS names the
+        // window (Mission Control, the Window menu, Activity Monitor's
+        // windows): someone running a fork found one with the mock's demo
+        // threads and took it for a leak of someone's real setup (15 Nov).
+        if crate::scripted::labelled() {
+            title.push_str(crate::scripted::TITLE_LABEL);
+        }
         if title != self.last_window_title {
             window.set_window_title(&title);
             self.last_window_title = title;

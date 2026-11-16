@@ -534,7 +534,7 @@ mod tests {
     fn a_panel_from_one_place_is_one_entry_on_its_newest_thread_with_its_project() {
         let old = with_panel(thread("old", "Older", "/w/walkies", 90), "convex.dashboard", "Convex", "convex", "/w/walkies", None);
         let new = with_panel(thread("new", "Newer", "/w/walkies/app", 5), "convex.dashboard", "Convex", "convex", "/w/walkies", Some(2));
-        let elsewhere = with_panel(thread("e", "Else", "/w/poddle", 1), "convex.dashboard", "Convex", "convex", "/w/poddle", None);
+        let elsewhere = with_panel(thread("e", "Else", "/w/kennel", 1), "convex.dashboard", "Convex", "convex", "/w/kennel", None);
         let projects = [project("walk", "Walkies", &["/w/walkies"])];
         let c = Catalog::new([&old, &new, &elsewhere], &projects, vec![], &[], &Utc::now());
         let panels = &c.groups("convex", &[])[0];
@@ -542,8 +542,8 @@ mod tests {
         let walkies = panels.items.iter().find(|i| i.detail == "walkies").unwrap();
         assert_eq!(walkies.target, Target::Panel { id: "convex.dashboard".into(), thread: "new".into(), project: Some("walk".into()) });
         assert_eq!(walkies.badge, Some(2), "the newest thread's count");
-        let poddle = panels.items.iter().find(|i| i.detail == "poddle").unwrap();
-        assert_eq!(poddle.target, Target::Panel { id: "convex.dashboard".into(), thread: "e".into(), project: None }, "not in a project: its thread");
+        let kennel = panels.items.iter().find(|i| i.detail == "kennel").unwrap();
+        assert_eq!(kennel.target, Target::Panel { id: "convex.dashboard".into(), thread: "e".into(), project: None }, "not in a project: its thread");
     }
 
     #[test]

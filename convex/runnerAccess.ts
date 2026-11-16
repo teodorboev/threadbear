@@ -166,6 +166,7 @@ export const ACCESS: Record<string, Access> = {
   // another. A runner key's scheduler lists only its own runner.
   runnersList: 'owner',
   issueToken: 'owner',
+  issuePairingCode: 'owner',
   listTokens: 'owner',
   revokeToken: 'owner',
   appendMessages: 'own',

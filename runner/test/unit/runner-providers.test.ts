@@ -249,7 +249,7 @@ test('switching to Full allows the cards Full would not have asked, says so, and
   const resolved = h.events(thread.id).filter((e) => e.type === 'approval.resolved');
   assert.deepEqual(resolved.map((e) => [e.decision, e.message]), [['allow', 'Allowed by Full access']]);
   await tick();
-  assert.equal(other, undefined, 'delete_thread still waits for Mike');
+  assert.equal(other, undefined, 'delete_thread still waits for Alex');
 });
 
 test('raising to Full in the same call as a login change reaches the running Codex turn too', () => {

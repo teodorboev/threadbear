@@ -12,6 +12,7 @@ import { httpAction } from './_generated/server';
 import type { Id } from './_generated/dataModel';
 import { MAX_RUNNER_UPLOAD_BYTES } from './sync';
 import { PHONE_UPLOADS } from './phone';
+import { takeUpload } from './uploads';
 
 const http = httpRouter();
 
@@ -42,6 +43,42 @@ http.route({
   }),
 });
 
+// A shared thread's picture: /share/image/<slug>/<id>, the URL share:view
+// and the /s/ card give anyone with the link (share.ts sharedImageUrl).
+// Served only while the thread is still shared under that link, checked
+// at every request (share:shareImageFile), never cached, so stopping
+// sharing stops the pictures at once too (Daybreak, 15 Nov 2026).
+http.route({
+  pathPrefix: '/share/image/',
+  method: 'GET',
+  handler: httpAction(async (ctx, request) => {
+    const gone = () => new Response('Not Found', { status: 404, headers: { 'Content-Type': 'text/plain', 'Cache-Control': 'no-store' } });
+    const parts = new URL(request.url).pathname.slice('/share/image/'.length).split('/');
+    if (parts.length !== 2) return gone();
+    let slug: string;
+    let id: string;
+    try {
+      [slug, id] = parts.map(decodeURIComponent) as [string, string];
+    } catch {
+      return gone();
+    }
+    const file = await ctx.runQuery(internal.share.shareImageFile, { slug, id });
+    const blob = file ? await ctx.storage.get(file.storageId) : null;
+    if (!file || !blob) return gone();
+    return new Response(blob, {
+      status: 200,
+      headers: {
+        'Content-Type': file.mediaType,
+        'Cache-Control': 'no-store',
+        'X-Content-Type-Options': 'nosniff',
+        'Content-Security-Policy': "default-src 'none'; sandbox",
+        // The page and link previews load it from other origins.
+        'Cross-Origin-Resource-Policy': 'cross-origin',
+      },
+    });
+  }),
+});
+
 // The push relay asks here whether a /register that named this deployment
 // really came from it (push.ts relayInstall, relay/convex/http.ts): it posts
 // back the nonce the registration carried, which only this deployment has.
@@ -57,31 +94,22 @@ http.route({
   }),
 });
 
+// The three upload routes below take their one-use ticket the same way
+// (uploads.ts takeUpload): claimed before the body is read, the body read
+// no further than the cap, and a file the finish doesn't keep deleted.
+
 // A runner key's uploads (sync:iconUploadUrl hands out this URL with a
 // one-use ticket): the file is stored here and recorded as that runner's,
 // so its key can attach it, and only it (docs/protocol.md, "Runner keys").
 // Answers { storageId } as Convex's own upload URL does, so the runner's
-// uploader is the same for both.
-
+// uploader is the same for both. 429: over an allowance, try again later;
+// 403: this ticket won't do.
 http.route({
   path: '/runner/upload',
   method: 'POST',
-  handler: httpAction(async (ctx, request) => {
-    const ticket = new URL(request.url).searchParams.get('ticket') ?? '';
-    const refuse = (status: number, error: string) => new Response(JSON.stringify({ error }), { status, headers: { 'Content-Type': 'application/json' } });
-    if (!(await ctx.runQuery(internal.sync.uploadTicketOk, { ticket }))) return refuse(403, 'bad or used upload ticket');
-    const blob = await request.blob();
-    if (blob.size > MAX_RUNNER_UPLOAD_BYTES) return refuse(413, 'too big');
-    const storageId = await ctx.storage.store(blob);
-    // Checked again with the hour's bytes, and the key still live. 429: try
-    // again later (an allowance); 403: this ticket won't do.
-    const redeemed = await ctx.runMutation(internal.sync.redeemUpload, { ticket, storageId, bytes: blob.size });
-    if (redeemed !== true) {
-      await ctx.storage.delete(storageId);
-      return redeemed === 'later' ? refuse(429, 'over the upload allowance for now: try again later') : refuse(403, 'upload refused: a bad or used ticket, or a revoked key');
-    }
-    return new Response(JSON.stringify({ storageId }), { status: 200, headers: { 'Content-Type': 'application/json' } });
-  }),
+  handler: httpAction(async (ctx, request) =>
+    takeUpload(ctx, request, { maxBytes: MAX_RUNNER_UPLOAD_BYTES, claim: internal.sync.claimUpload, finish: internal.sync.finishUpload, refused: 'upload refused: a bad or used ticket, or a revoked key' }),
+  ),
 });
 
 // A picture the main Mac's runner sends to another runner's thread
@@ -91,25 +119,9 @@ http.route({
 http.route({
   path: '/relay/upload',
   method: 'POST',
-  handler: httpAction(async (ctx, request) => {
-    const ticket = new URL(request.url).searchParams.get('ticket') ?? '';
-    const refuse = (status: number, error: string) => new Response(JSON.stringify({ error }), { status, headers: { 'Content-Type': 'application/json' } });
-    if (!(await ctx.runQuery(internal.relay.relayTicketOk, { ticket }))) return refuse(403, 'bad or used upload ticket');
-    if (Number(request.headers.get('content-length') ?? 0) > MAX_RUNNER_UPLOAD_BYTES) return refuse(413, 'too big');
-    const blob = await request.blob();
-    if (blob.size > MAX_RUNNER_UPLOAD_BYTES) return refuse(413, 'too big');
-    const storageId = await ctx.storage.store(blob);
-    // Not recorded (refused, or the mutation threw), it would be found by
-    // nothing, so it goes now (Codex's review, 8 Nov).
-    let redeemed = false;
-    try {
-      redeemed = await ctx.runMutation(internal.relay.redeemRelayUpload, { ticket, storageId, bytes: blob.size });
-    } finally {
-      if (!redeemed) await ctx.storage.delete(storageId);
-    }
-    if (!redeemed) return refuse(403, 'upload refused: a bad or used ticket');
-    return new Response(JSON.stringify({ storageId }), { status: 200, headers: { 'Content-Type': 'application/json' } });
-  }),
+  handler: httpAction(async (ctx, request) =>
+    takeUpload(ctx, request, { maxBytes: MAX_RUNNER_UPLOAD_BYTES, claim: internal.relay.claimRelayUpload, finish: internal.relay.finishRelayUpload, refused: 'upload refused: a bad or used ticket' }),
+  ),
 });
 
 // A phone's photo (phone:imageUploadUrl hands out this URL with a one-use
@@ -120,22 +132,9 @@ http.route({
 http.route({
   path: '/phone/upload',
   method: 'POST',
-  handler: httpAction(async (ctx, request) => {
-    const ticket = new URL(request.url).searchParams.get('ticket') ?? '';
-    const refuse = (status: number, error: string) => new Response(JSON.stringify({ error }), { status, headers: { 'Content-Type': 'application/json' } });
-    if (!(await ctx.runQuery(internal.phone.phoneTicketOk, { ticket }))) return refuse(403, 'bad or used upload ticket');
-    // Said up front by an honest client; checked again on what arrived.
-    if (Number(request.headers.get('content-length') ?? 0) > PHONE_UPLOADS.maxBytes) return refuse(413, 'too big');
-    const blob = await request.blob();
-    if (blob.size > PHONE_UPLOADS.maxBytes) return refuse(413, 'too big');
-    const storageId = await ctx.storage.store(blob);
-    const redeemed = await ctx.runMutation(internal.phone.redeemPhoneUpload, { ticket, storageId, bytes: blob.size });
-    if (redeemed !== true) {
-      await ctx.storage.delete(storageId);
-      return redeemed === 'later' ? refuse(429, 'over the upload allowance for now: try again later') : refuse(403, 'upload refused: a bad or used ticket, or a revoked phone');
-    }
-    return new Response(JSON.stringify({ storageId }), { status: 200, headers: { 'Content-Type': 'application/json' } });
-  }),
+  handler: httpAction(async (ctx, request) =>
+    takeUpload(ctx, request, { maxBytes: PHONE_UPLOADS.maxBytes, claim: internal.phone.claimPhoneUpload, finish: internal.phone.finishPhoneUpload, refused: 'upload refused: a bad or used ticket, or a revoked phone' }),
+  ),
 });
 
 registerStaticRoutes(http, components.staticHosting);

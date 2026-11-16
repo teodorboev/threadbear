@@ -166,15 +166,15 @@ mod tests {
 
     #[test]
     fn says_what_the_runner_would_refuse() {
-        let accounts = [account("mike", "claude"), account("codex-1", "codex")];
+        let accounts = [account("alex", "claude"), account("codex-1", "codex")];
         assert_eq!(problem(&[], &accounts).as_deref(), Some("Keep at least one pool."));
         assert_eq!(problem(&[pool("a", &[])], &accounts).as_deref(), Some("A needs at least one login."));
-        assert_eq!(problem(&[pool("a", &["mike"]), pool("a", &["mike"])], &accounts).as_deref(), Some("Two pools have the id a."));
+        assert_eq!(problem(&[pool("a", &["alex"]), pool("a", &["alex"])], &accounts).as_deref(), Some("Two pools have the id a."));
         assert_eq!(problem(&[pool("a", &["ghost"])], &accounts).as_deref(), Some("A has a login the runner doesn't know (ghost)."));
-        let mut blank = pool("a", &["mike"]);
+        let mut blank = pool("a", &["alex"]);
         blank.title = "  ".into();
         assert_eq!(problem(&[blank], &accounts).as_deref(), Some("Every pool needs a name."));
-        assert_eq!(problem(&[pool("a", &["mike"])], &accounts), None);
+        assert_eq!(problem(&[pool("a", &["alex"])], &accounts), None);
     }
 
     #[test]

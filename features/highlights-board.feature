@@ -14,11 +14,11 @@ Feature: The Notion board beside a thread
 
   @highlights.board
   Scenario: Done cards fold away and can be opened again
-    Then the board card "Battery check on the old Pixel" is hidden
+    Then the board card "Battery check on the old phone" is hidden
     When I unfold the board's Done column
-    Then the board card "Battery check on the old Pixel" can be seen
+    Then the board card "Battery check on the old phone" can be seen
     When I fold the board's Done column
-    Then the board card "Battery check on the old Pixel" is hidden
+    Then the board card "Battery check on the old phone" is hidden
 
   @highlights.board
   Scenario: A card opens the other thread working on it

@@ -1,7 +1,7 @@
 {
   "id": "demo_dark_mode",
   "title": "Add dark mode to the dashboard",
-  "cwd": "/Users/mike/dev/me/misc",
+  "cwd": "/Users/alex/code/misc",
   "accountId": "claude-main",
   "provider": "claude",
   "permissionMode": "full",

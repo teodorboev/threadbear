@@ -14,7 +14,7 @@
       "inGroup" : false,
       "kind" : "tool",
       "seq" : 3,
-      "text" : "Read ~/dev/me/raycast-scripts/keep-awake.sh",
+      "text" : "Read ~/code/raycast-scripts/keep-awake.sh",
       "turn" : "turn_1"
     },
     {
@@ -41,7 +41,7 @@
       "inGroup" : false,
       "kind" : "tool",
       "seq" : 3,
-      "text" : "Read ~/dev/me/raycast-scripts/keep-awake.sh",
+      "text" : "Read ~/code/raycast-scripts/keep-awake.sh",
       "turn" : "turn_1"
     },
     {

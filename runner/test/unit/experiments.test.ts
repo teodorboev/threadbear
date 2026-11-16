@@ -1,6 +1,6 @@
 // Experiments (src/experiments.ts): each new feature still being tried
 // out is off by default, with a switch in runner.json, and names the
-// schedule that asks Mike whether to turn it on for everyone (AGENTS.md,
+// schedule that asks Alex whether to turn it on for everyone (AGENTS.md,
 // "Experiments"), so none is left half-on and forgotten.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';

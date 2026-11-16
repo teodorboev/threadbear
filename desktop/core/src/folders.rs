@@ -509,13 +509,13 @@ pub fn failure_words(code: i64, message: &str, away: Option<&str>) -> String {
 mod tests {
     #[test]
     fn windows_breadcrumbs_start_at_the_drive_and_keep_each_folder() {
-        let got = super::crumbs(r"C:\work\site\logs", r"C:\Users\mike");
+        let got = super::crumbs(r"C:\work\site\logs", r"C:\Users\alex");
         assert_eq!(got.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), ["C:", "work", "site", "logs"]);
         assert_eq!(got.last().unwrap().path, "C:/work/site/logs");
         assert_eq!(super::parent(r"C:\work\site\logs").as_deref(), Some("C:/work/site"));
         assert_eq!(super::parent("C:/"), None);
-        let home = super::crumbs(r"C:\Users\mike\site\logs", "C:/Users/mike");
-        assert_eq!(home.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), ["mike", "site", "logs"]);
+        let home = super::crumbs(r"C:\Users\alex\site\logs", "C:/Users/alex");
+        assert_eq!(home.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), ["alex", "site", "logs"]);
     }
     use super::*;
     use serde_json::json;
@@ -734,8 +734,8 @@ mod tests {
     fn a_folder_that_cant_be_read_says_why() {
         assert_eq!(failure_words(-32602, "No such folder: /a/b", None), "This folder isn't there any more.");
         assert_eq!(failure_words(-32602, "Not a folder: /a/b", None), "Couldn't read this folder.");
-        assert_eq!(failure_words(-32601, "Method not found", Some("bruce")), "bruce's runner needs updating to show folders.");
-        assert_eq!(failure_words(-32602, "No such folder: /a/b", Some("bruce")), "Couldn't read this folder on bruce.");
+        assert_eq!(failure_words(-32601, "Method not found", Some("mac-mini")), "mac-mini's runner needs updating to show folders.");
+        assert_eq!(failure_words(-32602, "No such folder: /a/b", Some("mac-mini")), "Couldn't read this folder on mac-mini.");
     }
 
     #[test]

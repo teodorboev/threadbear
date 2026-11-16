@@ -811,7 +811,7 @@ fn testAfterAWakeAReplacedSummaryGivesWay() {
         result(4, "c1").with_turn("t1"),
         end_turn_call(5, "e1"),
         result_text(6, "e1", "Noted: this thread is done.").with_turn("t1"),
-        event_turn(7, "assistant.text", json!({"itemId": "e1.summary", "text": "- Still building, and landing once the check on Tinker Desk passes", "summary": true}), Some("t1")),
+        event_turn(7, "assistant.text", json!({"itemId": "e1.summary", "text": "- Still building, and landing once the check on build-box passes", "summary": true}), Some("t1")),
         event_turn(8, "system.note", wake, Some("t1")),
         call(9, "c2").with_turn("t1"),
         result(10, "c2").with_turn("t1"),

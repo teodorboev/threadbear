@@ -66,12 +66,15 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 24
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      # The stable toolchain, from a pinned commit of the action that installs it.
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable, 15 Nov 2026
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: desktop
       - name: Linux libraries
@@ -109,7 +112,7 @@ jobs:
           cargo build --manifest-path desktop/Cargo.toml -p threadbear-gpui --features automation
           cd features
           TB_APP=gpui TB_RETRY=1 node_modules/.bin/cucumber-js
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()
         with:
           name: spec-reports-${{ matrix.name }}
@@ -117,7 +120,7 @@ jobs:
           if-no-files-found: ignore
       - name: Build the GPUI app
         run: cargo build --release --manifest-path desktop/Cargo.toml -p threadbear-gpui
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: threadbear-desktop-${{ matrix.name }}
           path: |

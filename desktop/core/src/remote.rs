@@ -133,8 +133,69 @@ pub fn decode_remote_threads(value: &Value) -> RemoteThreads {
     }
 }
 
+/// The newest `thread.updated` for each of the other runners' threads, in
+/// the order they came, so a `remoteThreads.list` reply asked for before
+/// some of them, and answered after (replies and notifications come by
+/// separate paths), doesn't put back what they changed: a done card's loose
+/// ends went again on a reconnect that way (Codex's review, 15 Nov 2026).
+#[derive(Default, Debug)]
+pub struct RecentUpdates {
+    count: u64,
+    newest: std::collections::HashMap<String, (u64, ThreadSummary)>,
+}
+
+impl RecentUpdates {
+    /// Where the count is now: what a list asked for now has seen.
+    pub fn mark(&self) -> u64 {
+        self.count
+    }
+
+    pub fn note(&mut self, t: &ThreadSummary) {
+        self.count += 1;
+        self.newest.insert(t.id.clone(), (self.count, t.clone()));
+    }
+
+    pub fn forget(&mut self, id: &str) {
+        self.newest.remove(id);
+    }
+
+    /// A whole list came by the notifications' own path, after every update
+    /// noted so far: it's newer than all of them, so none is put back over
+    /// a list from then on (Codex's review: an archive the list said after
+    /// an update was undone by it). Keeps the cache to what's still in flight.
+    pub fn superseded(&mut self) {
+        self.newest.clear();
+    }
+
+    /// Takes into `list` every update that came after `mark`.
+    pub fn reapply(&self, list: &mut RemoteThreads, mark: u64) {
+        let mut later: Vec<&(u64, ThreadSummary)> = self.newest.values().filter(|(n, _)| *n > mark).collect();
+        later.sort_by_key(|(n, _)| *n);
+        for (_, t) in later {
+            list.take_update(t);
+        }
+    }
+}
+
 impl RemoteThreads {
     pub fn can_remove_missing(&self) -> bool { self.complete }
+
+    /// A `thread.updated` for one of its threads, from this Mac's runner
+    /// (relay.ts `summary`), taken into its row here, on the runner it's
+    /// listed for. The list is put back over the app's threads whenever
+    /// this Mac's own list comes in (`apply_remote_index`), and without this
+    /// it put back the row from before the thread was opened: the done
+    /// card's loose ends, which only come once it's watched, went from the
+    /// card a moment after they came (the nightly parity run, 14 Nov 2026).
+    /// Not onto a row another runner now lists: the update was about the
+    /// thread where it was (Codex's review, 15 Nov).
+    pub fn take_update(&mut self, t: &ThreadSummary) {
+        if let Some(row) = self.threads.iter_mut().find(|row| row.id == t.id && (t.runner_id.is_none() || row.runner_id == t.runner_id)) {
+            let runner = row.runner_id.clone();
+            *row = t.clone();
+            row.runner_id = runner;
+        }
+    }
 
     pub fn runner(&self, id: &str) -> Option<&RemoteRunner> {
         self.runners.iter().find(|r| r.id == id)
@@ -257,9 +318,9 @@ mod tests {
     #[test]
     fn rows_become_summaries_marked_with_their_runner() {
         let list = decode_remote_threads(&json!({
-            "runners": [{ "id": "r", "name": "bruce", "icon": "macmini", "online": true }, { "id": "r2" }],
+            "runners": [{ "id": "r", "name": "mac-mini", "icon": "macmini", "online": true }, { "id": "r2" }],
             "threads": [
-                { "runnerId": "r", "threadId": "t1", "title": "Backup", "cwd": "/Users/bruce/misc", "accountId": "claude-main", "provider": "claude",
+                { "runnerId": "r", "threadId": "t1", "title": "Backup", "cwd": "/Users/alex/misc", "accountId": "claude-main", "provider": "claude",
                   "model": "claude-opus-5-5", "status": "idle", "needsYou": true, "unread": true, "preview": "done", "createdAt": "2026-11-09T01:00:00.000Z", "lastActivityAt": "2026-11-09T02:00:00.000Z" },
                 { "runnerId": "r", "threadId": "t2", "status": "running", "createdAt": "2026-11-09T01:00:00.000Z" },
                 { "threadId": "no-runner" },
@@ -267,7 +328,7 @@ mod tests {
             "order": ["runner_mock", "r"],
         }));
         assert_eq!(list.runners.len(), 2);
-        assert_eq!(list.runner("r").unwrap().name, "bruce");
+        assert_eq!(list.runner("r").unwrap().name, "mac-mini");
         assert_eq!(list.runner("r2").unwrap().name, "r2");
         assert_eq!(list.threads.len(), 2);
         let t = &list.threads[0];
@@ -286,7 +347,7 @@ mod tests {
     #[test]
     fn a_rows_loose_ends_reach_the_summary() {
         let list = decode_remote_threads(&json!({
-            "runners": [{ "id": "r", "name": "bruce" }],
+            "runners": [{ "id": "r", "name": "mac-mini" }],
             "threads": [
                 { "runnerId": "r", "threadId": "t1", "status": "idle", "createdAt": "2026-11-09T01:00:00.000Z",
                   "looseEnds": { "seq": 47, "ends": [{ "kind": "scheduled", "text": "Look at how the experiment went", "at": "2026-11-15T01:30:00.000Z" }] } },
@@ -300,15 +361,84 @@ mod tests {
     }
 
     #[test]
+    fn a_thread_updated_stays_when_the_list_is_put_back() {
+        let mut list = decode_remote_threads(&json!({
+            "runners": [{ "id": "r", "name": "mac-mini" }],
+            "threads": [{ "runnerId": "r", "threadId": "t1", "status": "idle", "createdAt": "2026-11-09T01:00:00.000Z" }],
+        }));
+        assert!(list.threads[0].loose_ends_check().is_none());
+        let updated: ThreadSummary = crate::wire::read(json!({
+            "id": "t1", "title": "Start", "status": "idle", "runnerId": "r",
+            "looseEnds": { "seq": 39, "ends": [{ "kind": "scheduled", "text": "Look at how the experiment went", "at": "2026-11-15T01:30:00.000Z" }] },
+        })).expect("a summary");
+        list.take_update(&updated);
+        assert_eq!(list.threads[0].loose_ends_check().map(|c| c.seq), Some(39));
+        assert_eq!(list.threads[0].runner_id.as_deref(), Some("r"));
+        // One it doesn't list isn't added: the list says which threads there are.
+        list.take_update(&ThreadSummary { id: "t9".into(), ..updated });
+        assert_eq!(list.threads.len(), 1);
+    }
+
+    /// A list asked for before an update and answered after it keeps the
+    /// update; one asked for after it is taken as it is.
+    #[test]
+    fn a_list_asked_for_before_an_update_keeps_it() {
+        let rows = json!({
+            "runners": [{ "id": "r", "name": "mac-mini" }],
+            "threads": [{ "runnerId": "r", "threadId": "t1", "status": "idle", "createdAt": "2026-11-09T01:00:00.000Z" }],
+        });
+        let updated: ThreadSummary = crate::wire::read(json!({
+            "id": "t1", "title": "Start", "status": "idle",
+            "looseEnds": { "seq": 39, "ends": [{ "kind": "scheduled", "text": "Look at how the experiment went" }] },
+        })).expect("a summary");
+        let mut recent = RecentUpdates::default();
+        let asked = recent.mark();
+        recent.note(&updated);
+        let mut late = decode_remote_threads(&rows);
+        recent.reapply(&mut late, asked);
+        assert_eq!(late.threads[0].loose_ends_check().map(|c| c.seq), Some(39));
+        assert_eq!(late.threads[0].runner_id.as_deref(), Some("r"));
+        let mut fresh = decode_remote_threads(&rows);
+        recent.reapply(&mut fresh, recent.mark());
+        assert!(fresh.threads[0].loose_ends_check().is_none());
+    }
+
+    /// A list that came by the notifications after an update is newer than
+    /// it, and so is anything after; an update for the thread on another
+    /// runner doesn't go onto the row of the runner that lists it now.
+    #[test]
+    fn a_newer_list_and_another_runner_win_over_an_update() {
+        let rows = |runner: &str| json!({
+            "runners": [{ "id": runner, "name": runner }],
+            "threads": [{ "runnerId": runner, "threadId": "t1", "status": "idle", "createdAt": "2026-11-09T01:00:00.000Z" }],
+        });
+        let mut updated: ThreadSummary = crate::wire::read(json!({
+            "id": "t1", "title": "Start", "status": "idle",
+            "looseEnds": { "seq": 39, "ends": [{ "kind": "scheduled", "text": "Look at how the experiment went" }] },
+        })).expect("a summary");
+        updated.runner_id = Some("r".into());
+        let mut recent = RecentUpdates::default();
+        let asked = recent.mark();
+        recent.note(&updated);
+        let mut moved = decode_remote_threads(&rows("s"));
+        recent.reapply(&mut moved, asked);
+        assert!(moved.threads[0].loose_ends_check().is_none(), "not onto another runner's row");
+        recent.superseded();
+        let mut late = decode_remote_threads(&rows("r"));
+        recent.reapply(&mut late, asked);
+        assert!(late.threads[0].loose_ends_check().is_none(), "a newer list said otherwise");
+    }
+
+    #[test]
     fn a_move_keeps_the_thread_as_its_old_runners_until_the_destination_lists_it() {
-        let mut thread = ThreadSummary { id: "t".into(), runner_id: Some("bruce".into()), moving: Some(json!({ "to": "m5", "toName": "m5", "state": "copying" })), ..Default::default() };
+        let mut thread = ThreadSummary { id: "t".into(), runner_id: Some("mac-mini".into()), moving: Some(json!({ "to": "laptop", "toName": "laptop", "state": "copying" })), ..Default::default() };
         let kept = moved_away(&thread).unwrap();
         // Daybreak 113: never this Mac's (or the destination's) on the old
         // runner's word alone, and still locked with its move.
-        assert_eq!(kept.runner_id.as_deref(), Some("bruce"), "still the old runner's");
+        assert_eq!(kept.runner_id.as_deref(), Some("mac-mini"), "still the old runner's");
         assert!(kept.moving_line().is_some(), "its box stays locked");
-        assert_eq!(moving_to(&kept), Some("m5"));
-        let local = ThreadSummary { id: "u".into(), moving: Some(json!({ "to": "bruce", "state": "claimed" })), ..Default::default() };
+        assert_eq!(moving_to(&kept), Some("laptop"));
+        let local = ThreadSummary { id: "u".into(), moving: Some(json!({ "to": "mac-mini", "state": "claimed" })), ..Default::default() };
         assert!(moved_away(&local).unwrap().runner_id.is_none(), "one moving off this Mac stays this Mac's");
         thread.moving.as_mut().unwrap()["state"] = json!("failed");
         assert!(moved_away(&thread).is_none());
@@ -318,7 +448,7 @@ mod tests {
 
     #[test]
     fn a_preview_with_nothing_to_say_can_just_go() {
-        let answer = json!({ "cwd": "/Users/bruce/x", "accountId": "claude-main", "accounts": [{ "id": "claude-main", "title": "Claude", "email": "a@b" }], "leftBehind": [], "problems": [], "sourceChecked": true });
+        let answer = json!({ "cwd": "/Users/alex/x", "accountId": "claude-main", "accounts": [{ "id": "claude-main", "title": "Claude", "email": "a@b" }], "leftBehind": [], "problems": [], "sourceChecked": true });
         assert!(MovePreview::decode(&answer).can_go_as_is());
         let left = json!({ "cwd": "/x", "accountId": "a", "leftBehind": ["a job"], "sourceChecked": true });
         assert!(!MovePreview::decode(&left).can_go_as_is());
@@ -330,8 +460,8 @@ mod tests {
     #[test]
     fn runners_list_decodes_itself_and_the_others() {
         let list = decode_runners(&json!({ "runners": [
-            { "id": "m", "name": "m5", "icon": "laptopcomputer", "self": true, "version": "0.1.0+20261105T064853Z-c4d90ca", "release": "20261105T064853Z-c4d90ca", "startedAt": "2026-11-11T01:00:00.000Z" },
-            { "id": "b", "name": "bruce", "online": false, "lastSeenAt": "2026-11-09T01:00:00.000Z", "draining": true },
+            { "id": "m", "name": "laptop", "icon": "laptopcomputer", "self": true, "version": "0.1.0+20261105T064853Z-c4d90ca", "release": "20261105T064853Z-c4d90ca", "startedAt": "2026-11-11T01:00:00.000Z" },
+            { "id": "b", "name": "mac-mini", "online": false, "lastSeenAt": "2026-11-09T01:00:00.000Z", "draining": true },
             { "id": "c", "name": "" },
         ] }));
         assert_eq!(list.len(), 3);

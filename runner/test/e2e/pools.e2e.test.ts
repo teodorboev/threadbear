@@ -138,7 +138,7 @@ describe('pools end to end: a thread moved to another Claude login resumes its s
     const session = (await client.call('threads.list', {})).threads.find((t: Ev) => t.id === id).nativeSessionId;
     assert.ok(session);
 
-    // To the other login (pinned there, as Mike picking one by hand).
+    // To the other login (pinned there, as Alex picking one by hand).
     const moved = (await client.call('threads.update', { threadId: id, accountId: TO })).thread;
     assert.equal(moved.accountId, TO);
 

@@ -158,7 +158,7 @@ test('the row turns the folder config, plugins and the agent\'s updates off', ()
   assert.equal(conf.permission['*'], 'ask', 'a tool no one has heard of asks too');
   assert.equal(conf.agent.build.permission['*'], 'ask', "an agent's own rules outrank the top level");
   assert.equal(conf.agent.plan.permission['*'], 'ask');
-  assert.ok(ACP_AGENTS.opencode.args.includes('--pure'));
+  assert.ok(ACP_AGENTS.opencode.args().includes('--pure'));
 });
 
 test("a folder's plugin doesn't run", async () => {

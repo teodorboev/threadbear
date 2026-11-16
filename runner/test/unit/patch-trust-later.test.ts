@@ -326,7 +326,7 @@ test('Codex review 3: a committed file by a bare name, a link in a linked packag
   assert.equal(checkDigest("node --import node:fs a.cjs", repo({ 'a.cjs': '' })).problem, undefined);
 });
 
-test('narrowed, by Mike\'s decision: a package npm installed stays out of the hash, so an install never asks again', () => {
+test('narrowed, by Alex\'s decision: a package npm installed stays out of the hash, so an install never asks again', () => {
   // Real files under an ignored node_modules: changing or reinstalling them
   // changes nothing, however they're reached.
   for (const [run, extra] of [
@@ -407,7 +407,7 @@ test('Claude trust: what can\'t be followed can\'t be trusted, and that includes
   }
 });
 
-test('narrowed, by Mike\'s decision: a hook importing a package npm installed is trusted without its bytes', () => {
+test('narrowed, by Alex\'s decision: a hook importing a package npm installed is trusted without its bytes', () => {
   const { home, dir } = claudeRepo(hook('node a.mjs'), { '.gitignore': 'node_modules\n', 'a.mjs': "import 'zod'", 'node_modules/zod/index.js': 'x' });
   const a = claudeCommands(dir, home)!;
   assert.equal(a.incomplete, undefined);

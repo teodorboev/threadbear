@@ -4,10 +4,10 @@
 
 export const PROTOCOL_VERSION = 1;
 
-// cursor and opencode run over ACP (adapters/acp/); each turns up as a login
-// only where its CLI is installed and logged in (adapters/acp/agents.ts).
-export type Provider = 'claude' | 'codex' | 'cursor' | 'opencode';
-export const PROVIDERS: readonly Provider[] = ['claude', 'codex', 'cursor', 'opencode'];
+// cursor, opencode and grok run over ACP (adapters/acp/); each turns up as a
+// login only where its CLI is installed and logged in (adapters/acp/agents.ts).
+export type Provider = 'claude' | 'codex' | 'cursor' | 'opencode' | 'grok';
+export const PROVIDERS: readonly Provider[] = ['claude', 'codex', 'cursor', 'opencode', 'grok'];
 
 // What a provider is called and can do (providers.ts holds the table). `id`
 // is a plain string as a client can be sent one it has never heard of.
@@ -286,6 +286,9 @@ export type ThreadSummary = {
   // Who started it, when that wasn't Mike (docs/protocol.md, "Who started
   // a thread"). Absent for his own threads.
   startedBy?: ThreadStartedBy;
+  // Started by another thread but kept out from under it in the sidebar
+  // (docs/protocol.md, "Nested threads").
+  detached?: true;
   // Mike's last message to it, one line, for the sidebar's "You: ..."
   // (docs/protocol.md, "What Mike last asked"). Absent until he's sent one.
   asked?: string;
@@ -863,7 +866,7 @@ export type EventBody =
   // or was told not to wait (runner/pools.ts). The only notes the backend
   // gets (sync.ts toMessageDoc), so another Mac can say a thread changed
   // login by itself.
-  | { type: 'system.note'; text: string; wake?: true; login?: true; savedMessage?: true }
+  | { type: 'system.note'; text: string; wake?: true; login?: true; savedMessage?: true; supersededReminder?: string }
   | { type: 'error'; message: string }
   // A command action that ran (patches.ts): its output, truncated like a
   // tool result. Outside any turn.

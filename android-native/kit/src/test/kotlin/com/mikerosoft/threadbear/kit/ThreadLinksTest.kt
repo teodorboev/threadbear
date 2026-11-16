@@ -65,7 +65,7 @@ class ThreadLinksTest {
         assertEquals(ThreadLinks.Hit(second, 5), ThreadLinks.find("Run the tests", null, items))
         // A line the agent wrote, and a path as it wrote it.
         assertEquals(ThreadLinks.Hit(second, 6), ThreadLinks.find("risky part", 9, items))
-        assertEquals(ThreadLinks.Hit(second, 8), ThreadLinks.find("/Users/mike/dev/a.swift", 9, items))
+        assertEquals(ThreadLinks.Hit(second, 8), ThreadLinks.find("/Users/alex/dev/a.swift", 9, items))
     }
 
     @Test fun wordsFoundNowhereStillOpenTheWorking() {

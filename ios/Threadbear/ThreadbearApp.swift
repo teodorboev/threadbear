@@ -52,8 +52,10 @@ struct ThreadbearApp: App {
                         }
                     }
                 }
-                // The Camera opens threadbear://pair links from the QR code, and
-                // threadbear://quickask ones with the archive server for quick ask.
+                // threadbear://quickask links carry the archive server for quick ask.
+                // threadbear://pair links are never taken from here: any app can
+                // claim the scheme, so the Mac's code is read by the app's own
+                // scanner instead (Daybreak 127), and an opened one says so.
                 // threadbear://open is Voice Type's keyboard button: coming forward is all
                 // it wants, and passing it on would show a "not a pairing link" error.
                 .onOpenURL { url in
@@ -62,11 +64,9 @@ struct ThreadbearApp: App {
                     case .success(let link): confirmQuickAsk = link
                     case .failure(.unusable): refusedQuickAsk = true
                     case .failure(.notQuickAsk):
-                        // Any web page can open a link, so every pairing link is asked
-                        // about, paired or not: an expired token leaves the phone
-                        // unpaired, and that mustn't let a link in unasked.
-                        // Anything else gets "not a pairing link".
-                        model.askToPair(url)
+                        // A pairing link from outside is refused, saying to scan
+                        // the code in the app; anything else is "not a pairing code".
+                        model.askToPair(url.absoluteString, from: .opened)
                     }
                 }
                 .alert(confirmQuickAsk.map { "Use Quick Ask on \($0.hostName)?" } ?? "",

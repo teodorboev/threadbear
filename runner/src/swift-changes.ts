@@ -292,11 +292,14 @@ export class SwiftChanges {
   }
 }
 
+// The day in the committer's own time zone, which %cI carries: read through
+// Date it would be UTC's, a day early for a morning's commit east of it.
 function day(iso: string): string {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return '';
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso);
+  if (!m) return '';
   const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-  return `${d.getUTCDate()} ${months[d.getUTCMonth()]} ${d.getUTCFullYear()}`;
+  const month = months[Number(m[2]) - 1];
+  return month ? `${Number(m[3])} ${month} ${m[1]}` : '';
 }
 
 function line(c: SwiftChange): string {

@@ -40,7 +40,7 @@ const schema = {
       },
     },
     Thread: { name: 'Thread', type: 'text' },
-    Who: { name: 'Who', type: 'multi_select', options: [{ name: 'Mike' }, { name: 'Zaran' }] },
+    Who: { name: 'Who', type: 'multi_select', options: [{ name: 'Alex' }, { name: 'Zaran' }] },
   },
 };
 const dsFetch = JSON.stringify({ metadata: { type: 'data_source' }, title: 'Tasks', url: DB + '?pvs=204', text: `<data-source url="{{${DS}}}">\n<data-source-state>\n${JSON.stringify(schema)}\n</data-source-state>\n</data-source>` });
@@ -48,7 +48,7 @@ const dsFetch = JSON.stringify({ metadata: { type: 'data_source' }, title: 'Task
 const rows = JSON.stringify({
   results: [
     { Name: 'Eventbrite link for the tickets page', Status: 'Waiting', Who: '["Zaran"]', Thread: '', 'date:Due:is_datetime': 0, url: 'https://app.notion.com/p/409fd70ecfa081f0b5b2f98d9baf2090' },
-    { Name: 'Fixes from the 30 Oct reply', Status: 'Doing', Who: '["Mike"]', Thread: '60f772ab', url: 'https://app.notion.com/p/409fd70ecfa081509451d31e424fe69e' },
+    { Name: 'Fixes from the 30 Oct reply', Status: 'Doing', Who: '["Alex"]', Thread: '60f772ab', url: 'https://app.notion.com/p/409fd70ecfa081509451d31e424fe69e' },
     { Name: 'Sign collection', Status: 'Waiting', Who: '["Zaran","Tracy"]', 'date:Due:start': '2026-11-29', 'date:Due:end': '2026-12-04', url: 'https://app.notion.com/p/409fd70ecfa081fb8560d5ec70d1c067' },
     { Name: '', Status: 'To do', url: 'https://app.notion.com/p/409fd70ecfa0000000000000000000ff' },
   ],
@@ -88,7 +88,7 @@ test('the gateway answers as SSE or JSON; a tool error says what Notion said', a
   const reply = (body: unknown) => new Response(`event: message\ndata: ${JSON.stringify(body)}\n\n`, { status: 200 });
   let next: unknown = { result: { content: [{ type: 'text', text: '{"ok":1}' }] } };
   const call = gatewayCaller({
-    mcpUrl: 'https://bruce:8443/mcp',
+    mcpUrl: 'https://mac-mini:8443/mcp',
     headers: async () => ({ Authorization: 'Bearer t' }),
     fetch: (async (url: string, init: RequestInit) => {
       asked.push({ url, body: JSON.parse(String(init.body)), headers: init.headers as Record<string, string> });
@@ -96,10 +96,10 @@ test('the gateway answers as SSE or JSON; a tool error says what Notion said', a
     }) as typeof fetch,
   });
   assert.equal(await call('notion__notion-fetch', { id: 'x' }), '{"ok":1}');
-  assert.equal(asked[0]!.url, 'https://bruce:8443/mcp');
+  assert.equal(asked[0]!.url, 'https://mac-mini:8443/mcp');
   assert.equal(asked[0]!.headers.Authorization, 'Bearer t');
   assert.deepEqual((asked[0]!.body as { params: unknown }).params, { name: 'notion__notion-fetch', arguments: { id: 'x' } });
-  next = { result: { isError: true, content: [{ type: 'text', text: 'Notion needs signing in again. Ask Mike to open https://bruce/admin/connect/notion' }] } };
+  next = { result: { isError: true, content: [{ type: 'text', text: 'Notion needs signing in again. Ask Alex to open https://mac-mini/admin/connect/notion' }] } };
   await assert.rejects(call('notion__notion-fetch', { id: 'x' }), /Notion needs signing in again/);
 });
 
@@ -135,7 +135,7 @@ test('rows become cards: people as a list, a date range kept, untitled rows skip
   const { items, more } = readRows(rows, readSchema(dsFetch));
   assert.equal(more, false);
   assert.equal(items.length, 3);
-  assert.deepEqual(items[1], { id: '409fd70ecfa081509451d31e424fe69e', title: 'Fixes from the 30 Oct reply', url: 'https://app.notion.com/p/409fd70ecfa081509451d31e424fe69e', status: 'Doing', who: ['Mike'], thread: '60f772ab' });
+  assert.deepEqual(items[1], { id: '409fd70ecfa081509451d31e424fe69e', title: 'Fixes from the 30 Oct reply', url: 'https://app.notion.com/p/409fd70ecfa081509451d31e424fe69e', status: 'Doing', who: ['Alex'], thread: '60f772ab' });
   assert.deepEqual([items[2]!.due, items[2]!.dueEnd, items[2]!.who], ['2026-11-29', '2026-12-04', ['Zaran', 'Tracy']]);
 });
 
@@ -243,9 +243,9 @@ test('no gateway: the brief says nothing about a board the agent cannot read or 
 test("the gateway client comes from the main login's connectors entry; runner.json can name another helper", () => {
   const dir = tmpDir();
   const cj = path.join(dir, 'claude.json');
-  fs.writeFileSync(cj, JSON.stringify({ mcpServers: { connectors: { type: 'http', url: 'https://bruce:8443/mcp', headersHelper: '/x/headers.sh claude-main' } } }));
-  assert.deepEqual(findGatewayClient(undefined, cj), { mcpUrl: 'https://bruce:8443/mcp', headersHelper: '/x/headers.sh claude-main' });
-  assert.deepEqual(findGatewayClient({ headersHelper: '/y/h.sh threadbear' }, cj), { mcpUrl: 'https://bruce:8443/mcp', headersHelper: '/y/h.sh threadbear' });
+  fs.writeFileSync(cj, JSON.stringify({ mcpServers: { connectors: { type: 'http', url: 'https://mac-mini:8443/mcp', headersHelper: '/x/headers.sh claude-main' } } }));
+  assert.deepEqual(findGatewayClient(undefined, cj), { mcpUrl: 'https://mac-mini:8443/mcp', headersHelper: '/x/headers.sh claude-main' });
+  assert.deepEqual(findGatewayClient({ headersHelper: '/y/h.sh threadbear' }, cj), { mcpUrl: 'https://mac-mini:8443/mcp', headersHelper: '/y/h.sh threadbear' });
   assert.equal(findGatewayClient({ enabled: false }, cj), undefined);
   assert.equal(findGatewayClient(undefined, path.join(dir, 'none.json')), undefined);
 });
@@ -255,10 +255,10 @@ test("the gateway client comes from the main login's connectors entry; runner.js
 test('the gateway client is refused for a cleartext URL, from runner.json or the main login', () => {
   const dir = tmpDir();
   const cj = path.join(dir, 'claude.json');
-  for (const bad of ['http://bruce.tail9ef766.ts.net:8443/mcp', 'http://127.0.0.1.evil.example/mcp', 'http://127.0.0.1@evil.example/mcp']) {
+  for (const bad of ['http://mac-mini.tail1234.ts.net:8443/mcp', 'http://127.0.0.1.evil.example/mcp', 'http://127.0.0.1@evil.example/mcp']) {
     fs.writeFileSync(cj, JSON.stringify({ mcpServers: { connectors: { type: 'http', url: bad, headersHelper: '/x/h.sh' } } }));
     assert.equal(findGatewayClient(undefined, cj), undefined, bad);
-    fs.writeFileSync(cj, JSON.stringify({ mcpServers: { connectors: { type: 'http', url: 'https://bruce:8443/mcp', headersHelper: '/x/h.sh' } } }));
+    fs.writeFileSync(cj, JSON.stringify({ mcpServers: { connectors: { type: 'http', url: 'https://mac-mini:8443/mcp', headersHelper: '/x/h.sh' } } }));
     assert.equal(findGatewayClient({ url: bad }, cj), undefined, bad);
   }
   assert.deepEqual(findGatewayClient({ url: 'http://127.0.0.1:9' }, cj), { mcpUrl: 'http://127.0.0.1:9/mcp', headersHelper: '/x/h.sh' });
@@ -266,8 +266,8 @@ test('the gateway client is refused for a cleartext URL, from runner.json or the
 
 test("the gateway caller never follows a redirect with the token, and won't send it in the clear", async () => {
   const headers = async () => ({ Authorization: 'Bearer secret-token' });
-  const down = downgradeFetch('https://bruce:8443/mcp');
-  await assert.rejects(gatewayCaller({ mcpUrl: 'https://bruce:8443/mcp', headers, fetch: down.fetch })('notion__notion-fetch', { id: 'x' }));
+  const down = downgradeFetch('https://mac-mini:8443/mcp');
+  await assert.rejects(gatewayCaller({ mcpUrl: 'https://mac-mini:8443/mcp', headers, fetch: down.fetch })('notion__notion-fetch', { id: 'x' }));
   assert.equal(down.inits[0]!.redirect, 'error');
   assert.deepEqual(down.leaked, []);
   // Real fetch, a 307 to another origin on this Mac.
@@ -283,7 +283,7 @@ test("the gateway caller never follows a redirect with the token, and won't send
     fetched++;
     return new Response('{}');
   }) as unknown as typeof fetch;
-  await assert.rejects(gatewayCaller({ mcpUrl: 'http://bruce:8443/mcp', headers, fetch: fake })('notion__notion-fetch', { id: 'x' }), /plain http/);
+  await assert.rejects(gatewayCaller({ mcpUrl: 'http://mac-mini:8443/mcp', headers, fetch: fake })('notion__notion-fetch', { id: 'x' }), /plain http/);
   assert.equal(fetched, 0);
 });
 
@@ -321,7 +321,7 @@ test("a project with a Notion page sends its board; read_project lists the open 
   const out = ((await read.handler({ project: p.id } as never, {} as never)) as { content: { text: string }[] }).content[0]!.text;
   assert.match(out, /Tasks \(Notion board https:\/\/app\.notion\.com\/p\/94471028e3bb4e2a810d117d5b8f19fd\):/);
   assert.match(out, /- Waiting:\n {2}- Eventbrite link for the tickets page \(Zaran\)/);
-  assert.match(out, /Fixes from the 30 Oct reply \(Mike\), thread 60f772ab/);
+  assert.match(out, /Fixes from the 30 Oct reply \(Alex\), thread 60f772ab/);
   assert.match(projects.brief(h.runner.threadRecords().find((x) => x.id === t.id)!)!, /Tasks: a board in Notion \(https:\/\/app\.notion\.com\/p\/94471028e3bb4e2a810d117d5b8f19fd\), 3 open\./);
 
   // Taking the page off drops the board.

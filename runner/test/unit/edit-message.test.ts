@@ -103,7 +103,7 @@ test('editing during a turn stops it first; messages queued behind it go, ones s
   assert.deepEqual(after, ['Edited', 'sent during the edit']);
 });
 
-test('only Mike\'s own messages that started a turn can be edited', async () => {
+test('only Alex\'s own messages that started a turn can be edited', async () => {
   const h = makeHarness();
   const { thread, s, seq } = await twoTurns(h);
   const bad = async (seqToEdit: number, re: RegExp) => {
@@ -114,8 +114,8 @@ test('only Mike\'s own messages that started a turn can be edited', async () => 
   h.runner.send(thread.id, 'steered in');
   const steered = log(h, thread.id).find((e) => e.type === 'user.message' && e.text === 'steered in')!.seq;
   await bad(steered, /already running/);
-  h.runner.interrupt(thread.id);
-  s.result('interrupted');
+  // Finish both inputs: an early Stop holds later automatic messages.
+  s.result('completed', undefined, undefined, { answered: [...h.runner.mustGet(thread.id).rt.turn!.messages] });
   // Not a message at all, and one from the runner.
   await bad(seq + 1, /no message/);
   h.runner.send(thread.id, 'Runner restarted, carry on', [], { origin: 'runner' });

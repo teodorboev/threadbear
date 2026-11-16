@@ -5054,3 +5054,65 @@ Fixes from Codex's review of the slice before:
   readers accept numeric strings. Unreadable event payloads log their shape
   without including the payload's private text.
 - Status-word blur and the Activity badge's entrance remain undecided.
+
+### 2026-11-15 Nested threads (`sidebar.nested`, `thread.startedby`)
+
+- Experiment `nestedThreads` (docs/protocol.md, "Nested threads"), GPUI app
+  only; the frozen Swift app shows these threads as before, so both specs are
+  `@swift-pending` there. A thread another thread started sits indented under
+  it in the sidebar, like a sub-agent, one level deep, in the section of the
+  group's most urgent member. The group opens by itself while one of its
+  threads waits on Mike and folds otherwise; the count on the starter's row
+  opens or folds it, remembered while the app runs. Folded, the starter carries
+  the group's needs-you dot. A nested row's second line is its question in
+  orange, else its byline or last reply. Archived ones are one "N finished"
+  line, which opens the starter with Highlights ("Threads it started"). The row
+  menu has Move Out From Under and Put Back Under (`threads.update`'s
+  `detached`, optimistic with rollback). The Projects view nests the same way
+  within a project. A thread a thread started opens with "Started by
+  <starter> · why" above its transcript. Dragging rows in or out waits for a
+  motion mockup (AGENTS.md).
+- Rules and their tests: `desktop/core/src/nested.rs`, `inbox::sections_nested`.
+  Drawing: `desktop/gpui/src/{sidebar,projects_list,thread,app,shell}.rs`.
+  The mock's `TB_MOCK_NESTED` demo set, `features/nested-threads.feature`.
+
+### 2026-11-15 Files open with the app that was checked (`file.open`)
+
+- Daybreak 125: the open gate looked at a file by its path, then handed the
+  path to the system, which looked it up again; whatever writes the project
+  could swap the document (or a folder above it) for an app in between, and
+  it launched with no question. Now each open looks again right before
+  (same real path, same file on disk by device and inode, same kind, same
+  app), and then opens the file it looked at rather than its path. On a Mac
+  that's a file reference URL (`file:///.file/id=<volume>.<inode>`, both
+  checked against the look) handed to the app that was checked
+  (NSWorkspace's openURLs:withApplicationAtURL:); tried on Tinker Desk, an
+  app or script moved into the path after the reference was made never ran,
+  and a confirmed script ran the one asked about. A plain folder is shown
+  selected in Finder rather than opened in a window of its own: a Finder
+  window rooted at a path, or Finder asked to open it, launched an app
+  swapped in there; revealing it didn't. A document package (`.rtfd`,
+  `.xcodeproj`) still opens in its app. The opener is the real app (links
+  followed), handed over by a reference too; one that isn't installed where
+  apps go (directly in `/Applications` or `~/Applications` or their
+  Utilities, the system's folders, `~/Library/Application Support`), as an
+  app in the project made a file's opener by its own "open with" setting
+  would be, means a question first, as a program does. The looked-at file
+  is held open until it opens, so its inode can't pass to a file made in
+  its place. A disk with no file references (ExFAT, a network share) opens
+  a file from a private copy in `~/Library/Caches/Threadbear/opened`, and
+  doesn't open a folder.
+  The Swift app (frozen) still opens by path.
+- Windows and Linux can't name the app or hold a file through the system's
+  opener, so a file (a document, or a program once said yes to) opens from a
+  private, read-only copy of the checked file, read from the handle held
+  since the look (Linux), or one that must be the file looked at (Windows:
+  its volume and file ID),
+  in `~/.cache/threadbear/opened` or `%LOCALAPPDATA%\Threadbear\opened`,
+  cleared after a day. Edits made there don't reach the original. A plain
+  folder still goes to the file manager by its path with a slash on the
+  end, after the look, so only a folder is found there; a bundle folder
+  isn't opened.
+- Rules and their tests: `desktop/core/src/open_policy.rs` (`Opener`,
+  `still_same`, `checked_copy`), the gate: `desktop/gpui/src/open_gate.rs`
+  (`open_checked`), `desktop/core/tests/open_gate_source.rs`.

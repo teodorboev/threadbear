@@ -55,7 +55,7 @@ jobs:
           - app: iphone
             xcode: oldest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
       # SwiftPM's downloads, kept between runs: the packages it clones and
       # the prebuilt libraries (Sentry, whisper.cpp, Convex's) it fetches
@@ -69,7 +69,7 @@ jobs:
       # them; a PR's run saves only for that PR.
       - name: Restore SwiftPM's downloads
         id: spm
-        uses: actions/cache/restore@v6
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/Library/Caches/org.swift.swiftpm
@@ -107,7 +107,7 @@ jobs:
 
       - name: Save SwiftPM's downloads
         if: steps.spm.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v6
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/Library/Caches/org.swift.swiftpm

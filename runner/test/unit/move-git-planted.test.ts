@@ -224,8 +224,8 @@ test("the owner's own transport programs stay, the repo's are swapped for them",
 });
 
 test('a moving thread\'s repo is cloned only from an https or ssh address', () => {
-  for (const u of ['https://github.com/mikecann/threadbear.git', 'git@github.com:mikecann/threadbear.git', 'ssh://git@github.com/mikecann/threadbear', 'ssh://git@ssh.github.com:443/o/r.git', 'https://gitlab.example.com/group/sub/r', 'git@github_work:mikecann/x.git']) assert.ok(cloneableUrl(u), u);
-  for (const u of ['--upload-pack=touch /tmp/x', '-uevil', 'ext::sh -c touch% /tmp/x', 'file:///etc', '/Users/mike/secret', 'git@github.com:-oProxyCommand=x', 'https://-oProxyCommand=x/y', 'ssh://git@-oProxyCommand=touch${IFS}/tmp/pwn/repo', 'ssh://-git@host/x', '-git@host:x', 'https://github.com', 'ssh://git@host:22/x\\y', 'fd::17', 'http://example.com/x', 'git@host:a b', '']) assert.equal(cloneableUrl(u), false, u);
+  for (const u of ['https://github.com/mikecann/threadbear.git', 'git@github.com:mikecann/threadbear.git', 'ssh://git@github.com/mikecann/threadbear', 'ssh://git@ssh.github.com:443/o/r.git', 'https://gitlab.example.com/group/sub/r', 'git@github_work:alex-example/x.git']) assert.ok(cloneableUrl(u), u);
+  for (const u of ['--upload-pack=touch /tmp/x', '-uevil', 'ext::sh -c touch% /tmp/x', 'file:///etc', '/Users/alex/secret', 'git@github.com:-oProxyCommand=x', 'https://-oProxyCommand=x/y', 'ssh://git@-oProxyCommand=touch${IFS}/tmp/pwn/repo', 'ssh://-git@host/x', '-git@host:x', 'https://github.com', 'ssh://git@host:22/x\\y', 'fd::17', 'http://example.com/x', 'git@host:a b', '']) assert.equal(cloneableUrl(u), false, u);
 });
 
 // Codex's review, 10 Nov 2026: packages in a move's uncommitted work would

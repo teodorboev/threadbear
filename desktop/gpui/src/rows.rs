@@ -690,7 +690,10 @@ fn answers_body(ix: usize, words: &AnsweredWords, cx: &App) -> Div {
     for (i, (label, text)) in lines.iter().enumerate() {
         let heading = h_flex().items_center().gap(px(4.)).text_size(px(size::SMALL)).line_height(px(18.)).text_color(question)
             .when(*review && i == 0, |d| d.child(div().id(("review-answer", ix)).tip("Review").child(work::icon("rectangle.on.rectangle", size::SMALL, question))))
-            .child(label.clone());
+            // A long question wraps inside the bubble: as a bare row child its
+            // text kept its one-line width and ran out past the bubble's edge
+            // (Mike, 15 Nov), while the short answer under it set nothing.
+            .child(div().flex_1().min_w_0().child(label.clone()));
         body = body.child(
             v_flex()
                 .when(!label.is_empty() || (*review && i == 0), |d| d.child(heading))

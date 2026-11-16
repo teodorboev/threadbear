@@ -12,12 +12,12 @@ struct SourcesHeaderTests {
 
     @Test func decodesTheContractShape() {
         let header = base64url("""
-        [{"title":"Walkies pricing","threadId":"t1","date":"2026-10-22","url":"https://example.com/t/1"},
-         {"title":"Stash It native","threadId":"t2","date":"2026-10-21","url":"https://example.com/t/2"}]
+        [{"title":"Pebble pricing","threadId":"t1","date":"2026-10-22","url":"https://example.com/t/1"},
+         {"title":"Recipe Box native","threadId":"t2","date":"2026-10-21","url":"https://example.com/t/2"}]
         """)
         #expect(SourcesHeader.decode(header) == [
-            AnswerSource(title: "Walkies pricing", threadId: "t1", date: "2026-10-22", url: "https://example.com/t/1"),
-            AnswerSource(title: "Stash It native", threadId: "t2", date: "2026-10-21", url: "https://example.com/t/2"),
+            AnswerSource(title: "Pebble pricing", threadId: "t1", date: "2026-10-22", url: "https://example.com/t/1"),
+            AnswerSource(title: "Recipe Box native", threadId: "t2", date: "2026-10-21", url: "https://example.com/t/2"),
         ])
     }
 

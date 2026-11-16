@@ -4,8 +4,9 @@
 //
 // The prompt goes over stdin, never in the program's arguments, so a thread's
 // text isn't on show to `ps` or anything that reads the process list. The
-// agent gets no tools it can use: its permissions say deny where it has them,
-// it runs in its read-only mode, and every request it makes is refused. The
+// agent gets no tools it can use: its permissions say deny where it has them
+// (Grok: a hook that denies every call), it runs in its read-only mode where
+// it has one, and every request it makes is refused. The
 // text can be from anywhere (a thread, a web page it quoted), so nothing in it
 // gets to run anything. Never throws; models/index.ts decides what's next.
 import fs from 'node:fs';
@@ -38,6 +39,7 @@ export type AcpAskerDeps = {
   log: Logger;
   env?: NodeJS.ProcessEnv;
   timings?: Partial<AcpTimings>;
+  dataDir?: string; // the runner's (AcpAdapterDeps.dataDir)
 };
 
 type Option = { id?: string; category?: string; currentValue?: unknown };
@@ -67,11 +69,31 @@ export function acpAsker(deps: AcpAskerDeps): Asker {
     const env = cliEnv(req.account, deps.env ?? process.env);
     delete env.CLAUDE_CONFIG_DIR;
     delete env.CLAUDE_AGENT_SDK_CLIENT_APP;
-    const proc = new AcpProcess({ binary, args: agentArgs(deps.agent, binary), env: { ...env, ...deps.agent.env({ noTools: true }) }, cwd: req.cwd, registry: deps.registry, log: deps.log, label: `ask:${req.account.id}`, timings: deps.timings });
+    const args = agentArgs(deps.agent, binary, { dataDir: deps.dataDir, noTools: true });
+    const proc = new AcpProcess({ binary, args, env: { ...env, ...deps.agent.env({ noTools: true }) }, cwd: req.cwd, registry: deps.registry, log: deps.log, label: `ask:${req.account.id}`, timings: deps.timings });
     let text = '';
+    // As AcpSession's checkGuard: Grok must report Threadbear's hook running
+    // before anything comes from the model, or the job is stopped there.
+    const guard = deps.agent.guardName?.(args);
+    let guardSeen = false;
+    let guardFailed: (() => void) | undefined;
+    const guardGone = new Promise<CliResponse>((resolve) => {
+      guardFailed = () => {
+        proc.kill();
+        resolve(fail(`${name} didn't run Threadbear's hook that turns its tools off, so the job was stopped.`));
+      };
+    });
     proc.onNotification = (method, params) => {
-      if (method !== 'session/update' || !isPlainObject(params) || !isPlainObject(params.update)) return;
+      if (!isPlainObject(params) || !isPlainObject(params.update)) return;
       const u = params.update;
+      if (guard && method.endsWith('x.ai/session_notification') && u.sessionUpdate === 'hook_execution' && (u.event_name === 'user_prompt_submit' || u.event_name === 'pre_tool_use')) {
+        const ran = Array.isArray(u.runs) && u.runs.some((r) => isPlainObject(r) && typeof r.name === 'string' && r.name.startsWith(`plugin/${guard}/`));
+        if (ran) guardSeen = true;
+        else guardFailed?.();
+        return;
+      }
+      if (method !== 'session/update') return;
+      if (guard && !guardSeen && ['agent_message_chunk', 'agent_thought_chunk', 'tool_call', 'tool_call_update', 'plan'].includes(String(u.sessionUpdate))) return guardFailed?.();
       if (u.sessionUpdate === 'agent_message_chunk' && isPlainObject(u.content) && u.content.type === 'text' && typeof u.content.text === 'string') text += u.content.text;
     };
     proc.onRequest = (id, method) => {
@@ -110,7 +132,7 @@ export function acpAsker(deps: AcpAskerDeps): Asker {
       return { ok: true, text };
     };
     try {
-      return await Promise.race([work(), timedOut]);
+      return await Promise.race([work(), timedOut, guardGone]);
     } catch (e) {
       if (e instanceof AcpRpcError && e.code === AUTH_REQUIRED) return fail(`${name} needs a sign-in: ${providerInfo(deps.agent.provider).loginCommand}.`);
       return fail((e as Error)?.message ?? String(e));

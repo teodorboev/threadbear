@@ -1,14 +1,14 @@
 // Threads on an agent that speaks ACP (acp/agents.ts): one process per live
 // thread, and everything it wants to do comes through here first.
 //
-// The agent is set to ask before every tool (AcpAgent.env), and each request
-// is answered from the thread's permission mode at that moment. So Ask, Auto
-// and Plan never run a tool unguarded, and leaving Full takes effect at once,
-// with no new process.
+// The agent is set to ask before every tool (AcpAgent.env, or for Grok the
+// hook its args load: grok-guard.ts), and each request is answered from the
+// thread's permission mode at that moment. So Ask, Auto and Plan never run a
+// tool unguarded, and leaving Full takes effect at once, with no new process.
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import type { Account, EffortLevel, ImageRef, ModelChoice, PermissionMode } from '../../protocol.ts';
+import { EFFORT_LEVELS, isEffortLevel, type Account, type EffortLevel, type ImageRef, type ModelChoice, type PermissionMode } from '../../protocol.ts';
 import type { Logger } from '../../log.ts';
 import type { ProcessRegistry } from '../../proc.ts';
 import { cardInput, displayPath, tooLongForCard } from '../../tools.ts';
@@ -52,6 +52,9 @@ export type AcpAdapterDeps = {
   timings?: Partial<AcpTimings>;
   env?: NodeJS.ProcessEnv;
   now?: () => number;
+  // The runner's data dir, where an agent keeps what Threadbear gives it
+  // (Grok's hook: grok-guard.ts).
+  dataDir?: string;
 };
 
 // "Always allow" for a file edit: the thread's edits, while they aren't to
@@ -60,21 +63,55 @@ export type AcpAdapterDeps = {
 export const EDIT_RULE = 'acp:edit';
 
 type ConfigOption = { id?: string; category?: string; type?: string; currentValue?: unknown; options?: unknown[] };
-type SessionResult = { sessionId?: string; configOptions?: ConfigOption[] | null; modes?: { currentModeId?: string; availableModes?: { id?: string }[] } | null };
+// Grok's `models` also says each model's effort levels and its default one.
+type ModelState = { availableModels?: unknown[] } | null;
+type SessionResult = { sessionId?: string; configOptions?: ConfigOption[] | null; modes?: { currentModeId?: string; availableModes?: { id?: string }[] } | null; models?: ModelState };
 
-export function modelChoices(options: ConfigOption[] | null | undefined): ModelChoice[] {
+// The effort levels a model lists (Grok: _meta.reasoningEfforts), those that
+// are Threadbear's own, and the one it marks as its default.
+export function modelEfforts(models: ModelState | undefined): Map<string, { levels: EffortLevel[]; defaultEffort?: EffortLevel }> {
+  const out = new Map<string, { levels: EffortLevel[]; defaultEffort?: EffortLevel }>();
+  for (const m of Array.isArray(models?.availableModels) ? models.availableModels : []) {
+    if (!isPlainObject(m) || typeof m.modelId !== 'string' || !isPlainObject(m._meta) || !Array.isArray(m._meta.reasoningEfforts)) continue;
+    const levels: EffortLevel[] = [];
+    let defaultEffort: EffortLevel | undefined;
+    for (const e of m._meta.reasoningEfforts) {
+      if (!isPlainObject(e) || !isEffortLevel(e.id)) continue;
+      levels.push(e.id);
+      if (e.default === true) defaultEffort = e.id;
+    }
+    // In Threadbear's order, lowest first, whatever order the agent lists them.
+    levels.sort((a, b) => EFFORT_LEVELS.indexOf(a) - EFFORT_LEVELS.indexOf(b));
+    if (levels.length) out.set(m.modelId, { levels, ...(defaultEffort ? { defaultEffort } : {}) });
+  }
+  return out;
+}
+
+export function modelChoices(options: ConfigOption[] | null | undefined, models?: ModelState): ModelChoice[] {
   const model = options?.find((o) => o.category === 'model');
   if (!model || !Array.isArray(model.options)) return [];
+  const efforts = modelEfforts(models);
   const out: ModelChoice[] = [];
   const add = (o: unknown) => {
     if (!isPlainObject(o)) return;
     if (Array.isArray(o.options)) return o.options.forEach(add); // a named group
     if (typeof o.value !== 'string' || !o.value) return;
     const title = typeof o.name === 'string' && o.name ? o.name : o.value;
-    out.push({ id: o.value, model: o.value, title });
+    const e = efforts.get(o.value);
+    out.push({ id: o.value, model: o.value, title, ...(e ? { effortLevels: e.levels, ...(e.defaultEffort ? { defaultEffort: e.defaultEffort } : {}) } : {}) });
   };
   model.options.forEach(add);
   return out;
+}
+
+// Grok adds the hook that asked to the title of a request it asks about
+// ("Write `a.txt` — hook 'plugin/threadbear-ask/...' asks: ..."). The card
+// says what the call does, not which of Threadbear's own pieces sent it.
+export function withoutHookNote(call: AcpToolCall, meta: unknown): AcpToolCall {
+  const hook = isPlainObject(meta) && isPlainObject(meta.hookAsk) ? meta.hookAsk.hookName : undefined;
+  if (typeof hook !== 'string' || !hook || typeof call.title !== 'string') return call;
+  const at = call.title.indexOf(` — hook '${hook}'`);
+  return at > 0 ? { ...call, title: call.title.slice(0, at) } : call;
 }
 
 function notFound(e: unknown): boolean {
@@ -111,6 +148,8 @@ export class AcpAdapter implements AgentAdapter {
   start(opts: StartSessionOptions, sink: SessionSink): AgentSession {
     // None of these run in the sandbox (sandbox.ts).
     if (opts.confined) throw new Error(`This thread runs in a sandbox, and ${providerName(this.provider)} can't, so it wasn't started. Move it to a Claude login.`);
+    const refused = this.deps.agent.refuses?.({ cwd: opts.cwd, mode: opts.permissionMode });
+    if (refused) throw new Error(refused);
     const s = new AcpSession(opts, sink, this.deps, this.binary(), this.env(opts.account, opts.env));
     s.start();
     return s;
@@ -122,13 +161,13 @@ export class AcpAdapter implements AgentAdapter {
   async models(account: Account): Promise<ModelChoice[]> {
     const { deps } = this;
     const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'threadbear-acp-'));
-    const p = new AcpProcess({ binary: this.binary(), args: agentArgs(deps.agent, this.binary()), env: this.env(account), cwd, registry: deps.registry, log: deps.log, label: `models:${account.id}`, timings: deps.timings });
+    const p = new AcpProcess({ binary: this.binary(), args: agentArgs(deps.agent, this.binary(), { dataDir: deps.dataDir }), env: this.env(account), cwd, registry: deps.registry, log: deps.log, label: `models:${account.id}`, timings: deps.timings });
     try {
       const init = await p.start();
       if (!deps.agent.identifies(init)) throw new Error(`The program found for ${providerName(this.provider)} isn't it.`);
       const r = await p.request<SessionResult>('session/new', { cwd, mcpServers: [] });
       if (r?.sessionId && init.agentCapabilities?.sessionCapabilities?.close !== undefined) await p.request('session/close', { sessionId: r.sessionId }).catch(() => undefined);
-      return modelChoices(r?.configOptions);
+      return modelChoices(r?.configOptions, r?.models);
     } finally {
       await p.close().catch(() => undefined);
       fs.rmSync(cwd, { recursive: true, force: true });
@@ -159,7 +198,19 @@ export class AcpSession implements AgentSession {
   private mode: PermissionMode;
   private model?: string;
   private modelChanged = false;
+  private effort?: EffortLevel;
+  private effortChanged = false;
+  // Each model's own effort level, for going back to it (Grok's list).
+  private ownEfforts = new Map<string, { levels: EffortLevel[]; defaultEffort?: EffortLevel }>();
+  // The threadbear tools this session's MCP server offers, as the agent names them.
+  private ownTools = new Set<string>();
   private configOptions: ConfigOption[] = [];
+  // The plugin whose hook must be reported running before the model does
+  // anything in a turn (Grok's guard), and whether it has been this turn.
+  private guard?: string;
+  private guardSeen = false;
+  // Whether the agent trusted the folder when this process started (Grok).
+  private trusted = false;
   private currentMode?: string;
   private cliCommands: SlashCommand[] = [];
   // Said once, before the first message of a new session.
@@ -176,11 +227,15 @@ export class AcpSession implements AgentSession {
     this.now = deps.now ?? Date.now;
     this.mode = opts.permissionMode;
     this.model = opts.model;
+    this.effort = opts.effort;
     this.rules = new Set(opts.allowRules ?? []);
     this.exitPromise = new Promise((r) => (this.resolveExit = r));
     this.ctx = fileContext(opts.cwd, opts.mediaDir, opts.blobsDir);
     this.normalizer = new AcpNormalizer(this.ctx);
-    this.proc = new AcpProcess({ binary, args: agentArgs(deps.agent, binary), env, cwd: opts.cwd, registry: deps.registry, log: deps.log, label: opts.threadId, timings: deps.timings });
+    this.trusted = deps.agent.trusts?.(opts.cwd) ?? false;
+    const args = agentArgs(deps.agent, binary, { dataDir: deps.dataDir, trusted: this.trusted });
+    this.guard = deps.agent.guardName?.(args);
+    this.proc = new AcpProcess({ binary, args, env, cwd: opts.cwd, registry: deps.registry, log: deps.log, label: opts.threadId, timings: deps.timings });
     this.proc.onNotification = (method, params) => this.notification(method, params);
     this.proc.onRequest = (id, method, params) => this.request(id, method, params);
     this.proc.onExit = (err) => this.exited(err);
@@ -224,6 +279,7 @@ export class AcpSession implements AgentSession {
       });
       const url = await this.mcp.listen();
       mcpServers = [{ type: 'http', name: 'threadbear', url, headers: [{ name: 'Authorization', value: `Bearer ${this.mcp.token}` }] }];
+      this.ownTools = new Set(defs.map((d) => `threadbear__${d.name}`));
     }
 
     let res: SessionResult;
@@ -239,11 +295,13 @@ export class AcpSession implements AgentSession {
     this.sessionId = this.sessionId ?? res.sessionId;
     if (typeof this.sessionId !== 'string' || !this.sessionId) throw new Error(`${name} started a session without an id`);
     this.noteOptions(res);
+    this.ownEfforts = modelEfforts(res.models);
     if (!opts.resume) {
       this.preamble = [defs.length ? toolGuidance(defs) : '', defs.length ? (deps.extraGuidance?.() ?? '') : '', opts.instructions ?? ''].filter(Boolean).join('\n\n') || undefined;
     }
     await this.applyMode();
     if (this.model) await this.applyModel(this.model);
+    if (this.effort) await this.applyEffort(this.effort);
     const model = this.modelNow();
     this.sink.output({ kind: 'session', nativeSessionId: this.sessionId, ...(model ? { model } : {}) });
     this.state = 'ready';
@@ -341,9 +399,33 @@ export class AcpSession implements AgentSession {
     }
   }
 
+  // An agent that has a thought_level option (Grok's reasoning_effort) takes
+  // the thread's effort there; undefined is the model's own level. Others have
+  // none, and providers.ts says so, so the runner never sends them one.
+  private async applyEffort(effort: EffortLevel | undefined): Promise<void> {
+    const option = this.configOptions.find((o) => o.category === 'thought_level');
+    if (!option?.id) return;
+    const model = this.modelNow();
+    const value = effort ?? (model ? this.ownEfforts.get(model)?.defaultEffort : undefined);
+    if (!value || value === option.currentValue) return;
+    try {
+      const r = await this.proc.request<SessionResult>('session/set_config_option', { sessionId: this.sessionId, configId: option.id, value });
+      this.noteOptions(r ?? {});
+    } catch (e) {
+      this.deps.log.warn('could not set the effort', { threadId: this.opts.threadId, effort: value, error: String(e) });
+      this.sink.output({ kind: 'event', event: { type: 'system.note', text: `${value} effort couldn't be set, so this turn uses ${String(this.effortNow() ?? "the model's own level")}.` } });
+    }
+  }
+
+  private effortNow(): EffortLevel | undefined {
+    const v = this.configOptions.find((o) => o.category === 'thought_level')?.currentValue;
+    return isEffortLevel(v) ? v : undefined;
+  }
+
   // ---- From the agent
 
   private notification(method: string, params: unknown): void {
+    if (this.guard && !this.replaying && this.checkGuard(method, params)) return;
     if (this.replaying || method !== 'session/update' || !isPlainObject(params)) return;
     if (this.sessionId && params.sessionId !== undefined && params.sessionId !== this.sessionId) return;
     const update = params.update;
@@ -353,6 +435,37 @@ export class AcpSession implements AgentSession {
       if (update.sessionUpdate === 'available_commands_update' && Array.isArray(update.availableCommands)) this.noteCommands(update.availableCommands);
     }
     this.emit(this.normalizer.handle(update));
+  }
+
+  // Grok reports each hook it ran (hook_execution) as a prompt goes in and
+  // before each tool. Threadbear's must be among them: a folder's config can
+  // turn a plugin off, and then nothing would ask. Anything from the model in
+  // a turn before that report, or a report without it, stops the thread
+  // there, before any tool runs. True when it stopped it.
+  private checkGuard(method: string, params: unknown): boolean {
+    if (!isPlainObject(params) || !isPlainObject(params.update)) return false;
+    const u = params.update;
+    if (method.endsWith('x.ai/session_notification') && u.sessionUpdate === 'hook_execution' && (u.event_name === 'user_prompt_submit' || u.event_name === 'pre_tool_use')) {
+      const ran = Array.isArray(u.runs) && u.runs.some((r) => isPlainObject(r) && typeof r.name === 'string' && r.name.startsWith(`plugin/${this.guard}/`));
+      if (ran) {
+        if (u.event_name === 'user_prompt_submit') this.guardSeen = true;
+        return false;
+      }
+      return this.guardMissing();
+    }
+    const fromModel = new Set(['agent_message_chunk', 'agent_thought_chunk', 'tool_call', 'tool_call_update', 'plan']);
+    if (method === 'session/update' && this.turn && !this.guardSeen && fromModel.has(String(u.sessionUpdate))) return this.guardMissing();
+    return false;
+  }
+
+  private guardMissing(): boolean {
+    if (this.state === 'closed') return true;
+    const name = providerName(this.deps.agent.provider);
+    this.deps.log.error('acp guard hook did not run', { threadId: this.opts.threadId, guard: this.guard });
+    this.state = 'closing';
+    this.proc.kill();
+    this.exited(new Error(`${name} didn't run Threadbear's hook that makes it ask before using tools (a folder's .grok/config.toml can turn plugins off), so this thread was stopped before it could use any.`));
+    return true;
   }
 
   private noteCommands(raw: unknown[]): void {
@@ -368,8 +481,10 @@ export class AcpSession implements AgentSession {
 
   private request(id: RequestId, method: string, params: unknown): void {
     if (method === 'session/request_permission' && !this.replaying) {
+      const p = (isPlainObject(params) ? params : {}) as { toolCall?: AcpToolCall; options?: PermissionOption[]; _meta?: unknown };
+      const call = isPlainObject(p.toolCall) ? withoutHookNote(p.toolCall, p._meta) : p.toolCall;
       // Never left unanswered: the turn would hang with session/prompt open.
-      this.permission(id, (params ?? {}) as { toolCall?: AcpToolCall; options?: PermissionOption[] }).catch((e: unknown) => {
+      this.permission(id, { ...p, toolCall: call }).catch((e: unknown) => {
         this.deps.log.error('acp permission handler threw', { threadId: this.opts.threadId, error: String(e) });
         this.pending.delete(id);
         this.proc.respond(id, { outcome: { outcome: 'cancelled' } });
@@ -399,6 +514,11 @@ export class AcpSession implements AgentSession {
     this.emit(seen.events);
     // Read at the moment it's asked, not when the turn began.
     if (this.mode === 'full') return this.answer(id, options, true);
+    // One of this session's own threadbear tools: its MCP server asks where
+    // the tool needs it (tool-gate.ts), so a card here would be a second one.
+    // Grok names the tool exactly, and a name it can't find doesn't run.
+    const mcpName = p.toolCall ? this.deps.agent.mcpToolName?.(p.toolCall) : undefined;
+    if (mcpName && this.ownTools.has(mcpName)) return this.answer(id, options, true);
     // A code-mode script that only calls one threadbear tool: its own gate
     // (mcp-http.ts) asks as the mode says, so no card here as well.
     const raw = p.toolCall?.rawInput;
@@ -559,16 +679,25 @@ export class AcpSession implements AgentSession {
     try {
       // Between turns, so the next message takes any change made during this one.
       await this.applyMode();
+      const modelChanged = this.modelChanged;
       if (this.modelChanged) {
         this.modelChanged = false;
         await this.applyModel(this.model ?? this.opts.account.defaultModel ?? '');
       }
+      // Again after a new model, which may start at its own level.
+      if (this.effortChanged || (modelChanged && this.effort)) {
+        this.effortChanged = false;
+        await this.applyEffort(this.effort);
+      }
       // Stop pressed during the setup above: nothing has reached the model.
       if (turn.interrupted) throw new Error('Stopped');
+      this.guardSeen = false;
       dispatched = true;
       const r = await this.proc.request<{ stopReason?: string }>('session/prompt', { sessionId: this.sessionId, prompt: this.promptBlocks(input) }, null);
       this.emit(this.normalizer.closeOpen('Stopped'));
       result = this.resultFor(turn, r?.stopReason);
+      const effort = this.effortNow();
+      if (effort) this.sink.output({ kind: 'effort', level: effort });
     } catch (e) {
       if (e instanceof AcpExitedError) return; // the exit handler reports it
       this.emit(this.normalizer.closeOpen('Failed'));
@@ -631,13 +760,24 @@ export class AcpSession implements AgentSession {
     this.model = model;
   }
 
-  // These agents offer no effort level of Threadbear's (providers.ts).
-  async setEffort(_effort: EffortLevel | undefined): Promise<void> {}
+  // Only an agent with a thought_level option takes one (applyEffort).
+  async setEffort(effort: EffortLevel | undefined): Promise<void> {
+    if (effort !== this.effort) this.effortChanged = true;
+    this.effort = effort;
+  }
 
   // Asked for at once, as a running turn in Cursor's writable mode wouldn't
   // send a request to stop at. One that can't be made safe doesn't go on.
   async setPermissionMode(mode: PermissionMode): Promise<void> {
     this.mode = mode;
+    // A mode this folder can't run in (Grok's trusted folders): the process
+    // goes, and the next message starts one, which says why it can't.
+    const refused = this.deps.agent.refuses?.({ cwd: this.opts.cwd, mode, trusted: this.trusted });
+    if (refused && this.state !== 'closed' && this.state !== 'closing') {
+      this.sink.output({ kind: 'event', event: { type: 'system.note', text: refused } });
+      this.kill();
+      return;
+    }
     if (!this.sessionId || (this.state !== 'ready' && this.state !== 'turn')) return;
     try {
       await this.applyMode();

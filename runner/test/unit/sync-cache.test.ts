@@ -1,6 +1,6 @@
 // What the mirror writes again when a runner restarts, and the writes it now
 // leaves out (docs/convex-backend.md, "Usage and the free plan"). The cost was
-// real: 12 to 15 starts a day, each rewriting all of Mike's 710 thread rows.
+// real: 12 to 15 starts a day, each rewriting all of Alex's 710 thread rows.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';

@@ -174,6 +174,15 @@ fn clone_file(from: &std::fs::File, path: &Path) -> std::io::Result<bool> {
     Ok(true)
 }
 
+/// A copy made by `snapshot` that's a program, made runnable by this user
+/// alone and still read-only (0500), for running the checked copy rather
+/// than the path it came from (open_policy's `checked_copy`).
+#[cfg(unix)]
+pub fn make_runnable(path: &Path) -> std::io::Result<()> {
+    use std::os::unix::fs::PermissionsExt as _;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o500))
+}
+
 /// `len` bytes of `from` from its start into `to`, read at their offsets so
 /// whatever else reads `from` keeps its place.
 fn copy_all(from: &std::fs::File, to: &mut std::fs::File, len: u64) -> std::io::Result<()> {

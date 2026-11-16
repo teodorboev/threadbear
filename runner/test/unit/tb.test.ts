@@ -97,7 +97,7 @@ test('inside a thread, tb will not delete, interrupt, snooze or archive that thr
     assert.equal(s.status, 'running', 'its turn carries on');
     assert.equal(s.archivedAt, undefined);
     assert.equal(s.snoozedUntil, undefined);
-    // Its own approval cards are Mike's, through tb approve and a raw call alike.
+    // Its own approval cards are Alex's, through tb approve and a raw call alike.
     void h.adapter.sessions.find((x) => x.opts.threadId === self.id)!.sink.requestApproval({ name: 'Bash', title: 'rm -rf build', input: { command: 'rm -rf build' }, canAlwaysAllow: true, signal: new AbortController().signal });
     const approvalId = h.events(self.id).find((e) => e.type === 'approval.requested').approvalId;
     for (const args of [['approve', self.id, approvalId, 'allow'], ['answer', self.id.slice(0, 8), approvalId, 'yes'], ['rpc', 'approvals.respond', JSON.stringify({ threadId: self.id, approvalId, decision: 'allow' })], ['rpc', 'plans.approve', JSON.stringify({ threadId: self.id, itemId: 'tu-plan' })]]) {
@@ -105,7 +105,7 @@ test('inside a thread, tb will not delete, interrupt, snooze or archive that thr
       assert.equal(await t.exited, 1, args[0]);
       assert.match(t.out(), /own card; the user answers it/, args[0]);
     }
-    assert.equal(h.runner.get(self.id).status, 'waiting', 'still waiting on Mike');
+    assert.equal(h.runner.get(self.id).status, 'waiting', 'still waiting on Alex');
     // Unarchiving itself, and other threads, are fine.
     assert.equal(await tb(h, url, ['unarchive', self.id], inThread).exited, 0);
     assert.equal(await tb(h, url, ['archive', other.id], inThread).exited, 0);
@@ -181,7 +181,7 @@ test('tb list says what a thread is still running in the background', () => {
 });
 
 test('tb new on codex-main with a model and effort, tb accounts with and without an account', async () => {
-  const h = makeHarness(undefined, {}, { accounts: new FakeAccounts(withCodex().map((a) => (a.id === 'claude-3' ? { ...a, note: 'Convex work only' } : a))) });
+  const h = makeHarness(undefined, {}, { accounts: new FakeAccounts(withCodex().map((a) => (a.id === 'claude-3' ? { ...a, note: 'Work only' } : a))) });
   const server = new RpcServer({ host: '127.0.0.1', port: 0, token: readToken(h.home), runner: h.runner, log: nullLogger });
   const { port } = await server.listen();
   const url = `ws://127.0.0.1:${port}/rpc`;
@@ -217,7 +217,7 @@ test('tb new on codex-main with a model and effort, tb accounts with and without
     // The provider once, then the email (not "Codex  Codex · ...").
     assert.match(a.out(), /^\* codex-main +Codex +main@example\.com$/m);
     assert.doesNotMatch(a.out(), /Codex · /);
-    assert.match(a.out(), /^ {2}claude-3 +Claude +three@example\.com {2}\(Convex work only\)$/m);
+    assert.match(a.out(), /^ {2}claude-3 +Claude +three@example\.com {2}\(Work only\)$/m);
   } finally {
     await server.close();
   }

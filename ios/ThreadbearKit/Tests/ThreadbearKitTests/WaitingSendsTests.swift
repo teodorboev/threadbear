@@ -50,22 +50,22 @@ import Testing
 
     @Test func theLineSaysWhichRunnerIsOffline() {
         let pending = WaitingSend(commandId: "a", state: .pending, text: "x", createdAt: ms)
-        #expect(WaitingSends.note(pending, offlineRunner: "M5") == "M5 is offline, sends when it's back")
+        #expect(WaitingSends.note(pending, offlineRunner: "Laptop") == "Laptop is offline, sends when it's back")
         #expect(WaitingSends.note(pending, offlineRunner: nil) == "Sending…")
         // Taken: it's going, offline or not.
         var taken = pending
         taken.state = .taken
-        #expect(WaitingSends.note(taken, offlineRunner: "M5") == "Sending…")
+        #expect(WaitingSends.note(taken, offlineRunner: "Laptop") == "Sending…")
         #expect(!taken.canCancel && pending.canCancel)
     }
 
     /// The bug behind it: the old line only looked at whether every runner
-    /// was offline, and Bruce and the cloud box are always up.
+    /// was offline, and the Mac mini and the cloud box are always up.
     @Test func offlineGoesByTheThreadsOwnRunner() {
-        let runners = [PhoneRunner(runnerId: "m5", name: "M5", lastSeenAt: t0.addingTimeInterval(-600)),
-                       PhoneRunner(runnerId: "bruce", name: "bruce", lastSeenAt: t0)]
-        #expect(WaitingSends.offlineRunner("m5", in: runners, at: t0) == "M5")
-        #expect(WaitingSends.offlineRunner("bruce", in: runners, at: t0) == nil)
+        let runners = [PhoneRunner(runnerId: "laptop", name: "Laptop", lastSeenAt: t0.addingTimeInterval(-600)),
+                       PhoneRunner(runnerId: "mac-mini", name: "Mac mini", lastSeenAt: t0)]
+        #expect(WaitingSends.offlineRunner("laptop", in: runners, at: t0) == "Laptop")
+        #expect(WaitingSends.offlineRunner("mac-mini", in: runners, at: t0) == nil)
         #expect(WaitingSends.offlineRunner("gone", in: runners, at: t0) == nil)
     }
 

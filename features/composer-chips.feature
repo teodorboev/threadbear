@@ -44,11 +44,11 @@ Feature: The chips under the message box
   @composer.modelpicker @swift-pending
   Scenario: A thread pinned to a login says so in the model picker, and Auto hands it back to a pool
     When I open the thread "Compare SQLite and plain files for the runner"
-    Then the "model" menu has a row "# Pinned to mike+3"
-    And the "model" menu has a row "--- Login: mike+3"
-    And the "model" menu has a row "[x] mike+3"
+    Then the "model" menu has a row "# Pinned to alex+3"
+    And the "model" menu has a row "--- Login: alex+3"
+    And the "model" menu has a row "[x] alex+3"
     When I pick "Login: Auto" from the "model" menu
-    Then the "model" menu has no row "--- Login: mike+3"
+    Then the "model" menu has no row "--- Login: alex+3"
     And the "model" menu has a row "--- Login: Auto"
     And the "model" menu has a row "[x] Auto - The pool picks"
 
@@ -56,12 +56,12 @@ Feature: The chips under the message box
   Scenario: A pool thread's Login line says Auto, and picking a login pins the thread to it
     Then the "model" menu has a row "--- Login: Auto"
     And the "model" menu has a row "[x] Auto - The pool picks, and moves on when one runs out"
-    And the "model" menu has a row "[ ] mike+3"
-    When I pick "Login: mike+3" from the "model" menu
+    And the "model" menu has a row "[ ] alex+3"
+    When I pick "Login: alex+3" from the "model" menu
     Then the "model" menu has no row "--- Login: Auto"
-    And the "model" menu has a row "--- Login: mike+3"
-    And the "model" menu has a row "[x] mike+3"
-    And the "model" menu has a row "# Pinned to mike+3"
+    And the "model" menu has a row "--- Login: alex+3"
+    And the "model" menu has a row "[x] alex+3"
+    And the "model" menu has a row "# Pinned to alex+3"
 
   # A login, pool or folder change can't be guessed, so the chip that shows it
   # spins and takes no clicks until the runner has made it (the every-click
@@ -91,14 +91,14 @@ Feature: The chips under the message box
     And the window is 560 points wide
     Then the chips under the box fit inside it
 
-  # Without pools there's a login chip: another Mac's thread, as bruce has none.
+  # Without pools there's a login chip: another Mac's thread, as mac-mini has none.
   @composer.account @remote-threads
   Scenario: The login picker groups the logins by provider, with the room each has left
     When I open the thread "Check the photo library backup"
     Then the "account" menu has a row "# Claude"
-    And the "account" menu has a row "[x] mike@example.com - week 78%, resets"
+    And the "account" menu has a row "[x] alex@example.com - week 78%, resets"
     And the "account" menu has a row "# Codex"
-    And the "account" menu has a row "[ ] mike@example.com - week 64%, resets"
+    And the "account" menu has a row "[ ] alex@example.com - week 64%, resets"
     And the "account" menu has a row "--- Usage from Token Stats at"
 
   @composer.schedulefromsend

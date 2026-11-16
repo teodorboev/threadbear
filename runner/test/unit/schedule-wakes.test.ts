@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { call, load, memoryBackend } from '../helpers/convex-memory.ts';
 
 const OWNER = 'owner-key';
-const M5 = 'm5runner0001';
+const LAPTOP = 'laptop000001';
 const OLD = 'oldrunner001';
 const TOKEN = 'tb_phone';
 
@@ -31,7 +31,7 @@ const wakes = async (s: Awaited<ReturnType<typeof setup>>) => (await call(s.ctx,
 test("a mirrored row going leaves the wake of an owned schedule with its id", async () => {
   const s = await setup();
   await call(s.ctx, sync.setSchedules, { key: OWNER, runnerId: OLD, schedules: [mirrored('s1')] });
-  await call(s.ctx, sync.saveSchedule, { key: OWNER, schedule: { ...mirrored('s1', { nextRunAt: '2026-11-09T02:00:00.000Z' }), runnerId: M5 } });
+  await call(s.ctx, sync.saveSchedule, { key: OWNER, schedule: { ...mirrored('s1', { nextRunAt: '2026-11-09T02:00:00.000Z' }), runnerId: LAPTOP } });
   await call(s.ctx, sync.setSchedules, { key: OWNER, runnerId: OLD, schedules: [] });
   assert.deepEqual(await wakes(s), [{ scheduleId: 's1', threadId: 't1', nextRunAt: '2026-11-09T02:00:00.000Z' }]);
 });
@@ -39,7 +39,7 @@ test("a mirrored row going leaves the wake of an owned schedule with its id", as
 test('adopting leaves the wake of an owned schedule its mirror shared an id with', async () => {
   const s = await setup();
   await call(s.ctx, sync.setSchedules, { key: OWNER, runnerId: OLD, schedules: [mirrored('s1')] });
-  await call(s.ctx, sync.saveSchedule, { key: OWNER, schedule: { ...mirrored('s1', { nextRunAt: '2026-11-09T02:00:00.000Z' }), runnerId: M5 } });
+  await call(s.ctx, sync.saveSchedule, { key: OWNER, schedule: { ...mirrored('s1', { nextRunAt: '2026-11-09T02:00:00.000Z' }), runnerId: LAPTOP } });
   await call(s.ctx, sync.adoptSchedules, { key: OWNER, runnerId: OLD, schedules: [{ ...mirrored('s1'), runnerId: OLD }] });
   assert.deepEqual(await wakes(s), [{ scheduleId: 's1', threadId: 't1', nextRunAt: '2026-11-09T02:00:00.000Z' }]);
 });

@@ -20,7 +20,7 @@ Feature: The thread's bar, banners and notes
     Then the panel bar's title says "Evening brief"
     And the sidebar lists "Evening brief"
 
-  # The demo's "Draft the release notes" is on the Evenings pool, whose only
+  # The demo's "Draft the release notes" is on the Weekends pool, whose only
   # login is at its limit, so the runner is holding it until there's room.
   # Since 10 Nov this is a box at the top of the message field, which says
   # when it carries on and lets Mike turn that off. Since 12 Nov it asks:
@@ -28,8 +28,8 @@ Feature: The thread's bar, banners and notes
   @banner.limit @swift-pending
   Scenario: A pool thread out of room says so, offers to continue now on a login outside the pool, and carries on by itself
     When I open the thread "Draft the release notes for 0.4"
-    Then the limit line starts "Every login in Evenings is out of room."
-    And the limit line's button says "Continue now on mike (78% left)"
+    Then the limit line starts "Every login in Weekends is out of room."
+    And the limit line's button says "Continue now on alex (78% left)"
     And the limit box carries on by itself
     And the model chip is marked "Limit reached"
 

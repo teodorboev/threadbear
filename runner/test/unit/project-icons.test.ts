@@ -56,7 +56,7 @@ function folder(root: string, rel: string, files: Record<string, string | Buffer
 
 test("finding an icon: the app icon over favicons and logos, never another thing's", async () => {
   const root = tmpDir();
-  const app = folder(root, 'poddle', {
+  const app = folder(root, 'pantry', {
     'App/Assets.xcassets/AppIcon.appiconset/icon-1024.png': png(1024, 1024),
     'App/Assets.xcassets/Icons/icon-gear.imageset/icon.png': png(1024, 1024),
     'web/public/favicon-32.png': png(32, 32),
@@ -83,7 +83,7 @@ test("finding an icon: the app icon over favicons and logos, never another thing
   assert.equal((await findIcon([named]))?.path, path.join(named, 'app/icons/threadbear.png'));
 
   // Under a folder named for something else, it's that thing's icon.
-  const other = folder(root, 'cannvas', { 'public/inventory/icon.svg': '<svg viewBox="0 0 512 512"></svg>' });
+  const other = folder(root, 'sketchpad', { 'public/inventory/icon.svg': '<svg viewBox="0 0 512 512"></svg>' });
   assert.equal(await findIcon([other]), undefined);
   assert.equal(await findIcon([folder(root, 'nothing', { 'src/a.ts': '' })]), undefined);
 
@@ -169,7 +169,7 @@ test('a project with no picture gets a symbol from the list; a made-up one is ig
   s.librarian.stop();
 });
 
-test("Mike's and agents' choices stay until set back to automatic", async () => {
+test("Alex's and agents' choices stay until set back to automatic", async () => {
   const s = setup(() => ({ ok: true, value: 'hammer', model: 'haiku' }));
   const app = folder(s.root, 'tandem', { 'icons/tandem.png': png(300, 300) });
   const mine = path.join(s.root, 'mine.png');

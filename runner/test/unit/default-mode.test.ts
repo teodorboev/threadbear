@@ -18,7 +18,7 @@ test('config: defaults.permissionMode is read from runner.json; unset, plan or n
     writeRunnerJson(home, { defaults: { permissionMode: mode } });
     assert.equal(loadConfig({ THREADBEAR_HOME: home }).defaults.permissionMode, mode);
   }
-  // Plan first waits for Mike to approve a plan, so a thread nobody's
+  // Plan first waits for Alex to approve a plan, so a thread nobody's
   // watching (a schedule, one from the phone) would just sit there.
   for (const bad of ['plan', 'yolo', 3]) {
     writeRunnerJson(home, { defaults: { permissionMode: bad as never } });

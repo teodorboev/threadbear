@@ -435,7 +435,7 @@ mod tests {
     fn a_new_threads_models_come_from_the_login_it_runs_on() {
         let hello = json!({
             "accounts": [
-                { "id": "claude-main", "provider": "claude", "title": "Mike", "defaultModel": "opus",
+                { "id": "claude-main", "provider": "claude", "title": "Alex", "defaultModel": "opus",
                   "models": [{ "id": "opus", "title": "Opus 5.5", "effortLevels": ["low", "high"] }, { "id": "haiku", "title": "Haiku 5.5" }] },
                 { "id": "codex-main", "provider": "codex", "title": "Codex", "models": [{ "id": "gpt-6", "title": "GPT-6" }] },
             ],

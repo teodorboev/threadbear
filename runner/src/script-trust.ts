@@ -1579,7 +1579,36 @@ class Reach {
     // scan, 6 Nov).
     if (tries.some(readsInput)) return this.fail(ctx, line, `runs ${file}, which reads what to run from its input, which patch trust can't follow.`);
     const inRepo = tries.filter((t) => this.inRepo(t));
-    if (!inRepo.length) return; // a program outside the repo
+    // A script outside the repo, handed to sh or node by its path. Where
+    // outside scripts are followed (a schedule's check, writeRunsAsCode),
+    // it's one, whatever its mode or name says: `sh /opt/x` runs x though
+    // it has no shebang, no +x and no .sh, and leaving it out hashed none
+    // of it and guarded none of it (Grok's review of Daybreak 126, 15 Nov
+    // 2026). Every outside candidate, even beside one in the repo: after
+    // `cd /opt`, `sh payload` runs /opt/payload though the repo has a
+    // payload too (Grok's second review). Elsewhere it's a program, as
+    // before.
+    if (this.o.outside) {
+      for (const t of tries) {
+        if (inRepo.includes(t)) continue;
+        // One not there yet is noted as missing (so an edit that writes it
+        // asks), not refused: the digest is taken again at each run, and
+        // once it's there it's followed and hashed, so the check is held.
+        // A patch naming a script in another of its owner's repos
+        // (Threadbear's App Store chip) would otherwise make every edit ask
+        // in a copy without that repo.
+        if (!isFile(t)) {
+          if (this.missing.size < 500) this.missing.add(t);
+          continue;
+        }
+        // An interpreter runs what it's given, so one that looks binary (a
+        // NUL in a comment, or a file it can't read now) isn't a program
+        // to skip here: it can't be followed.
+        if (isBinary(t)) return this.fail(ctx, line, `runs ${file}, which patch trust can't read as a script.`);
+        this.noteOutside(t, 'run', ctx, line);
+      }
+    }
+    if (!inRepo.length) return;
     const found = inRepo.filter(isFile);
     for (const t of inRepo) if (!isFile(t) && this.missing.size < 500) this.missing.add(t);
     if (!found.length) return this.fail(ctx, line, `runs ${file}, which isn't a file in the repo now, so patch trust can't see what it'll be.`);

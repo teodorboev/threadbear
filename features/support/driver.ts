@@ -46,10 +46,16 @@ export type Thread = {
   background?: string | null;
   waiting?: string | null;
   subagents?: { id: string; depth: number; status: string; title: string; detail: string; selected: boolean }[];
-  /** "On bruce" for another runner's thread ("On bruce, offline"). */
+  /** "On mac-mini" for another runner's thread ("On mac-mini, offline"). */
   runner?: string | null;
   /** The row is laid out within the part of the list that's showing (GPUI only; null when it isn't drawn). */
   inView?: boolean | null;
+  /** The threads it started, nested under it (nestedThreads, GPUI only): its
+   *  count's words, whether it's open, and its threads while open, each with
+   *  its second line and whether that's a question waiting on Mike. */
+  /** On `selection`: the line above the transcript naming the thread that started it (nestedThreads, GPUI only). */
+  startedBy?: { text: string; threadId?: string | null } | null;
+  group?: { words: string; open: boolean; needsYou: number; working: number; finished: number; dot: boolean; threads: (Thread & { line?: string; question?: boolean })[] } | null;
 };
 
 export type Dump = {

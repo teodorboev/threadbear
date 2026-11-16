@@ -416,7 +416,7 @@ mod tests {
         assert_eq!(safe_message("assertion `left == right` failed\n  left: \"secret\"\n right: \"other\""), "assertion `left == right` failed");
         assert_eq!(safe_message("assertion failed: title.is_empty()"), "assertion failed");
         // Anything else is someone's words, or might be.
-        assert_eq!(safe_message("couldn't open /Users/mike/Secret Project/clients.csv: denied"), "panic");
+        assert_eq!(safe_message("couldn't open /Users/alex/Secret Project/clients.csv: denied"), "panic");
         assert_eq!(safe_message("no thread called Fix the share button"), "panic");
         assert_eq!(safe_message("index out of bounds: the len is x but the index is 5"), "panic");
         assert_eq!(safe_message(""), "panic");
@@ -425,7 +425,7 @@ mod tests {
     #[test]
     fn a_location_keeps_only_the_files_own_part() {
         assert_eq!(clean_location("gpui/src/sidebar.rs"), "gpui/src/sidebar.rs");
-        assert_eq!(clean_location("/Users/m5-mike/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/gpui-pre-0.3.11/src/window.rs"), "gpui-pre-0.3.11/src/window.rs");
+        assert_eq!(clean_location("/Users/alex/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/gpui-pre-0.3.11/src/window.rs"), "gpui-pre-0.3.11/src/window.rs");
         assert_eq!(clean_location("/Users/x/.cache/threadbear-check/gpui/src-ab/desktop/gpui/src/app.rs"), "desktop/gpui/src/app.rs");
         assert_eq!(clean_location("/rustc/90b35a6239c3d8bdabc530a6a0816f7ff89a0aaf/library/core/src/option.rs"), "library/core/src/option.rs");
         assert_eq!(clean_location("/somewhere/else/thing.rs"), "else/thing.rs");

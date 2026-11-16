@@ -23,6 +23,12 @@ export const clisPart = {
       this.releaseSession(st);
       return;
     }
+    // Saved user instructions hold automatic inputs, not the idle process.
+    // Background work still keeps its session until it finishes as usual.
+    if (this.queueHeld(st)) {
+      if (!rt.tasks.length && !rt.wakeTimer) this.releaseSession(st);
+      return;
+    }
     if (rec.queue.length) return;
     // A fresh CLI is wanted (another login or folder, /clear, a setting
     // the live one couldn't take), which the next message would get anyway.

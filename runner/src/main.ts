@@ -195,7 +195,8 @@ async function main(): Promise<void> {
   const projectControl = () => projectRouter(projects, () => primaryLink, { draining: () => draining, holds: (threadId) => runner.has(threadId) });
   // Keeps both CLIs current (E). Its hooks call back into the runner and
   // the Restarter, made below; nothing calls them before start().
-  const acpBinary = (p: AcpProvider) => () => ACP_AGENTS[p].findBinary({ explicit: p === 'cursor' ? cfg.cursorPath : cfg.opencodePath, home: os.homedir(), pathEnv: process.env.PATH ?? '' });
+  const acpPaths: Record<AcpProvider, string | undefined> = { cursor: cfg.cursorPath, opencode: cfg.opencodePath, grok: cfg.grokPath };
+  const acpBinary = (p: AcpProvider) => () => ACP_AGENTS[p].findBinary({ explicit: acpPaths[p], home: os.homedir(), pathEnv: process.env.PATH ?? '' });
   const updates = new CliUpdates({
     cfg,
     log,
@@ -297,6 +298,7 @@ async function main(): Promise<void> {
         log,
         toolsFor: codexStyleTools,
         extraGuidance: () => RICH_BLOCKS_LINE,
+        dataDir: cfg.home,
       }),
     ]),
   );
@@ -308,7 +310,7 @@ async function main(): Promise<void> {
     settings: () => cfg.models,
     claudePath: cfg.claudePath,
     registry,
-    askers: Object.fromEntries(ACP_PROVIDERS.filter((p) => PROVIDER_INFO[p].smallJobs).map((p) => [p, acpAsker({ agent: ACP_AGENTS[p], binary: acpBinary(p), registry, log })])),
+    askers: Object.fromEntries(ACP_PROVIDERS.filter((p) => PROVIDER_INFO[p].smallJobs).map((p) => [p, acpAsker({ agent: ACP_AGENTS[p], binary: acpBinary(p), registry, log, dataDir: cfg.home })])),
     poolHost: { pool: (id) => runner.smallModelPool(id), ranDry: (id) => runner.noteRanDry(id) },
   });
   const projects = new Projects({ home: cfg.home, clock: realClock, log });
@@ -420,13 +422,14 @@ async function main(): Promise<void> {
     log,
     elsewhere: (id) => peers.owns(id) || peers.isArriving(id),
     folderElsewhere: (id) => peers.find(id)?.cwd,
-    sendElsewhere: (id, text, scheduleId, run, since) => sendScheduled(runner, peers, id, text, scheduleId, run, since),
+    sendElsewhere: (id, text, scheduleId, run, since, preserve) => sendScheduled(runner, peers, id, text, scheduleId, run, since, preserve),
     self: { id: syncRunnerId, name: cfg.sync.name ?? defaultRunnerName(), icon: runnerIcon, version: RUNNER_VERSION, release: RELEASE.release, startedAt },
     syncOn: Boolean(cfg.sync.enabled && cfg.sync.url && readSyncKey(cfg.home)),
   });
   if (!copyOfReal) scheduler.start();
   // The done card's loose ends list the check-ins booked for a thread.
   runner.schedulesFor = (id) => scheduler.list(id);
+  runner.scheduleChecks = () => scheduler.localChecks();
   // Projects need the threads loaded (their counts, and the thread side of
   // membership); the librarian needs both.
   projects.start(runner);
@@ -700,8 +703,8 @@ async function main(): Promise<void> {
       publishUpdates();
     },
   });
-  // The LaunchAgent reinstalling itself when it's behind main (reinstall.ts):
-  // the Updates panel's Reinstall now, or by itself with selfReinstall on.
+  // The LaunchAgent updating itself when it's behind main (reinstall.ts):
+  // the Updates panel's Update it, or by itself with selfReinstall on.
   const reinstaller = new Reinstaller({
     home: cfg.home,
     checkout: updateRelease?.checkout,
@@ -711,10 +714,8 @@ async function main(): Promise<void> {
       const u = updater.status();
       return u.launcherChanged && u.launcherReason && u.launcherKey ? { reason: u.launcherReason, key: u.launcherKey } : undefined;
     },
-    // As a restart would wait: no busy thread, no old runner still finishing
-    // turns, and no restart of its own on the way (it would race the reinstall).
-    idle: () => !draining && restarter.busyThreads().length === 0 && peers.status().length === 0 && !restarter.status().pendingRestart,
     auto: () => experimentOn(cfg.home, 'selfReinstall'),
+    recheck: () => updater.recheckLauncher(),
     onChange: () => publishUpdates(),
   });
   // Mike's releases for a fork, and on Mike's own runner the tagging of
@@ -845,6 +846,9 @@ async function main(): Promise<void> {
     if (u.launcherChanged) out.launcherChanged = true;
     if (u.launcherReason) out.launcherReason = u.launcherReason;
     if (u.checkout) out.checkout = u.checkout;
+    // This runner's reinstall stages (stops nothing), so the app can say so;
+    // one from 14 Nov waited for idle and reinstalled.
+    if (u.launcherChanged) out.launcherStages = true;
     const reinstall = reinstaller.status();
     if (reinstall) out.reinstall = reinstall;
     if (u.followProblem) out.followProblem = u.followProblem;
@@ -881,7 +885,7 @@ async function main(): Promise<void> {
   };
   // tb updates (docs/protocol.md, "Mike's releases").
   methods['upstream.status'] = () => ({ upstream: upstream.status() });
-  // The Updates panel's Reinstall now (docs/protocol.md, "Runner updates").
+  // The Updates panel's Update it (docs/protocol.md, "Runner updates").
   methods['runner.reinstall'] = () => ({ reinstall: reinstaller.request() ?? null });
   // Other runners' threads, for the Mac app's sidebar (step 6 part 2).
   // `forTools`: a draining runner's agent tools (handover.ts primaryRemote),
@@ -1244,6 +1248,8 @@ async function main(): Promise<void> {
   // now: waking one starts its CLI, whose tools need what's set up above.
   runner.holdWaits = false;
   step('reconcile waits', () => runner.reconcileWaits());
+  // Reports held for a thread whose threads finished while it was down.
+  step('held reports', () => runner.settleAllHeld());
   // Reviews a runner that went away owed (runner/lab-review.ts).
   step('owed reviews', () => runner.startOwedReviews());
 

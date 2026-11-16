@@ -16,12 +16,12 @@ class AgentHeaderTest {
     }
 
     @Test fun aMovesThen() {
-        val header = AgentHeader.parse("[Sent by the agent before moving to /Users/m/dev/me/threadbear]\n\nCarry on with the tests")
-        assertEquals(AgentHeader("", "", "/Users/m/dev/me/threadbear", "Carry on with the tests"), header)
+        val header = AgentHeader.parse("[Sent by the agent before moving to /Users/a/code/threadbear]\n\nCarry on with the tests")
+        assertEquals(AgentHeader("", "", "/Users/a/code/threadbear", "Carry on with the tests"), header)
         assertNull(AgentHeader.parse("[Sent by the agent before moving to ]"))
     }
 
-    @Test fun mikesOwnWordsHaveNone() {
+    @Test fun theUsersOwnWordsHaveNone() {
         assertNull(user("Just a message").agentHeader)
         assertNull(user("[Sent by the agent in the thread \"x\" (abc)]", origin = "phone").agentHeader)
         assertNull(PhoneMessage(seq = 1, role = Role.ASSISTANT, text = "[Sent by the agent in the thread \"x\" (abc)]", at = Instant.ofEpochSecond(0)).agentHeader)

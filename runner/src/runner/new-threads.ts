@@ -39,6 +39,9 @@ export const newThreadsPart = {
     // worktree per thread.
     worktree?: boolean;
     startedBy?: ThreadStartedBy;
+    // Not to sit under the thread in startedBy in the sidebar
+    // (docs/protocol.md, "Nested threads").
+    detached?: boolean;
     // Started by a sandboxed thread's agent in a sandbox folder: shut in
     // one too (ThreadRecord.confined).
     confined?: boolean;
@@ -224,6 +227,7 @@ export const newThreadsPart = {
     scheduleId?: string;
     worktree?: boolean;
     startedBy?: ThreadStartedBy;
+    detached?: boolean;
     confined?: boolean;
     unconfine?: boolean;
   }): { st: ThreadState; notes: string[] } {
@@ -300,6 +304,8 @@ export const newThreadsPart = {
       // renamed, archived or deleted later.
       const from = startedBy.threadId ? this.threads.get(startedBy.threadId) : undefined;
       rec.startedBy = { ...startedBy, ...(from ? { threadTitle: from.rec.title } : {}) };
+      // Only means something for a thread another thread started.
+      if (params.detached && startedBy.kind === 'thread' && startedBy.threadId) rec.detached = true;
     }
     this.store.create(rec);
     const st: ThreadState = { rec, rt: newRuntime(this.clock.now()) };

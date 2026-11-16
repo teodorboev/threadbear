@@ -11,7 +11,7 @@ import fs from 'node:fs';
 // (convex-memory.ts, which checks validators and the schema as a deployment
 // does), and the relay and the phone read it back through theirs. So a field
 // that one copy along the way drops (the schema, the phone's ask, the relay's
-// rebuild of a card) shows as the routes disagreeing, not as a bug on Mike's
+// rebuild of a card) shows as the routes disagreeing, not as a bug on Alex's
 // backend. Nothing here touches the network or a model, so it's as quick and
 // steady as a unit test.
 import { makeHarness } from './fakes.ts';
@@ -24,7 +24,7 @@ import type { Post } from '../../src/sync.ts';
 
 const OWNER = 'owner-key';
 const TOKEN = 'phone-token';
-const RUNNER = 'bruce0000001';
+const RUNNER = 'mini0000001';
 const END_TURN = 'mcp__threadbear__end_turn';
 
 // What a person sees of a thread, on any of the three: its card and its messages.
@@ -53,14 +53,16 @@ export type Play = {
   /** The agent writes text. */
   say(text: string): void;
   /** The agent calls end_turn with these args, and the turn ends. */
-  endTurn(input: Record<string, unknown>): void;
-  /** Mike sends a message, with pictures (paths of real files) if any. */
+  endTurn(input: Record<string, unknown>, answerAll?: true): void;
+  /** Alex sends a message, with pictures (paths of real files) if any. */
   send(text: string, images?: ImageRef[]): void;
-  /** Mike sends from his phone, so every surface can mark where it came from. */
+  /** Alex sends from his phone, so every surface can mark where it came from. */
   sendFromPhone(text: string): void;
-  /** Mike presses Go ahead on the last plan (plans.approve). */
+  /** A reminder left in a busy thread's queue by an older runner. */
+  queuedReminder(text: string, scheduleId: string): void;
+  /** Alex presses Go ahead on the last plan (plans.approve). */
   approvePlan(): void;
-  /** The agent puts a Plan first plan to Mike (plan.proposed). */
+  /** The agent puts a Plan first plan to Alex (plan.proposed). */
   proposePlan(text: string): void;
   /** Turns on the done card's loose ends, with a check-in booked for this thread. */
   looseEnds(checkIn: { title: string; at: string }): void;
@@ -94,12 +96,12 @@ export async function threeWays(play: (p: Play) => void | Promise<void>) {
       throw e;
     }
   };
-  const { h, sync, ids } = await playInto(post as never, { key: OWNER, runnerId: RUNNER, name: 'bruce' }, [play]);
+  const { h, sync, ids } = await playInto(post as never, { key: OWNER, runnerId: RUNNER, name: 'mac-mini' }, [play]);
   const thread = { id: ids[0]! };
 
   const id = thread.id;
   const at = new Date(h.clock.now()).toISOString();
-  const remote = () => ({ runners: [{ id: RUNNER, name: 'bruce', online: true, lastSeenAt: at }], threads: [{ runnerId: RUNNER, threadId: id, title: 't', cwd: '/x', accountId: 'a', provider: 'claude', status: 'idle', needsYou: false, unread: true, preview: '', createdAt: at, lastActivityAt: at }] });
+  const remote = () => ({ runners: [{ id: RUNNER, name: 'mac-mini', online: true, lastSeenAt: at }], threads: [{ runnerId: RUNNER, threadId: id, title: 't', cwd: '/x', accountId: 'a', provider: 'claude', status: 'idle', needsYou: false, unread: true, preview: '', createdAt: at, lastActivityAt: at }] });
   const relay = new Relay({
     source: () => ({ key: OWNER, post: post as never, apiVersion: 999 }),
     remote,
@@ -174,11 +176,12 @@ export async function playInto(post: Post, runner: { key: string; runnerId: stri
         h.runner.approvePlan({ threadId: thread.id, itemId: lastPlan });
         h.adapter.last.init();
       },
-      endTurn: (input) => {
+      endTurn: (input, answerAll) => {
         const id = `e${++n}`;
         s.out({ kind: 'event', event: { type: 'tool.call', itemId: id, name: END_TURN, kind: 'mcp', title: 'threadbear: end_turn', input } });
         s.out({ kind: 'event', event: { type: 'tool.result', itemId: id, ok: true, text: 'ok', truncated: false, images: [] } });
-        s.result('completed');
+        const answered = [...(h.runner.mustGet(thread.id).rt.turn?.messages ?? [])];
+        s.result('completed', undefined, undefined, answerAll ? { answered } : {});
       },
       fail: (error) => s.result('failed', undefined, error),
       earlyStop: () => {
@@ -187,7 +190,7 @@ export async function playInto(post: Post, runner: { key: string; runnerId: stri
       },
       loginMoved: () => {
         const st = h.runner.threads.get(thread.id)!;
-        h.runner.moveLogin(st, { id: 'claude-1', title: 'mike@example.org', provider: 'claude' } as never, 'mike@example.net hit its 5-hour limit, back at 11:30 am');
+        h.runner.moveLogin(st, { id: 'claude-1', title: 'alex@example.org', provider: 'claude' } as never, 'alex@example.net hit its 5-hour limit, back at 11:30 am');
       },
       send: (text, images = []) => {
         h.runner.send(thread.id, text, images, {});
@@ -196,6 +199,9 @@ export async function playInto(post: Post, runner: { key: string; runnerId: stri
       sendFromPhone: (text) => {
         h.runner.send(thread.id, text, [], { origin: 'phone' });
         h.adapter.last.init();
+      },
+      queuedReminder: (text, scheduleId) => {
+        h.runner.send(thread.id, text, [], { origin: 'schedule', scheduleId, queue: true });
       },
       reviewed: (ledger) => {
         h.runner.threads.get(thread.id)!.rec.labReview = { ...ledger, delivered: ledger.rounds };
@@ -253,7 +259,7 @@ function lastNext(events: Record<string, any>[]): string[] {
   return (events.filter((e) => e.type === 'turn.completed').at(-1)?.next ?? []) as string[];
 }
 
-// Mike's messages and the agent's text, in order; tool rows left out. A
+// Alex's messages and the agent's text, in order; tool rows left out. A
 // plan is the agent's words too: the Mac draws it as its plan card, the
 // phone as its own (API 72), another Mac as a reply.
 function messagesOf(events: Record<string, any>[]): View['messages'] {

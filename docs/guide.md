@@ -1012,9 +1012,19 @@ runs. If the run ends with nothing for you, the thread goes back into the
 archive, so a watcher you've put away only lands in your inbox when it has
 something you need to act on.
 
-If a scheduled message has already entered a busy thread's queue, pausing,
-deleting or editing its schedule doesn't take it back. It keeps the words
-it had when sent.
+A reminder due while an agent is working waits until that turn ends. A
+newer run from the same schedule replaces its older queued reminder, so
+repeated check-ins don't pile up. Your messages and other threads' messages
+can still reach the agent while the reminder waits.
+Repeated Run now requests also replace a pending reminder from that schedule.
+Runner notifications also wait behind your messages and other threads' messages.
+If the agent answers a later message by archiving or hibernating the thread,
+older queued reminders wait with it. They don't start another turn immediately.
+New inputs arriving after the agent receives that later message still need handling.
+
+Pausing, deleting or editing a schedule doesn't take back a reminder already
+queued. Ordinary messages go ahead of reminders. Reminders carrying check
+output are kept separately so new items found by a check aren't lost.
 
 If an update leaves a thread on the old runner while a command finishes,
 its scheduled messages can still start turns there. An old runner from before
@@ -1200,20 +1210,33 @@ to continue, with the conversation carried across. It pins the thread to
 that Codex login. Anything you've typed in the message field stays there.
 The switch happens only when you click.
 
-OpenCode and Cursor, and other agent CLIs that speak the Agent Client
+OpenCode, Cursor and Grok, and other agent CLIs that speak the Agent Client
 Protocol, get threads of their own too. If one is installed and logged in
 it turns up as a login and a pool, with its models in the picker. OpenCode's
-free models work with no login; Cursor needs `agent login` first.
+free models work with no login; Cursor needs `agent login` first, and Grok
+`grok login`.
 Everything the agent wants to do comes through Threadbear first: on Ask and
 Plan first you get the usual cards, Auto behaves like Ask, and Full access
 goes ahead without them. A folder's own OpenCode config and plugins aren't
 read in these threads. Cursor can't be told to always ask, so its Ask, Auto
 and Plan first threads run in its read-only modes and can't change
-anything; to let Cursor change files, use Full access. Small jobs (titles
-and summaries) stay on Claude unless you pick a pool of only OpenCode
-logins for them in Settings. There are no usage readings, sandbox or going
-back to an earlier message for these yet, and Threadbear only updates their
-CLIs when you press Update in the Updates panel.
+anything; to let Cursor change files, use Full access. Grok's own settings
+(including your `~/.claude/settings.json`, which it reads) can tell it to
+go ahead by itself, so Threadbear starts it with a hook of its own that
+sends every write, command, web search and MCP tool call to you first,
+whatever those say; reading files inside the thread's folder goes ahead,
+and reading outside it asks. If Grok didn't load that hook (a folder's
+`.grok/config.toml` can turn plugins off), the thread stops before Grok can
+do anything. A folder you've trusted in Grok runs its own Grok hooks, which
+could act before anything asks you, so there (and in your home folder, which
+Grok always trusts) Grok threads need Full access;
+take the folder out of Grok's trusted folders (`/hooks-untrust`) to use Ask
+or Auto. Denying a card ends Grok's turn, as it does in Grok's own app. Grok's models each list their effort levels (low to extra
+high), and the effort you pick is the one it runs at. Small jobs (titles
+and summaries) stay on Claude unless you pick a pool of only OpenCode or
+Grok logins for them in Settings. There are no usage readings, sandbox or
+going back to an earlier message for these yet, and Threadbear only updates
+their CLIs when you press Update in the Updates panel.
 
 Titles, the librarian and Wake when… run on a Claude login, so with only
 Codex they don't happen: threads keep the first line of their first message
@@ -1293,9 +1316,14 @@ turn it off under Settings at the foot of the panel.
 ### Review by another lab
 
 When a thread changes code (five lines or more, not counting docs) and
-finishes with nothing for you to do, Threadbear has your other provider try
-to break the change: Codex reviews a Claude thread's change, and Claude a
-Codex one's. The review runs in a thread of its own in the same folder, with
+finishes with nothing for you to do, Threadbear has another lab try to
+break the change: Codex reviews a Claude thread's change, and Claude a
+Codex one's, to begin with. Settings › General › Code review lists who
+reviews, in order: drag them into the order you want, add any other
+provider you have a login for (Grok, say), and pick each one's model and
+effort. The first that isn't the thread's own provider and has a login
+with room does the review, so when one runs out for the week, the next
+takes over. The review runs in a thread of its own in the same folder, with
 the same permissions as the thread it reviews, and is told not to edit
 anything. Your thread says who is reviewing and waits. The reviewer gives a
 verdict: a list of concrete findings, or nothing that holds up. Then your
@@ -1559,8 +1587,11 @@ likely answers as buttons (type in the box to say something else; the one you ta
 a thread that's done offers its suggested next steps and Archive, which takes you back to the inbox as its row slides away. Hibernate from a thread's ... menu does the same, with its row sinking towards the Hibernating heading. Clear the last thread from the inbox and the bear waves at you, the once. Pull the inbox down and let go to reconnect to your Mac's mirror, if the list ever looks stuck. A new thread from the phone starts in your default folder; pick its model and effort under the message, or leave them on Default. With more than one runner it starts on the first one that's online in your order, so a sleeping Mac doesn't hold it up; pick another under Runner, or change the order in Settings > Runners > Change the order. The sheet closes as soon as you tap Start, and a row at the top of the inbox says Starting until that Mac has made the thread, which then opens. If it couldn't start, the row says why; tap it to open it again as you left it, photos and choices too. While a thread is working and nothing's typed, Send turns into Stop, as on the Mac, here and on the website; it spins until the turn has stopped. Anything typed while it works goes into that turn instead. Paste a photo straight into any message box, or add one with the photo button: it goes in where the cursor is as a chip, "Picture 1", as on the Mac, and pictures in your messages show as chips too. The photos you sent show over your message, where the Mac uploaded them for your website (on unless `"sync": { "pastedPictures": false }`); one that stayed on the Mac leaves a "[1 picture]" line instead. Pictures an agent puts in its reply or pins show in the thread, and animated GIFs play; tap one to see it full screen and pinch to zoom. An MP4 or MOV video an agent pins shows its first frame with a play button, and plays when you tap it. Anything over 10 MB, or from a thread that's been quiet for over two weeks, says it's on your Mac. To point one thread at another, use Copy Thread ID in its ... menu or the menu when you press and hold its row, and paste it into a message, here or on the Mac: it goes in as a link to that thread, with its title. When the Mac a thread runs on is asleep or offline, its message box says so, and what you send waits for it: each message shows faded with a Cancel under it until that Mac takes it, and Cancel puts its words back in the box. It can send notifications too,
 though you don't need them for any of that. It pairs with your Mac by scanning a
 QR code: on the Mac, Settings (⌘,) > Phone & browser > Show the code, then
-scan it with the iPhone app. Keep the code to yourself: anyone who scans it
-can run your agents. The same tab lists each paired phone and browser with
+scan it with Scan the code in the iPhone or Android app (not the Camera app:
+the code isn't a link, so the Camera only shows it as text). Keep the code to
+yourself: it works once, for ten minutes, and whoever scans it first can run
+your agents. To pair a phone that's paired already, Unpair it in its Settings
+first. The same tab lists each paired phone and browser with
 when it was paired and until when (90 days), and Revoke signs one out and
 stops its notifications; Settings > Unpair this phone on the iPhone forgets it from that side. The
 terminal command setup used to print still works too:
@@ -1648,6 +1679,11 @@ page and on the shared page while you're signed in.
 
 The Mac app also draws a picture an agent writes into its reply with a path
 on your Mac (`![a chart](/path/to/chart.png)`), rather than showing a link.
+A picture written as a web address (`![a chart](https://example.com/c.png)`)
+is a link everywhere, on the Mac, the phone and the website: tap or click
+it to open it in your browser. Threadbear never fetches one by itself, so
+whoever runs that site can't tell you're reading. On the phone a reply
+draws its first 10 pictures; any past that show as their names.
 
 ## Self-hosting your backend
 <!-- slug: self-hosting -->
@@ -1984,11 +2020,10 @@ you. Right-click it for a quick Restart to Update.
 
 A few parts of the runner (the program that keeps it going, and the small
 Threadbear Runner app macOS names in its privacy prompts) don't come with
-its updates, only with reinstalling it. When one of them is behind, the
-Updates panel says which and has a Reinstall now button. Reinstalling
-restarts the runner, so it waits until no thread is busy, then runs on its
-own and is back in a minute or so. If the new runner doesn't come up, the
-old one is put back and the panel says why, with Try again and the log.
+its updates. When one of them is behind, the Updates panel says which and
+has an Update it button. Updating them stops nothing: the new ones are put
+in place and take over the next time your Mac restarts or you log in
+again. If it doesn't work, the panel says why, with Try again and the log.
 
 ### Mike's updates
 
@@ -2033,8 +2068,10 @@ to the new Threadbear app", in your checkout, and the window closes once it's
 made. The card then shows that thread, what it's doing and Open the thread.
 The thread builds the new app on your Mac from your checkout's `main` with
 `desktop/scripts/switch-from-swift.sh`, at background priority, which takes
-about 10 minutes the first time and installs Rust first if there's no
-`cargo` (docs/on-your-mac.md says what that puts where). If something stops
+20 to 40 minutes the first time and installs Rust first if there's no
+`cargo` (docs/on-your-mac.md says what that puts where). It needs about 5 GB
+free with Rust to install, 4 without, and says so before it starts if
+there isn't that much. If something stops
 it (Xcode's command line tools, Rust, disk space, a build error) the thread
 works out why and fixes it, or asks you. When the app's installed it asks
 whether to switch now, with Switch now and Later, and only switches when you

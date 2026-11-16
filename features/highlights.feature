@@ -42,7 +42,7 @@ Feature: Highlights, what a thread has made and shared
     And the "Pinned" highlight "home.html" sits in "mockups"
     And the "Files" highlight "copy-review.md" says "Written"
     And the "Files" highlight "copy-review.md" sits in "docs"
-    And the "Links" highlight "mikecann/site#48" says "Created"
+    And the "Links" highlight "alex-example/site#48" says "Created"
 
   @highlights.changes
   Scenario: Commits say where they went and the edited files fold away
@@ -105,7 +105,7 @@ Feature: Highlights, what a thread has made and shared
     Then its menu offers "Preview here | Open | Reveal in Finder | Copy path | --- | Remove"
     When I right-click the highlight "9f3c2e1"
     Then its menu offers "Copy sha | --- | Remove"
-    When I right-click the highlight "mikecann/site#48"
+    When I right-click the highlight "alex-example/site#48"
     Then its menu offers "Copy link | Remove"
 
   @highlights.rowmenus

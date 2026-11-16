@@ -614,7 +614,7 @@ test('lineTooLarge: an item whose completion line was skipped closes as "Too lar
 test('a 2.5 MB image completion line decodes and saves, and closeOpen ends what is left', () => {
   const e = env();
   const n = new CodexNormalizer(e.ctx);
-  // A real PNG with 1.9 MB of padding after its end, as big as Mike's real
+  // A real PNG with 1.9 MB of padding after its end, as big as Alex's real
   // generated images get on the wire.
   const big = Buffer.concat([makePng(800, 800, [1, 2, 3]), Buffer.alloc(1_900_000, 7)]);
   const line = JSON.stringify({ method: 'item/completed', params: { threadId: 'th', item: { type: 'imageGeneration', id: 'ig', status: 'completed', revisedPrompt: 'x', result: big.toString('base64'), failure: null } } });
@@ -688,11 +688,11 @@ test("a machine's generic user name is not a private one, and a person's still i
   assert.deepEqual(localNames('runner', 'runnervm1a2b3c'), ['runnervm1a2b3c']);
   assert.deepEqual(localNames('root', 'localhost'), []);
   assert.deepEqual(localNames('Runner', 'ci.local'), [], 'any case, and a host too short to mean anything');
-  assert.deepEqual(localNames('mike', 'Mikes-MacBook-Pro.local'), ['mike', 'Mikes-MacBook-Pro']);
+  assert.deepEqual(localNames('alex', 'Alexs-MacBook-Pro.local'), ['alex', 'Alexs-MacBook-Pro']);
   assert.deepEqual(localNames('', 'Bobs-Mac.lan'), ['Bobs-Mac'], 'no user name to check for');
   // And a fixture that talks about the runner is clean there, but not with a real name given
   assert.deepEqual(leaks('{"x":"the runner restarts"}', [], localNames('runner', 'runnervm1a2b3c')), []);
-  assert.ok(leaks('{"x":"the mike restarts"}', [], localNames('mike', 'ci')).length);
+  assert.ok(leaks('{"x":"the alex restarts"}', [], localNames('alex', 'ci')).length);
 });
 
 test('the committed Codex fixtures hold nothing private', () => {

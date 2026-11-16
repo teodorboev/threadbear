@@ -1,7 +1,7 @@
 {
   "id": "demo_codex_poster",
   "title": "Make a poster for the meetup",
-  "cwd": "/Users/mike/dev/meetup-site",
+  "cwd": "/Users/alex/dev/meetup-site",
   "accountId": "codex-main",
   "provider": "codex",
   "model": "gpt-6.1-sol",

@@ -19,7 +19,7 @@ import type { Logger } from './log.ts';
 import { currentLink, readRelease, readState, type ReleaseJson } from './release.ts';
 import type { RestartResult } from './restart.ts';
 import { atomicWriteFileSync, readJsonSync } from './fsutil.ts';
-import { launcherKey } from './reinstall.ts';
+import { launcherKey, RUNS_NODE_REASON } from './reinstall.ts';
 import { inBackground } from './background.ts';
 import type { UpdateFailure } from './fix-update.ts';
 import { machineTrouble } from './machine-trouble.ts';
@@ -656,6 +656,24 @@ export class RunnerUpdater {
     return out;
   }
 
+  // launchAgentBehind against main's runner/ in the updater's clone.
+  private compareLauncher(dir: string): void {
+    const { release, home } = this.deps;
+    if (!release?.prefix) return;
+    this.launcherReason = launchAgentBehind(path.join(dir, release.prefix), home, this.deps.env ?? process.env, this.deps.findLauncherApp, this.deps.platform);
+    this.launcherChanged = this.launcherReason !== undefined;
+    this.launcherKey = this.launcherChanged ? launcherKey(path.join(dir, release.prefix)) : undefined;
+  }
+
+  // The installed launcher compared again with the main the last check saw,
+  // without a check: after the runner staged it (reinstall.ts), so its
+  // result is judged on the files as they are now, not five minutes ago.
+  recheckLauncher(): void {
+    if (this.state === 'off' || !this.checkedAt) return;
+    this.compareLauncher(path.join(updateDir(this.deps.home), 'src'));
+    this.deps.onChange?.();
+  }
+
   private tick(): void {
     this.timer = undefined;
     void this.check().finally(() => {
@@ -697,9 +715,7 @@ export class RunnerUpdater {
       this.checkedAt = new Date(this.deps.clock.now()).toISOString();
       this.commit = main.commit;
       this.subject = main.subject;
-      this.launcherReason = launchAgentBehind(path.join(dir, release.prefix), home, this.deps.env ?? process.env, this.deps.findLauncherApp, this.deps.platform);
-      this.launcherChanged = this.launcherReason !== undefined;
-      this.launcherKey = this.launcherChanged ? launcherKey(path.join(dir, release.prefix)) : undefined;
+      this.compareLauncher(dir);
       if (origin) {
         this.behindNote = await this.behindTrouble(origin, main, release);
         this.followProblem = joined(this.originTrouble, this.behindNote);
@@ -969,7 +985,7 @@ export function launchAgentBehind(
   if (onMain && env.THREADBEAR_SUPERVISED === '1' && platform === 'darwin') {
     const app = env.THREADBEAR_RUNNER_APP || findApp();
     if (!app) {
-      why.push('The LaunchAgent still runs node, not Threadbear Runner.app, so privacy prompts say "node".');
+      why.push(RUNS_NODE_REASON);
     } else {
       let built: unknown;
       try {

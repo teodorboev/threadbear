@@ -1,7 +1,7 @@
 {
   "id": "demo_ci_slow",
   "title": "Why is the build slow on CI?",
-  "cwd": "/Users/mike/dev/me/misc",
+  "cwd": "/Users/alex/code/misc",
   "accountId": "claude-main",
   "provider": "claude",
   "permissionMode": "full",

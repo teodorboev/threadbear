@@ -26,6 +26,7 @@ use std::time::Duration;
 
 use threadbear_core::inbox::{iso_time, InboxOrder, ThreadSummary};
 use threadbear_core::juice;
+use threadbear_core::nested;
 use threadbear_core::sidebar::{self as rows, RowAction, RowLook, RowMode, Tile, TrailingKind};
 use crate::tips::Tip as _;
 
@@ -124,7 +125,10 @@ impl Threadbear {
             } else {
                 total
             };
-            out.extend(section.rows.iter().take(shown).map(|t| t.id.clone()));
+            let nesting = self.shown_nesting(cx, now);
+            for t in section.rows.iter().take(shown) {
+                self.with_group(&t.id, nesting.as_deref(), &mut out);
+            }
         }
         out
     }
@@ -297,6 +301,9 @@ pub(crate) enum MenuAction {
     CopyTranscript,
     OpenOnWeb,
     ThreadProject { thread: String, add: Option<String>, remove: Option<String> },
+    /// Move Out From Under its starter (`true`) or Put Back Under it
+    /// (`false`): `threads.update`'s `detached` (nested threads).
+    Detach(bool),
     /// A project's menu, or one of a thread's that acts on projects (projects.rs).
     Project(crate::projects::ProjectAction),
     /// Runs on: where the new thread starts, its default, and a folder on
@@ -326,6 +333,9 @@ pub(crate) struct SidebarState {
     pub(crate) hover_override: Option<String>,
     pub(crate) archive_limit: usize,
     pub(crate) menu: Option<OpenMenu>,
+    /// Groups of nested threads Mike opened or folded himself, by starter,
+    /// kept while the app runs (nested.rs `group_open`).
+    pub(crate) nest_choices: HashMap<String, nested::FoldChoice>,
     /// Work on the way that has no optimistic state ("delete:<id>"): its
     /// control shows a spinner and stops taking clicks (`AppModel+Busy`).
     pub(crate) busy: HashSet<String>,
@@ -412,6 +422,7 @@ impl SidebarState {
             hover_override: None,
             archive_limit: rows::ARCHIVE_FIRST,
             menu: None,
+            nest_choices: HashMap::new(),
             busy: HashSet::new(),
             loaded: false,
             project_icons: HashMap::new(),
@@ -495,6 +506,11 @@ pub(crate) mod metrics {
     /// `SubagentRowView.trunk`: the tree line runs down the middle of the tile.
     pub const TRUNK: f32 = LEADING + 15.;
     pub const INDENT: f32 = 18.;
+    /// A nested thread's row (nested threads), in from its starter's, and
+    /// the line down its left from the starter's tile, as mockup sub-A.
+    pub const NEST_INDENT: f32 = 22.;
+    pub const NEST_GUIDE: f32 = LEADING + 4.;
+    pub const NEST_TILE: f32 = 24.;
 }
 pub(crate) use metrics::*;
 
@@ -569,7 +585,14 @@ impl Threadbear {
     /// The Starred, Inbox and Running rows in order (`sections.all`), for
     /// picking what to open when the open thread goes away.
     fn live_row_ids(&self, cx: &App, now: i64) -> Vec<String> {
-        self.shown_sections(cx, now).iter().filter(|s| matches!(s.key, "starred" | "inbox" | "running")).flat_map(|s| s.rows.iter().map(|t| t.id.clone())).collect()
+        let nesting = self.shown_nesting(cx, now);
+        let mut out = Vec::new();
+        for section in self.shown_sections(cx, now).iter().filter(|s| matches!(s.key, "starred" | "inbox" | "running")) {
+            for t in &section.rows {
+                self.with_group(&t.id, nesting.as_deref(), &mut out);
+            }
+        }
+        out
     }
 
     /// The row after this one, or before it when it's the last
@@ -596,6 +619,88 @@ impl Threadbear {
                 self.selected = None;
                 self.leave_pane(cx);
                 cx.notify();
+            }
+        }
+    }
+
+    /// The nestedThreads experiment is on for this Mac's runner: Settings'
+    /// switch first, as it changes without a new hello, else the hello's
+    /// list (as `open_anything_on`).
+    pub(crate) fn nested_threads_on(&self) -> bool {
+        let id = nested::EXPERIMENT;
+        let switch = self.runner_settings.as_ref().and_then(|s| s["experiments"].as_array()?.iter().find(|e| e["id"] == id).map(|e| e["on"].as_bool() == Some(true)));
+        switch.unwrap_or_else(|| self.remote.experiments.iter().any(|e| e == id))
+    }
+
+    /// The line above a thread's transcript saying which thread started it,
+    /// with the experiment on (thread.rs).
+    pub(crate) fn started_line(&self, t: &ThreadSummary) -> Option<nested::StartedLine> {
+        if !self.nested_threads_on() {
+            return None;
+        }
+        let starter = t.started_by.as_ref().and_then(|b| b.get("threadId")).and_then(Value::as_str).and_then(|id| self.threads.get(id));
+        nested::started_line(t, starter.map(|s| &**s))
+    }
+
+    /// Moves a nested thread out from under the thread that started it, or
+    /// back under it: the row moves at once, and back again if the runner
+    /// refuses (`update_thread`).
+    pub(crate) fn set_detached(&mut self, id: &str, detached: bool, cx: &mut Context<Self>) {
+        self.update_thread(id, move |t| t.detached = detached.then_some(true), json!({ "detached": detached }), cx);
+    }
+
+    /// Whether a group shows its threads: Mike's own choice while it stands,
+    /// else open while one of them waits on him (nested.rs `group_open`).
+    pub(crate) fn group_open(&mut self, starter: &str, group: &nested::Group) -> bool {
+        let choice = self.sidebar.nest_choices.get(starter).copied();
+        let (open, keep) = nested::group_open(choice, group);
+        if !keep {
+            self.sidebar.nest_choices.remove(starter);
+        }
+        open
+    }
+
+    /// `group_open` for reading only (the arrow keys, `dump`).
+    pub(crate) fn group_shown(&self, starter: &str, group: &nested::Group) -> bool {
+        nested::group_open(self.sidebar.nest_choices.get(starter).copied(), group).0
+    }
+
+    /// The count on a starter's row: opens or folds its group, at once.
+    /// `open` is whether it's open now; `opens_itself`, whether one of its
+    /// threads waits on Mike (nested.rs `toggled`).
+    pub(crate) fn toggle_group(&mut self, starter: &str, open: bool, opens_itself: bool, cx: &mut Context<Self>) {
+        let choice = nested::FoldChoice { open: !open, opened_itself: opens_itself };
+        self.sidebar.nest_choices.insert(starter.to_owned(), choice);
+        self.notify_threads_panel(cx);
+        cx.notify();
+    }
+
+    /// Opens the group a nested thread is in, so its row can be seen (a
+    /// thread opened from outside the list).
+    pub(crate) fn open_group_of(&mut self, id: &str, cx: &mut Context<Self>) {
+        let Some(nesting) = self.shown_nesting(cx, now_ms()) else { return };
+        let Some(top) = nesting.top_of(id) else { return };
+        let Some(group) = nesting.group(top) else { return };
+        if !self.group_shown(top, group) {
+            self.sidebar.nest_choices.insert(top.to_owned(), nested::FoldChoice { open: true, opened_itself: group.opens_itself() });
+        }
+    }
+
+    /// The "N finished" line: the starter, with Highlights open on what it
+    /// started (its "Threads it started" lists the finished ones too).
+    pub(crate) fn show_finished(&mut self, starter: String, window: &mut Window, cx: &mut Context<Self>) {
+        self.open(starter, window, cx);
+        self.show_pane(crate::shell::HIGHLIGHTS, cx);
+        cx.notify();
+    }
+
+    /// The ids of a row and the rows of its group that are showing, top to
+    /// bottom, for the arrow keys.
+    fn with_group(&self, id: &str, nesting: Option<&nested::Nesting>, out: &mut Vec<String>) {
+        out.push(id.to_owned());
+        if let Some(group) = nesting.and_then(|n| n.group(id)) {
+            if self.group_shown(id, group) {
+                out.extend(group.children.iter().cloned());
             }
         }
     }
@@ -898,6 +1003,7 @@ impl Threadbear {
                 }
             }
             MenuAction::ThreadProject { thread, add, remove } => self.set_thread_projects(thread, add, remove, cx),
+            MenuAction::Detach(detached) => self.set_detached(&id, detached, cx),
             MenuAction::MoveTo(runner_id, runner_name) => self.open_move(crate::move_sheet::MoveRequest { thread_id: id, runner_id, runner_name }, window, cx),
             MenuAction::CancelMove => self.cancel_move(id, cx),
             MenuAction::Sort(_)
@@ -936,6 +1042,16 @@ impl Threadbear {
             rows.push(MenuRow::item("Delete…", "trash", MenuAction::Delete));
         } else {
             rows.push(MenuRow::item("Archive", "archivebox", MenuAction::Archive));
+        }
+        // Move Out From Under, or Put Back Under, the thread that started it
+        // (nested threads). Dragging it in or out is planned, once Mike has
+        // seen a clip of the drag (AGENTS.md).
+        if self.nested_threads_on() {
+            let find = |id: &str| self.threads.get(id).map(|t| &**t);
+            if let Some((title, detach)) = nested::menu_line(t, &find) {
+                let symbol = if detach { "arrow.up.forward" } else { "arrow.turn.down.right" };
+                rows.push(MenuRow::item(title, symbol, MenuAction::Detach(detach)));
+            }
         }
         // Projects ▸ (`ThreadProjectsMenu`): projects are this Mac's runner's,
         // and another runner's threads aren't in them.
@@ -1125,6 +1241,7 @@ impl Threadbear {
         let query = self.search.read(cx).value().trim().to_lowercase();
         let searching = !query.is_empty();
         let mut sections = self.shown_sections(cx, now);
+        let nesting = self.shown_nesting(cx, now);
         // A thread whose page is on its way to Archived or Hibernating isn't
         // listed or counted there until it lands (archive_flight.rs). Only
         // then a copy, as most frames have nothing in flight.
@@ -1198,7 +1315,14 @@ impl Threadbear {
                     let keep = selected || self.sidebar.hovered.as_deref() == Some(t.id.as_str()) || self.sidebar.menu.as_ref().is_some_and(|m| m.thread.as_deref() == Some(t.id.as_str()));
                     let gap = if keep { None } else { far.far(&t.id) };
                     let row = gap.is_none().then(|| {
-                        let row = self.render_row(t, section.key, wake, now, &clock, &p, cx);
+                        let nest = match nesting.as_ref().and_then(|n| n.group(&t.id)).cloned() {
+                            Some(group) => {
+                                let open = self.group_open(&t.id, &group);
+                                Nest::Starter { words: nested::group_words(&group), tip: nested::toggle_tip(open, &group), open, needs_you: group.needs_you > 0 }
+                            }
+                            None => Nest::None,
+                        };
+                        let row = self.render_row_with(t, section.key, wake, now, &clock, &p, nest, cx);
                         // The open row closes up as its page flies, lifting the
                         // heading below it, which the flight allows for.
                         if selected {
@@ -1212,6 +1336,13 @@ impl Threadbear {
                     if !matches!(section.key, "hibernating" | "archived") {
                         for (i, sub) in self.render_subagents(t, section.key, now, &p, cx).into_iter().enumerate() {
                             body = place(format!("sub:{}:{i}", t.id), sub, body);
+                        }
+                    }
+                    // The threads it started, indented under it while its
+                    // group's open (nested threads), as sub-agents are.
+                    if let Some(group) = nesting.as_ref().and_then(|n| n.group(&t.id)).cloned() {
+                        for (key, el) in self.render_group(t, &group, now, &clock, &p, cx) {
+                            body = place(key, el, body);
                         }
                     }
                 }
@@ -1510,11 +1641,20 @@ impl Threadbear {
     }
 
     /// `ThreadRowView`: tile, title, place line, status or hover buttons.
-    pub(crate) fn render_row(&mut self, t: &ThreadSummary, section: &'static str, wake: Option<&threadbear_core::inbox::Wake>, now: i64, clock: &Clock, p: &Palette, cx: &mut Context<Self>) -> AnyElement {
+    /// `nest`: as the head of a group of nested threads, or one of them.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn render_row_with(&mut self, t: &ThreadSummary, section: &'static str, wake: Option<&threadbear_core::inbox::Wake>, now: i64, clock: &Clock, p: &Palette, nest: Nest, cx: &mut Context<Self>) -> AnyElement {
         let mode = RowMode::of(section, t, now);
         // The Hibernating and Archived rows read plainly; only live ones say
         // what they're doing (`ThreadRowView.body`).
-        let look = if mode == RowMode::Inbox { RowLook::of(t, Some(section)) } else { RowLook::PLAIN };
+        let mut look = if mode == RowMode::Inbox { RowLook::of(t, Some(section)) } else { RowLook::PLAIN };
+        // A folded group's head carries its threads' needs-you dot; open,
+        // each thread carries its own (one mark, one meaning).
+        if let Nest::Starter { open: false, needs_you: true, .. } = &nest {
+            look.unread = true;
+            look.done = false;
+        }
+        let nested_row = matches!(nest, Nest::Child { .. });
         let trailing = rows::trailing(t, &look, mode, clock, wake);
         let id = t.id.clone();
         // Not while a page is in the thread's place: it isn't what's showing.
@@ -1543,10 +1683,16 @@ impl Threadbear {
         // in the tile's tooltip, faded when that machine's offline
         // (`ThreadRowView.body`).
         let runner_tile = t.runner_id.as_deref().filter(|_| t.projects.as_ref().is_none_or(|ps| ps.is_empty())).map(|id| (self.runner_icon_symbol(Some(id)), self.runner_place_of(id)));
-        let tile = render_tile(t, &look, behind, project_icon, runner_tile, p);
+        let tile = render_tile(t, &look, behind, project_icon, runner_tile, if nested_row { NEST_TILE } else { TILE }, p);
         let offline = t.runner_id.as_deref().is_some_and(|id| self.remote.runners.iter().any(|r| r.id == id && !r.online));
 
-        let byline = rows::byline(t);
+        // A nested thread's row says where it's up to, not who started it:
+        // the row it hangs from says that.
+        let child = match &nest {
+            Nest::Child { line, question } => Some((line.clone(), *question)),
+            _ => None,
+        };
+        let byline = if child.is_some() { None } else { rows::byline(t) };
         let place = t.place();
         let runner_label = self.runner_label(t);
         let place_tip_text = if byline.is_some() { byline.as_ref().unwrap().tip.clone() } else { rows::place_tip(t) };
@@ -1567,11 +1713,45 @@ impl Threadbear {
             // Fades over to a new name, as the agent names a new thread (open_motion.rs).
             .child(crate::open_motion::title(&t.id, &format!("row-{section}"), title.into(), cx.reduce_motion()));
 
+        let question_colour = style::needs_you_text(cx);
+        // The head of a group: its count after the place, which opens or
+        // folds the group ("Threadbear GPUI port · 1 needs you").
+        let group_toggle = match &nest {
+            Nest::Starter { words, tip, open, needs_you } => {
+                // The words in full in the tooltip too, as a narrow list cuts them short.
+                let (starter, tip, open, needs_you) = (id.clone(), format!("{tip} ({words})"), *open, *needs_you);
+                let hover_fg = p.fg;
+                Some(
+                    // Never cut short: the count is the point of the line and
+                    // the group's toggle, so the place gives way first, down
+                    // to nothing.
+                    tipped!(h_flex().flex_none().items_baseline().gap(px(3.)).ml(px(-2.)).text_color(secondary).hover(move |s| s.text_color(hover_fg)), ElementId::Name(format!("group-{id}").into()), tip)
+                        .child(div().flex_none().whitespace_nowrap().text_size(px(style::size::SIDEBAR_META + 1.)).line_height(px(15.)).child(format!("\u{b7} {words}")))
+                        .child(div().flex_none().child(icon(if open { "chevron.down" } else { "chevron.right" }, 8., secondary)))
+                        // Not the row's own press, which opens the thread.
+                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                        .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.toggle_group(&starter, open, needs_you, cx))),
+                )
+            }
+            _ => None,
+        };
         let second_line = h_flex()
             .items_baseline()
             .gap(px(6.))
-            .child(
-                h_flex()
+            .child(match child {
+                // A nested thread: its question in orange while it waits on
+                // Mike, else where it's up to.
+                Some((line, question)) => div()
+                    .id(place_id)
+                    .min_w_0()
+                    .truncate()
+                    .text_size(px(style::size::SIDEBAR_META + 1.))
+                    .line_height(px(15.))
+                    .text_color(if question { question_colour } else { secondary })
+                    .tip(line.clone())
+                    .child(line)
+                    .into_any_element(),
+                None => h_flex()
                     .id(place_id)
                     .min_w_0()
                     .items_baseline()
@@ -1579,8 +1759,10 @@ impl Threadbear {
                     .text_color(secondary)
                     .tip(place_tip_text.clone())
                     .when_some(byline.as_ref(), |s, b| s.child(icons::try_symbol(&b.symbol).unwrap_or_else(|| icons::symbol("wrench.and.screwdriver")).with_size(px(style::size::SIDEBAR_META)).text_color(secondary).flex_none()))
-                    .child(div().min_w_0().truncate().text_size(px(style::size::SIDEBAR_META + 1.)).line_height(px(15.)).child(place)),
-            )
+                    .child(div().min_w_0().truncate().text_size(px(style::size::SIDEBAR_META + 1.)).line_height(px(15.)).child(place))
+                    .into_any_element(),
+            })
+            .children(group_toggle)
             // Its own text after the place, kept whole while a long project
             // name is cut short, and capped, as a runner's name can be any
             // length (`CappedWidth(limit: 100)` in ThreadRowView).
@@ -1628,9 +1810,11 @@ impl Threadbear {
             .gap(px(10.))
             .pt(px(8.))
             .pb(px(8.))
-            .pl(px(LEADING))
+            .pl(px(LEADING + if nested_row { NEST_INDENT } else { 0. }))
             .pr(px(TRAILING))
             .rounded(px(CORNER))
+            // A nested thread's line down from the tile of the row it hangs from.
+            .when(nested_row, |s| s.child(div().absolute().left(px(NEST_GUIDE)).top_0().bottom_0().w(px(1.)).bg(p.guide)))
             // Not while it slides here: `selection_marker` draws it then.
             .when(selected && !self.sidebar.selection_sliding, |s| s.bg(bg_sel))
             .when(!selected && show_buttons, |s| s.bg(bg_hover))
@@ -1669,6 +1853,46 @@ impl Threadbear {
             .when(is_sample, |s| s.children(crate::tour::mark(threadbear_core::tour::Target::SampleRow(t.title.clone()))))
             .into_any_element();
         self.swipe_slot(&id, swipe_action, row, cx)
+    }
+
+    /// The rows under a starter whose group is open: its threads, then
+    /// "N finished" for its archived ones (nested threads). Keyed for the
+    /// row motion, so a thread moving in or out of a group glides there.
+    fn render_group(&mut self, starter: &ThreadSummary, group: &nested::Group, now: i64, clock: &Clock, p: &Palette, cx: &mut Context<Self>) -> Vec<(String, AnyElement)> {
+        if !self.group_open(&starter.id, group) {
+            return vec![];
+        }
+        let mut out = vec![];
+        let children: Vec<std::sync::Arc<ThreadSummary>> = group.children.iter().filter_map(|id| self.threads.get(id).cloned()).collect();
+        for c in &children {
+            let (line, question) = nested::child_line(c, now);
+            // Running's look (a working one shows just its clock, as in the
+            // mockup), or Hibernating's for one that's asleep.
+            let section = if c.snoozed(now) { "hibernating" } else { "running" };
+            let row = self.render_row_with(c, section, None, now, clock, p, Nest::Child { line, question }, cx);
+            out.push((c.id.clone(), row));
+        }
+        if !group.finished.is_empty() {
+            let id = starter.id.clone();
+            let words = nested::finished_words(group.finished.len());
+            let title = if starter.title.is_empty() { "Untitled".to_string() } else { starter.title.clone() };
+            let (secondary, fg, guide) = (p.secondary, p.fg, p.guide);
+            let line = h_flex()
+                .relative()
+                .pl(px(LEADING + NEST_INDENT))
+                .pt(px(4.))
+                .pb(px(8.))
+                .child(div().absolute().left(px(NEST_GUIDE)).top_0().bottom_0().w(px(1.)).bg(guide))
+                .child(
+                    tipped!(h_flex().items_center().gap(px(3.)).text_color(secondary).hover(move |s| s.text_color(fg)), ElementId::Name(format!("finished-{id}").into()), format!("Open {title} and the threads it started"))
+                        .child(div().text_size(px(style::size::SIDEBAR_META + 1.)).line_height(px(15.)).child(words))
+                        .child(icon("chevron.right", 8., secondary))
+                        .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| this.show_finished(id.clone(), window, cx))),
+                )
+                .into_any_element();
+            out.push((format!("finished:{}", starter.id), line));
+        }
+        out
     }
 
     /// `RowActions`: the small buttons a row shows on hover in place of its
@@ -1804,6 +2028,33 @@ impl Threadbear {
         };
         let shown = self.shown_sections(cx, now);
         let searching = !self.search.read(cx).value().trim().is_empty();
+        // A group of nested threads: what its head's count says, whether
+        // it's open, its threads as drawn (each with its second line), and
+        // how many are finished.
+        let nesting = self.shown_nesting(cx, now);
+        let group = |t: &ThreadSummary| -> Value {
+            let Some(g) = nesting.as_ref().and_then(|n| n.group(&t.id)) else { return Value::Null };
+            let open = self.group_shown(&t.id, g);
+            let threads: Vec<Value> = g
+                .children
+                .iter()
+                .filter_map(|id| self.threads.get(id))
+                .map(|c| {
+                    let section = if c.snoozed(now) { "hibernating" } else { "running" };
+                    let (line, question) = nested::child_line(c, now);
+                    let mut v = row(c, Some(section));
+                    v["line"] = json!(line);
+                    v["question"] = json!(question);
+                    v
+                })
+                .collect();
+            json!({
+                "words": nested::group_words(g), "open": open, "needsYou": g.needs_you, "working": g.working,
+                "finished": g.finished.len(), "threads": if open { threads } else { vec![] },
+                // The head's needs-you dot is the group's only while folded.
+                "dot": !open && g.needs_you > 0,
+            })
+        };
         let sections: Vec<Value> = shown
             .iter()
             .map(|s| {
@@ -1813,20 +2064,49 @@ impl Threadbear {
                     let selected = self.selected.as_ref().and_then(|id| s.rows.iter().position(|t| &t.id == id));
                     rows::archive_rows(s.rows.len(), self.sidebar.archive_limit, searching, selected).0
                 });
-                json!({ "name": s.title, "collapsed": folded, "count": count, "shown": drawn, "threads": s.rows.iter().map(|t| row(t, Some(s.key))).collect::<Vec<_>>() })
+                let threads: Vec<Value> = s
+                    .rows
+                    .iter()
+                    .map(|t| {
+                        let mut v = row(t, Some(s.key));
+                        let g = group(t);
+                        if !g.is_null() {
+                            if g["dot"] == json!(true) {
+                                v["mark"] = json!("dot");
+                            }
+                            v["group"] = g;
+                        }
+                        v
+                    })
+                    .collect();
+                json!({ "name": s.title, "collapsed": folded, "count": count, "shown": drawn, "threads": threads })
             })
             .collect();
         let snoozed = shown.iter().find(|s| s.key == "hibernating").map_or(0, |s| s.rows.len());
         let archived = shown.iter().find(|s| s.key == "archived").map_or(0, |s| s.rows.len());
-        json!({ "mode": "inbox", "sections": sections, "snoozed": snoozed, "archived": archived, "sort": self.sidebar.order.name(), "loading": !self.sidebar.loaded })
+        json!({ "mode": "inbox", "sections": sections, "snoozed": snoozed, "archived": archived, "sort": self.sidebar.order.name(), "loading": !self.sidebar.loaded, "nested": nesting.is_some() })
     }
 
     /// `row` as `dump` shows the open thread (`selection`).
     #[cfg(feature = "automation")]
     pub(crate) fn selection_dump(&self) -> Value {
         let Some(t) = self.selected.as_ref().and_then(|id| self.threads.get(id)) else { return Value::Null };
-        json!({ "id": t.id, "title": t.title, "status": t.status, "needsYou": t.needs_you, "unread": RowLook::of(t, None).unread, "runner": t.runner_id.as_deref().map(|id| self.runner_place_of(id)) })
+        // The line above its transcript naming the thread that started it.
+        let started = self.started_line(t).map(|l| json!({ "text": l.text(), "threadId": l.thread_id }));
+        json!({ "id": t.id, "title": t.title, "status": t.status, "needsYou": t.needs_you, "unread": RowLook::of(t, None).unread, "runner": t.runner_id.as_deref().map(|id| self.runner_place_of(id)), "startedBy": started })
     }
+}
+
+/// What else a row is in a group of nested threads (nested.rs).
+#[derive(Clone, Debug, Default)]
+pub(crate) enum Nest {
+    #[default]
+    None,
+    /// The thread the group hangs from: its count's words and tooltip,
+    /// whether it's open, and whether one of its threads waits on Mike.
+    Starter { words: String, tip: String, open: bool, needs_you: bool },
+    /// One of its threads, indented: its question or where it's up to.
+    Child { line: String, question: bool },
 }
 
 /// `abbreviatingHome`: "/Users/mike/dev/x" becomes "~/dev/x", for the row's tooltip.
@@ -1844,19 +2124,21 @@ fn abbreviate_home(path: &str) -> String {
 /// reads as Swift's cut-out does. `runner_tile`: another runner's thread with
 /// no project draws its machine's icon (a little larger, as a Mac mini is a
 /// flat box) in place of the folder, and names it in the tooltip.
-fn render_tile(t: &ThreadSummary, look: &RowLook, behind: Hsla, project_icon: Option<&ProjectIcon>, runner_tile: Option<(&'static str, String)>, p: &Palette) -> impl IntoElement {
+fn render_tile(t: &ThreadSummary, look: &RowLook, behind: Hsla, project_icon: Option<&ProjectIcon>, runner_tile: Option<(&'static str, String)>, tile_size: f32, p: &Palette) -> impl IntoElement {
+    // A nested thread's tile is smaller than its starter's (mockup sub-A).
+    let scaled = move |n: f32| n * tile_size / TILE;
     let (tile, stacked) = rows::tile(t);
     let help = match &runner_tile {
         Some((_, place)) => format!("{place}, in {}", abbreviate_home(&t.cwd)),
         None => rows::tile_help(t),
     };
-    let size = px(TILE);
+    let size = px(tile_size);
     let tinted = |content: AnyElement| div().flex().items_center().justify_center().size(size).rounded(px(7.)).bg(p.tile).child(content).into_any_element();
     let face = match (&tile, project_icon) {
         (Tile::Folder, _) => {
             let glyph = match &runner_tile {
-                Some((symbol, _)) => icon(symbol, 16., p.secondary),
-                None => icon("folder", 12., p.faint),
+                Some((symbol, _)) => icon(symbol, scaled(16.), p.secondary),
+                None => icon("folder", scaled(12.), p.faint),
             };
             div().flex().items_center().justify_center().size(size).rounded(px(7.)).bg(p.tile_empty).child(glyph).into_any_element()
         }
@@ -1868,12 +2150,12 @@ fn render_tile(t: &ThreadSummary, look: &RowLook, behind: Hsla, project_icon: Op
                 .size(size)
                 .rounded(px(7.))
                 .object_fit(ObjectFit::Contain)
-                .with_fallback(move || div().flex().items_center().justify_center().size(px(TILE)).rounded(px(7.)).bg(fill).text_size(px(14.)).font_semibold().text_color(secondary).child(letter.clone()).into_any_element())
+                .with_fallback(move || div().flex().items_center().justify_center().size(px(tile_size)).rounded(px(7.)).bg(fill).text_size(px(scaled(14.))).font_semibold().text_color(secondary).child(letter.clone()).into_any_element())
                 .into_any_element()
         }
         // Its symbol, when the bundled set has one for it.
-        (Tile::Letter(_), Some(ProjectIcon { symbol: Some(symbol), .. })) if icons::try_symbol(symbol).is_some() => tinted(icons::symbol(symbol).with_size(px(14.)).text_color(p.secondary).into_any_element()),
-        (Tile::Letter(letter), _) => tinted(div().text_size(px(14.)).font_semibold().text_color(p.secondary).child(letter.clone()).into_any_element()),
+        (Tile::Letter(_), Some(ProjectIcon { symbol: Some(symbol), .. })) if icons::try_symbol(symbol).is_some() => tinted(icons::symbol(symbol).with_size(px(scaled(14.))).text_color(p.secondary).into_any_element()),
+        (Tile::Letter(letter), _) => tinted(div().text_size(px(scaled(14.))).font_semibold().text_color(p.secondary).child(letter.clone()).into_any_element()),
     };
     let mark: Option<AnyElement> = if look.done {
         // Finished with nothing needed: a tick where the dot would be.
@@ -1898,12 +2180,12 @@ fn render_tile(t: &ThreadSummary, look: &RowLook, behind: Hsla, project_icon: Op
     div()
         .relative()
         .flex_none()
-        .size(px(TILE + 4.))
+        .size(px(tile_size + 4.))
         .id(ElementId::Name(format!("tile-{}", t.id).into()))
         .tip(help.clone())
         .when(stacked, |s| {
             // A second project's edge showing behind, up and to the right.
-            s.child(div().absolute().left(px(4.)).top_0().size(size).rounded(px(7.)).bg(p.tile)).child(div().absolute().left_0().bottom_0().size(px(TILE + 2.)).rounded(px(8.)).bg(behind))
+            s.child(div().absolute().left(px(4.)).top_0().size(size).rounded(px(7.)).bg(p.tile)).child(div().absolute().left_0().bottom_0().size(px(tile_size + 2.)).rounded(px(8.)).bg(behind))
         })
         .child(div().absolute().left_0().bottom_0().child(face))
         .when_some(mark, |s, m| s.child(m))
@@ -2233,6 +2515,22 @@ pub(crate) fn automation(app: &Entity<Threadbear>, cmd: &Value, window: &mut Win
             app.update(cx, |t, cx| t.new_thread(cx));
             Ok(json!("ok"))
         }
+        // A group of nested threads opened or folded, as its count does:
+        // `id` is the thread it hangs from, `open` true or false (else it
+        // toggles).
+        "group" => {
+            let id = target(cx)?;
+            let found = {
+                let t = app.read(cx);
+                let nesting = t.shown_nesting(cx, now_ms());
+                nesting.as_ref().and_then(|n| n.group(&id)).map(|g| (t.group_shown(&id, g), g.opens_itself()))
+            };
+            let Some((shown, itself)) = found else { return Err(format!("{id} heads no group of nested threads")) };
+            if cmd["open"].as_bool().is_none_or(|want| want != shown) {
+                app.update(cx, |t, cx| t.toggle_group(&id, shown, itself, cx));
+            }
+            Ok(json!(format!("ok {id}")))
+        }
         // A control by its tooltip, through a real click, as the Swift app's
         // `click` with `tip` (or `tipPrefix`, for a tip that ends with a shortcut).
         "click" => {
@@ -2294,10 +2592,13 @@ pub(crate) fn automation(app: &Entity<Threadbear>, cmd: &Value, window: &mut Win
             if titles.is_empty() {
                 return Err("no menu opened".into());
             }
-            app.update(cx, |t, cx| {
-                t.sidebar.menu = None;
-                cx.notify();
-            });
+            // `keep`: left open, for a picture of it.
+            if cmd["keep"].as_bool() != Some(true) {
+                app.update(cx, |t, cx| {
+                    t.sidebar.menu = None;
+                    cx.notify();
+                });
+            }
             Ok(json!(format!("ok {}", serde_json::to_string(&titles).unwrap_or_default())))
         }
         // The menus that stand in for a real menu in the Swift app: `show`

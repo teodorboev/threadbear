@@ -13,18 +13,18 @@ class NewThreadBackendTest {
         b.create("hi", null, null, emptyList(), NewThreadSettings())
         // Nothing picked: an older backend refuses fields it doesn't know.
         assertEquals(setOf("token", "text"), t.calls.last().second.keys)
-        b.create("look [Picture 1]", "bruce", null, listOf("s1"), NewThreadSettings("opus", "high"))
+        b.create("look [Picture 1]", "mac-mini", null, listOf("s1"), NewThreadSettings("opus", "high"))
         val args = t.calls.last().second
         assertEquals("phone:create", t.calls.last().first)
         assertEquals("""["s1"]""", args["images"].toString())
         assertEquals("\"opus\"", args["model"].toString())
         assertEquals("\"high\"", args["effort"].toString())
-        assertEquals("\"bruce\"", args["runnerId"].toString())
+        assertEquals("\"mac-mini\"", args["runnerId"].toString())
     }
 
     @Test fun accountsAreLive() = runTest {
         val t = FakeTransport()
-        t.subscriptions = { _, _ -> listOf("""[{"id":"claude-1","runnerId":"m5","provider":"claude","title":"me","models":[{"id":"opus","title":"Opus"}]}]""") }
+        t.subscriptions = { _, _ -> listOf("""[{"id":"claude-1","runnerId":"laptop","provider":"claude","title":"me","models":[{"id":"opus","title":"Opus"}]}]""") }
         val accounts = PhoneBackend(t, "tok").accounts().first()
         assertEquals("phone:accounts", t.calls.last().first)
         assertEquals(listOf("opus"), accounts.single().models.map { it.id })

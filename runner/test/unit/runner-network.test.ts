@@ -1,7 +1,7 @@
 // A turn that failed because the API couldn't be reached (errorKind
 // network): the thread waits, probes with backoff, and carries on by
 // itself once the API answers (Runner.onNetworkLost). Other failures
-// never retry; a message from Mike ends the wait; it outlives a restart;
+// never retry; a message from Alex ends the wait; it outlives a restart;
 // and a carry-on that can't get through either gives up after five.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -92,7 +92,7 @@ test('other failures never carry on by themselves', async () => {
   assert.equal(h.store.load(thread.id)!.waitingForNetwork, undefined);
 });
 
-test('a message from Mike ends the wait; one already queued goes instead of a carry-on', async () => {
+test('a message from Alex ends the wait; one already queued goes instead of a carry-on', async () => {
   const h = netHarness();
   const { thread } = h.runner.create({ text: 'x' });
   const s = h.adapter.last;

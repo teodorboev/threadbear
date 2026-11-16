@@ -650,7 +650,7 @@ test("a group's check hears the hosts each landing in it asked for, the holder's
   const { root, main } = makeRepo();
   const [a, b, c, d] = branches(main, ['a', 'b', 'c', 'd']);
   const check = `${slowCheck(root)}; echo "prefer=\${THREADBEAR_CHECK_PREFER-unset} group=\${THREADBEAR_CHECK_GROUP-unset}" >> '${root}/prefers'`;
-  const first = land({ ...a, check }, { ...capture().opts, checkHost: 'tinker-desk' });
+  const first = land({ ...a, check }, { ...capture().opts, checkHost: 'build-box' });
   await until(() => fs.existsSync(path.join(root, 'checking')), "a's check");
   const caps = [capture(), capture(), capture()];
   // b asks for cloud, c for nothing, d for something no ssh host is called.

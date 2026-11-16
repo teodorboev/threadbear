@@ -1,13 +1,22 @@
 import Foundation
 
-/// Where the app connects and with what token. The runner side makes a
-/// phone token (`tb phone-token`) and shows it as a QR code of a
-/// `threadbear://pair?url=…&token=…&key=<runnerId>:<key>` link; the Camera
-/// opens the app with it. Quick Ask's lesson: never route a token through
-/// the Mac clipboard.
+/// Where the app connects and with what token. The Mac's Settings › Phone &
+/// browser draws a QR code of `TBPAIR1_` and the base64url of
+/// `url=…&code=<one-use code>&key=<runnerId>:<key>` (runner/src/devices.ts,
+/// pairingText), which only the app's own scanner reads: it trades the code
+/// for the phone's token (`claimed`). Quick Ask's lesson: never route a token
+/// through the Mac clipboard.
+///
+/// It used to be a `threadbear://pair?url=…&token=…` link the Camera opened,
+/// and any app can register that scheme, so another app could be handed the
+/// 90-day token (Daybreak finding 127, 15 Nov 2026). PairingGate refuses such
+/// a link from anywhere; only a Debug build's `-ThreadbearPair` takes one.
 public struct Pairing: Sendable, Hashable {
     public var deploymentURL: URL
+    /// Empty until a pairing code has been traded for it.
     public var token: String
+    /// The one-use pairing code from the Mac's QR code, to trade for `token`.
+    public var code: String?
     /// Runner id to secret-box public key (base64), from the link's `key`
     /// items: the Macs a secret may be sealed to (RunnerKeyPins). They come
     /// from the Mac that drew the QR code, not the mirror, which is why
@@ -15,10 +24,62 @@ public struct Pairing: Sendable, Hashable {
     /// Not saved with the pairing: they're kept as pins once it works.
     public var runnerKeys: [String: String]
 
-    public init(deploymentURL: URL, token: String, runnerKeys: [String: String] = [:]) {
+    public init(deploymentURL: URL, token: String, code: String? = nil, runnerKeys: [String: String] = [:]) {
         self.deploymentURL = deploymentURL
         self.token = token
+        self.code = code
         self.runnerKeys = runnerKeys
+    }
+
+    /// What starts the Mac's pairing text.
+    public static let textPrefix = "TBPAIR1_"
+
+    /// The Mac's pairing text, or an older Mac's `threadbear://pair` link.
+    /// Nil for anything else. Where it came from is PairingGate's to judge.
+    public static func parse(_ text: String, allowLocal: Bool = false) -> Pairing? {
+        let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if text.hasPrefix(textPrefix) {
+            let body = text.dropFirst(textPrefix.count)
+            guard !body.isEmpty, body.count <= 4096,
+                  body.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "-" || $0 == "_") })
+            else { return nil }
+            var b64 = body.replacingOccurrences(of: "-", with: "+").replacingOccurrences(of: "_", with: "/")
+            b64 += String(repeating: "=", count: (4 - b64.count % 4) % 4)
+            guard let data = Data(base64Encoded: b64), let query = String(data: data, encoding: .utf8) else { return nil }
+            // Split by hand: URLComponents traps on a query that isn't
+            // percent-encoded properly, and this is whatever the camera saw.
+            let items: [URLQueryItem] = query.split(separator: "&").map { pair in
+                let parts = pair.split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false)
+                let decode = { (s: Substring) in String(s).removingPercentEncoding ?? "" }
+                return URLQueryItem(name: decode(parts[0]), value: parts.count > 1 ? decode(parts[1]) : nil)
+            }
+            guard let code = items.first(where: { $0.name == "code" })?.value, isCode(code),
+                  // A code and a token both is no text the Mac makes.
+                  !items.contains(where: { $0.name == "token" })
+            else { return nil }
+            return parse(items: items, credential: .code(code), allowLocal: allowLocal)
+        }
+        guard let url = URL(string: text) else { return nil }
+        return parse(url, allowLocal: allowLocal)
+    }
+
+    /// `tbp_` and hex, as convex/tokens.ts makes them.
+    static func isCode(_ code: String) -> Bool {
+        code.hasPrefix("tbp_") && code.count > 4 && code.count <= 200
+            && code.dropFirst(4).allSatisfy { $0.isASCII && $0.isHexDigit }
+    }
+
+    /// The token for a pairing code, from `tokens:claim` (backend API 80),
+    /// which takes each code once: this pairing with its token and no code.
+    /// One that has its token already is handed back as it is.
+    public func claimed(with transport: any ConvexTransport) async throws -> Pairing {
+        guard let code else { return self }
+        let data = try await transport.mutation("tokens:claim", ["code": .string(code)])
+        struct Claimed: Decodable { let token: String }
+        guard let token = try? JSONDecoder().decode(Claimed.self, from: data).token, token.hasPrefix("tb_") else {
+            throw TransportError.server("The server didn't give the phone a token for that code.")
+        }
+        return Pairing(deploymentURL: deploymentURL, token: token, runnerKeys: runnerKeys)
     }
 
     /// `<runnerId>:<base64 key>`. A runner id has no colon (it's hex), and
@@ -52,13 +113,26 @@ public struct Pairing: Sendable, Hashable {
     public static func parse(_ url: URL, allowLocal: Bool = false) -> Pairing? {
         guard url.scheme == "threadbear", url.host() == "pair",
               let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems,
-              let raw = items.first(where: { $0.name == "url" })?.value,
-              let deployment = URL(string: raw), let host = deployment.host(),
               let token = items.first(where: { $0.name == "token" })?.value, !token.isEmpty
         else { return nil }
+        return parse(items: items, credential: .token(token), allowLocal: allowLocal)
+    }
+
+    enum Credential { case token(String), code(String) }
+
+    static func parse(items: [URLQueryItem], credential: Credential, allowLocal: Bool) -> Pairing? {
+        guard let raw = items.first(where: { $0.name == "url" })?.value,
+              let deployment = URL(string: raw), let host = deployment.host()
+        else { return nil }
         let keys = runnerKeys(items)
+        func made(_ url: URL) -> Pairing {
+            switch credential {
+            case .token(let token): Pairing(deploymentURL: url, token: token, runnerKeys: keys)
+            case .code(let code): Pairing(deploymentURL: url, token: "", code: code, runnerKeys: keys)
+            }
+        }
         if allowLocal, deployment.scheme == "http", host == "127.0.0.1" || host == "localhost" {
-            return Pairing(deploymentURL: deployment, token: token, runnerKeys: keys)
+            return made(deployment)
         }
         guard deployment.scheme == "https" else { return nil }
         let name = host.lowercased()
@@ -67,10 +141,10 @@ public struct Pairing: Sendable, Hashable {
             let cloud = name.hasSuffix(".convex.site")
                 ? URL(string: "https://" + name.replacingOccurrences(of: ".convex.site", with: ".convex.cloud"))!
                 : deployment
-            return Pairing(deploymentURL: cloud, token: token, runnerKeys: keys)
+            return made(cloud)
         }
         guard let selfHosted = selfHostedBackend(deployment, host: name) else { return nil }
-        return Pairing(deploymentURL: selfHosted, token: token, runnerKeys: keys)
+        return made(selfHosted)
     }
 
     static func isCloud(_ host: String) -> Bool {
@@ -111,7 +185,9 @@ public struct Pairing: Sendable, Hashable {
         return "\(host):\(port)"
     }
 
-    public var link: URL {
+    /// The old token link, for tests and the debug launch argument only:
+    /// nothing the app shows or sends makes one (Daybreak 127).
+    var link: URL {
         var c = URLComponents()
         c.scheme = "threadbear"
         c.host = "pair"

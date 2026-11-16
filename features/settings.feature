@@ -49,3 +49,10 @@ Feature: Settings
     Then Settings lists the private folder "~/dev/clients/acme"
     When I press "Stop keeping this folder private" in Settings
     Then Settings lists no private folders
+
+  @settings.general @swift-pending
+  Scenario: A reviewer can be taken off the list of who reviews code
+    When I open Settings
+    Then Settings lists the reviewers "codex, claude"
+    When I press "Take Codex off the list" in Settings
+    Then Settings lists the reviewers "claude"

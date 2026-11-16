@@ -86,6 +86,17 @@ export function pageLimit(limit: number | undefined, fallback: number, max: numb
   return Math.max(1, Math.min(max, Math.floor(limit)));
 }
 
+// A message's or tool body's seq: a whole number from 0 to MAX_SEQ.
+// v.number() takes NaN, the infinities, fractions and numbers past 2^53,
+// and a runner key's bad seq would break the order of its thread and the
+// event ids the main Mac's runner makes from it (seq times 8, plus a few,
+// runner/src/relay.ts SCALE), so it's refused where it comes in (Daybreak,
+// 15 Nov 2026). Seqs count a thread's events, so this is far past any.
+export const MAX_SEQ = 2 ** 49;
+export function isSeq(n: unknown): n is number {
+  return Number.isSafeInteger(n) && (n as number) >= 0 && (n as number) <= MAX_SEQ;
+}
+
 export async function sha256(text: string): Promise<string> {
   const data = new TextEncoder().encode(text);
   const digest = await crypto.subtle.digest('SHA-256', data);

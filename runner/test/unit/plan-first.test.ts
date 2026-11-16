@@ -1,4 +1,4 @@
-// "Plan first" (docs/protocol.md): a plan card Mike approves or sends back.
+// "Plan first" (docs/protocol.md): a plan card Alex approves or sends back.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { makeHarness, tick } from '../helpers/fakes.ts';

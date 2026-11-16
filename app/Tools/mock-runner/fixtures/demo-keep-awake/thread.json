@@ -1,7 +1,7 @@
 {
   "id": "demo_keep_awake",
   "title": "Stop Keep Awake asking for my password",
-  "cwd": "/Users/mike/dev/me/misc",
+  "cwd": "/Users/alex/code/misc",
   "accountId": "claude-main",
   "provider": "claude",
   "permissionMode": "full",

@@ -674,6 +674,8 @@ export class RpcServer {
           // caller gate takes it out of any thread's own call.
           ...(p.unconfine === true ? { unconfine: true } : {}),
           ...optStartedBy(p),
+          // Not to nest under the thread in startedBy (Nested threads).
+          ...(p.detached === true ? { detached: true } : {}),
           ...optProjectIds(p),
         });
         return { thread: res.thread, turnId: res.turnId };
@@ -743,6 +745,10 @@ export class RpcServer {
         if (p.starred !== undefined) {
           if (typeof p.starred !== 'boolean') throw bad('starred must be a boolean');
           upd.starred = p.starred;
+        }
+        if (p.detached !== undefined) {
+          if (typeof p.detached !== 'boolean') throw bad('detached must be a boolean');
+          upd.detached = p.detached;
         }
         if (p.carryOnAtReset !== undefined) {
           if (typeof p.carryOnAtReset !== 'boolean') throw bad('carryOnAtReset must be a boolean');

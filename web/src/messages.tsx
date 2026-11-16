@@ -6,6 +6,7 @@ import remarkGfm from 'remark-gfm';
 import { go } from './route';
 import { escapeDestinations, findStep, readLink } from './thread-links';
 import { pictureNumber, remarkPictureChips } from './picture-chips';
+import { hostOf, pictureSrc } from './picture-src';
 import * as Icon from './icons';
 import { workedTitle, type TurnMessage } from './turns';
 import { diffFiles, inputLines, keptWords, pictureCount } from './tool-body';
@@ -295,13 +296,21 @@ export function MessageText({
             }
             return <>{children}</>;
           },
+          // Only the thread's own stored pictures are drawn; any other web
+          // address is a link, never fetched by the page (picture-src.ts).
           img: ({ src, alt }) => {
-            const s = typeof src === 'string' ? src : '';
-            const url = pictures?.get(s) ?? (/^https?:\/\//.test(s) ? s : undefined);
-            if (!url) return <span className="muted">[{alt || 'image'}]</span>;
+            const picture = pictureSrc(typeof src === 'string' ? src : '', pictures);
+            if (picture.kind === 'none') return <span className="muted">[{alt || 'image'}]</span>;
+            if (picture.kind === 'link') {
+              return (
+                <a href={picture.url} target="_blank" rel="noreferrer" title={`A picture on ${hostOf(picture.url)}, not loaded here. Click to open it.`}>
+                  [{alt || 'picture'}]
+                </a>
+              );
+            }
             return (
-              <a href={url} target="_blank" rel="noreferrer">
-                <img className="picture" src={url} alt={alt ?? ''} loading="lazy" referrerPolicy="no-referrer" />
+              <a href={picture.url} target="_blank" rel="noreferrer">
+                <img className="picture" src={picture.url} alt={alt ?? ''} loading="lazy" referrerPolicy="no-referrer" />
               </a>
             );
           },

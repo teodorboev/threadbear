@@ -14,7 +14,7 @@ import { nullLogger } from '../../src/log.ts';
 import { FINDINGS_REFUSED, LAB_REVIEW_ROUNDS, findingsProblem, parseAnswers, parseVerdict } from '../../src/runner/lab-review.ts';
 import { buildThreadbearTools } from '../../src/threadbear-mcp.ts';
 import { loadConfig } from '../../src/config.ts';
-import { SettingsService } from '../../src/settings.ts';
+import { SettingsService, settingsMethods } from '../../src/settings.ts';
 
 const END_TURN = 'mcp__threadbear__end_turn';
 
@@ -29,7 +29,7 @@ function codeDiff(file = 'src/app.ts', lines = 10) {
   return { type: 'edit.diff', itemId: `d-${file}`, path: file, hunks: [{ oldStart: 1, oldLines: lines / 2, newStart: 1, newLines: lines / 2, lines: [...Array(lines / 2)].flatMap((_, i) => [`-old ${i}`, `+new ${i}`]) }] };
 }
 
-// A turn in a thread: Mike's message (or none), the edits, end_turn and a reply.
+// A turn in a thread: Alex's message (or none), the edits, end_turn and a reply.
 function turn(h: ReturnType<typeof setup>, id: string, o: { text?: string; diffs?: object[]; reply?: string; input?: Record<string, unknown>; session?: any } = {}) {
   if (o.text !== undefined) h.runner.send(id, o.text);
   const s = o.session ?? [...h.adapter.sessions, ...h.codex.sessions].filter((x) => x.opts.threadId === id).at(-1)!;
@@ -98,7 +98,7 @@ test('labReview: a Claude code change is reviewed on Codex, then the thread wake
   assert.equal(after.archivedBy, 'threadbear');
 });
 
-test('labReview: docs-only or tiny changes, and turns that need Mike, are not reviewed', () => {
+test('labReview: docs-only or tiny changes, and turns that need Alex, are not reviewed', () => {
   const h = setup();
   const id = start(h);
   turn(h, id, { diffs: [codeDiff('README.md', 40)] });
@@ -110,7 +110,7 @@ test('labReview: docs-only or tiny changes, and turns that need Mike, are not re
   assert.equal(h.codex.sessions.length, 0);
 });
 
-test('labReview: at most LAB_REVIEW_ROUNDS reviews until Mike writes again', () => {
+test('labReview: at most LAB_REVIEW_ROUNDS reviews until Alex writes again', () => {
   const h = setup();
   const id = start(h);
   const review = () => {
@@ -130,7 +130,7 @@ test('labReview: at most LAB_REVIEW_ROUNDS reviews until Mike writes again', () 
     assert.ok(rounds <= LAB_REVIEW_ROUNDS);
   }
   assert.equal(rounds, LAB_REVIEW_ROUNDS);
-  // A new ask from Mike can be reviewed again.
+  // A new ask from Alex can be reviewed again.
   turn(h, id, { text: 'Now the logout bug', diffs: [codeDiff()] });
   assert.ok(h.runner.get(id).waitingOn?.length);
 });
@@ -148,7 +148,7 @@ test("labReview: a folder kept for a pool is reviewed only on that pool's logins
   const kept = tmpDir('tb-kept-');
   const h = setup({ cfg: { pools: [
     { id: 'claude', title: 'Claude', accountIds: ['claude-main'] },
-    { id: 'convex', title: 'Convex', accountIds: ['claude-3'], folders: [kept] },
+    { id: 'work', title: 'Work', accountIds: ['claude-3'], folders: [kept] },
     { id: 'codex', title: 'Codex', accountIds: ['codex-main'] },
   ] } });
   const { thread } = h.runner.create({ text: 'Fix it', cwd: kept, accountId: 'claude-3' });
@@ -414,9 +414,9 @@ test('labReview: a thread adopted while the new runner is still starting gets it
 });
 
 // From Codex's third review: the debt is the next completed turn's to
-// settle, so it never outlives a turn that needs Mike (a later restart
+// settle, so it never outlives a turn that needs Alex (a later restart
 // would review the old turn and put his question to sleep).
-test('labReview: an owed review is dropped by a next turn that needs Mike', async () => {
+test('labReview: an owed review is dropped by a next turn that needs Alex', async () => {
   const h = setup();
   const id = start(h);
   await h.runner.beginDrain([id], { onHandedOver: () => {} });
@@ -517,7 +517,7 @@ test('labReview: a scheduled run that woke an archived thread goes back once its
   const rs = h.codex.sessions.find((x) => x.opts.threadId === reviewId)!;
   rs.init();
   turn(h, reviewId, { session: rs, reply: 'Nothing wrong with it.' });
-  // It wakes with the findings, deals with them and has nothing for Mike.
+  // It wakes with the findings, deals with them and has nothing for Alex.
   turn(h, id, { reply: 'The review found nothing.' });
   t = h.runner.get(id);
   assert.ok(t.archivedAt, 'back in the archive once the run is really over');
@@ -637,14 +637,14 @@ test('labReview: the answering turn puts the ledger on its card, and a fix of an
   assert.equal(h.runner.get(id).snoozedUntil, undefined, 'done, no third round');
 });
 
-test('labReview: findings only disputed or left get no further round, and Mike writing starts a fresh ledger', () => {
+test('labReview: findings only disputed or left get no further round, and Alex writing starts a fresh ledger', () => {
   const h = setup();
   const id = start(h);
   turn(h, id, { diffs: [codeDiff()] });
   finishReview(h, id, { needs: 'nothing', findings: FINDINGS.slice(0, 1) });
   turn(h, id, { input: { needs: 'you', asks: [{ question: 'Keep sessions across refresh?' }], findings: [{ id: 1, outcome: 'left', note: 'Whether refresh should keep the session.' }] } });
   assert.equal(lastCard(h, id).review.findings[0].outcome, 'left');
-  assert.ok(!h.runner.threads.get(id)!.rec.waitingOn?.some((w) => !w.done), 'no review of a turn that needs Mike');
+  assert.ok(!h.runner.threads.get(id)!.rec.waitingOn?.some((w) => !w.done), 'no review of a turn that needs Alex');
   turn(h, id, { text: 'Yes keep them', diffs: [codeDiff()] });
   const t = h.runner.threads.get(id)!.rec;
   assert.equal(t.labReview?.rounds, 1);
@@ -735,7 +735,7 @@ test('labReview: end_turn is refused while findings have no answer, twice at mos
 });
 
 // Codex's review of the ledger (11 Nov 2026): each of these broke it.
-test("labReview: another thread's message doesn't clear findings still waiting for answers; Mike's does", () => {
+test("labReview: another thread's message doesn't clear findings still waiting for answers; Alex's does", () => {
   const h = setup();
   const id = start(h);
   turn(h, id, { diffs: [codeDiff()] });
@@ -778,4 +778,93 @@ test('labReview: a review thread is only asked for a verdict while the reviewed 
   assert.deepEqual(h.runner.reviewOwes(reviewId), { verdict: true });
   finishReview(h, id, { needs: 'nothing', findings: [] });
   assert.equal(h.runner.reviewOwes(reviewId), undefined, 'done with: reopened later, it is asked nothing');
+});
+
+// ------------------------------------------------- Mike's order of reviewers
+
+const OPENCODE = { id: 'opencode-main', provider: 'opencode' as const, title: 'OpenCode', configDir: '/tmp/opencode' };
+
+// A login counts only on a provider this runner has an adapter for; the
+// harness has Claude's and Codex's, so OpenCode borrows Codex's fake.
+function withOpenCode(h: ReturnType<typeof setup>) {
+  (h.runner.adapters as Record<string, unknown>).opencode = h.codex;
+  return h;
+}
+
+test('labReview: reviewers go in the order Settings gives, on their model and effort', () => {
+  const h = withOpenCode(setup({ accounts: [...withCodex(), OPENCODE], cfg: { labReviewers: [{ provider: 'opencode' }, { provider: 'codex', model: 'gpt-6-luna', effort: 'medium' }] } }));
+  const rec = { ...h.runner.threads.get(start(h))!.rec };
+  assert.equal(h.runner.reviewLogin(rec)?.account.id, 'opencode-main', 'the first of another lab with a login');
+  // Codex first: a real review starts on it, with its model and effort.
+  h.runner.cfg.labReviewers = [{ provider: 'codex', model: 'gpt-6-luna', effort: 'medium' }, { provider: 'opencode' }];
+  const id = start(h);
+  turn(h, id, { diffs: [codeDiff()] });
+  const review = h.runner.get(h.runner.get(id).waitingOn![0].threadId);
+  assert.equal(review.provider, 'codex');
+  assert.equal(review.model, 'gpt-6-luna');
+  assert.equal(review.effort, 'medium');
+});
+
+test("labReview: a reviewer whose login is out of room is passed over for the next in Mike's order", () => {
+  const blocked = { ...withCodex()[2], usage: { blocked: true, windows: [], readAt: new Date(0).toISOString(), source: 'live' } } as unknown as (typeof ACCOUNTS)[number];
+  const h = withOpenCode(setup({ accounts: [...ACCOUNTS, blocked, OPENCODE], cfg: { labReviewers: [{ provider: 'codex' }, { provider: 'opencode' }] } }));
+  const rec = h.runner.threads.get(start(h))!.rec;
+  const login = h.runner.reviewLogin(rec);
+  assert.equal(login?.account.id, 'opencode-main');
+  assert.equal(login?.independent, true);
+  // None of the others has room: a fresh session of its own provider, on
+  // its listed model if it has one.
+  h.runner.cfg.labReviewers = [{ provider: 'codex' }, { provider: 'claude', effort: 'max' }];
+  const own = h.runner.reviewLogin(rec);
+  assert.equal(own?.account.provider, 'claude');
+  assert.equal(own?.independent, false);
+  assert.equal(own?.reviewer.effort, 'max');
+});
+
+test("labReview: the thread's own provider is never taken for another lab, wherever it is in the order", () => {
+  const h = setup({ cfg: { labReviewers: [{ provider: 'claude' }, { provider: 'codex' }] } });
+  const rec = h.runner.threads.get(start(h))!.rec;
+  assert.equal(h.runner.reviewLogin(rec)?.account.provider, 'codex');
+  assert.equal(h.runner.reviewLogin(rec)?.independent, true);
+});
+
+test('labReview: Settings shows the default order, saves a new one, and refuses what is not a reviewer', () => {
+  const home = tmpDir();
+  fs.writeFileSync(path.join(home, 'runner.json'), JSON.stringify({ labReviewers: [{ provider: 'codex' }, { provider: 'nope' }, 7, { provider: 'codex', model: 'x' }, { provider: 'claude', effort: 'high' }] }));
+  assert.deepEqual(loadConfig({ THREADBEAR_HOME: home }).labReviewers, [{ provider: 'codex' }, { provider: 'claude', effort: 'high' }], 'hand-edited: the bad and repeated left out');
+
+  const h = setup();
+  const settings = new SettingsService({ config: h.runner.cfg, publish: () => {} });
+  assert.deepEqual(settings.get().labReviewers, [{ provider: 'codex' }, { provider: 'claude' }], 'the default, which is what it did before');
+  const order = [{ provider: 'claude' as const, model: 'claude-opus-5-5', effort: 'xhigh' as const }, { provider: 'codex' as const }];
+  assert.deepEqual(settings.update({ labReviewers: order }).labReviewers, order);
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(h.home, 'runner.json'), 'utf8')).labReviewers, order, 'saved');
+  assert.deepEqual(h.runner.cfg.labReviewers, order, 'used at once');
+});
+
+test('labReview: settings.update says which reviewer entry is wrong', () => {
+  const h = setup();
+  const update = settingsMethods(new SettingsService({ config: h.runner.cfg, publish: () => {} }))['settings.update'];
+  assert.throws(() => update({ labReviewers: 'codex' }), /labReviewers must be a list/);
+  assert.throws(() => update({ labReviewers: [{ provider: 'gemini' }] }), /labReviewers provider must be one of/);
+  assert.throws(() => update({ labReviewers: [{ provider: 'codex', effort: 'huge' }] }), /labReviewers effort/);
+  assert.throws(() => update({ labReviewers: [{ provider: 'codex', model: '' }] }), /labReviewers model/);
+  assert.equal(h.runner.cfg.labReviewers, undefined, 'nothing saved');
+  update({ labReviewers: [] });
+  assert.deepEqual(h.runner.cfg.labReviewers, [], 'an empty list: only a fresh session of its own provider reviews');
+});
+
+test("labReview: a thread of a kept pool working in a worktree outside its folder is still reviewed only on that pool's logins", () => {
+  const kept = tmpDir('tb-kept-');
+  const worktree = tmpDir('tb-kept-threads-');
+  const h = withOpenCode(setup({ accounts: [...withCodex(), OPENCODE], cfg: { labReviewers: [{ provider: 'opencode' }, { provider: 'codex' }], pools: [
+    { id: 'claude', title: 'Claude', accountIds: ['claude-main'] },
+    { id: 'convex', title: 'Convex', accountIds: ['claude-3'], folders: [kept] },
+    { id: 'codex', title: 'Codex', accountIds: ['codex-main'] },
+  ] } }));
+  const { thread } = h.runner.create({ text: 'Fix it', cwd: kept, accountId: 'claude-3' });
+  const rec = { ...h.runner.threads.get(thread.id)!.rec, cwd: worktree, poolId: 'convex' };
+  const login = h.runner.reviewLogin(rec);
+  assert.equal(login?.account.id, 'claude-3', 'not OpenCode, which no pool holds, nor the Codex pool');
+  assert.equal(login?.independent, false);
 });

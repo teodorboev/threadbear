@@ -210,9 +210,9 @@ test('config honours THREADBEAR_HOME, THREADBEAR_PORT and runner.json', () => {
 
 test('runner.json records the port the runner listens on and keeps other settings', () => {
   const home = tmpDir();
-  recordListening(home, 8797, '~/dev/me/misc');
-  assert.deepEqual(readRunnerJson(home), { port: 8797, defaults: { cwd: '~/dev/me/misc' } });
+  recordListening(home, 8797, '~/code/misc');
+  assert.deepEqual(readRunnerJson(home), { port: 8797, defaults: { cwd: '~/code/misc' } });
   fs.writeFileSync(path.join(home, 'runner.json'), JSON.stringify({ port: 8797, defaults: { cwd: '/tmp', accountId: 'claude-3' }, idleMinutes: 5 }));
-  recordListening(home, 54321, '~/dev/me/misc');
+  recordListening(home, 54321, '~/code/misc');
   assert.deepEqual(readRunnerJson(home), { port: 54321, defaults: { cwd: '/tmp', accountId: 'claude-3' }, idleMinutes: 5 });
 });

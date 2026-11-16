@@ -16,6 +16,19 @@ export type Scenario = { name: string; play: (p: Play) => void; shows: string[] 
 
 export const SCENARIOS: Scenario[] = [
   {
+    name: 'a phone message goes before an old pile of reminders',
+    shows: ['Park the work now.', 'The work is parked.', 'Latest check-in'],
+    play: (p) => {
+      p.queuedReminder('Old check-in', 'check-in');
+      p.queuedReminder('Latest check-in', 'check-in');
+      p.sendFromPhone('Park the work now.');
+      p.say('The work is parked.');
+      p.endTurn({ needs: 'nothing' }, true);
+      p.say('The latest check-in sees that the work is parked.');
+      p.endTurn({ needs: 'nothing' });
+    },
+  },
+  {
     name: 'a Notion board card mentioned beside a draft picture',
     shows: ['Please check', 'Pick the share button colour'],
     play: (p) => {
@@ -163,7 +176,7 @@ export const SCENARIOS: Scenario[] = [
     },
   },
   {
-    name: 'Mike sends two pictures placed in his words',
+    name: 'Alex sends two pictures placed in his words',
     shows: ['should look like', 'They differ in colour.'],
     play: (p) => {
       p.say('Ready.');

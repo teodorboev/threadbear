@@ -31,7 +31,7 @@ test('failure text keeps the status and a known reason, never free text', () => 
   // A relay (anyone's, through PUSH_RELAY_URL) that echoes a device token or thread text.
   const token = 'ab'.repeat(32);
   assert.equal(failureText(400, `Rejected device token ${token}`), '400 other');
-  assert.equal(failureText(400, 'Mike your build finished'), '400 other');
+  assert.equal(failureText(400, 'Alex your build finished'), '400 other');
   assert.equal(failureText(400, 'ConfidentialAcquisition'), '400 other', 'a word that only looks like one of Apple\'s');
   assert.equal(failureText(0, 'EPRIVATETEXT'), '0 other');
   assert.equal(failureText(0, 'getaddrinfo EAI_AGAIN x.convex.site'), '0 EAI_AGAIN');

@@ -15,7 +15,7 @@ import { Relay } from '../../src/relay.ts';
 import { FakeClock } from '../../src/clock.ts';
 import { nullLogger } from '../../src/log.ts';
 
-const T = 'thread-on-bruce';
+const T = 'thread-on-mac-mini';
 const REFUSED = /isn't possible through Convex yet/;
 
 function relay(): Relay {
@@ -24,8 +24,8 @@ function relay(): Relay {
     // No subscribe: a queued command answers at once as pending, so nothing waits.
     source: () => ({ key: 'owner', apiVersion: 999, upload: async () => 'st', post: async (_kind, fn) => (fn === 'relay:queueCommand' ? 'cmd1' : fn === 'relay:remoteMessages' ? { messages: [], hasMore: false } : null) }),
     remote: () => ({
-      runners: [{ id: 'bruce', name: 'bruce', online: true, lastSeenAt: at }],
-      threads: [{ runnerId: 'bruce', threadId: T, title: 'A thread', cwd: '/x', accountId: 'a', provider: 'claude', status: 'idle', needsYou: false, unread: true, preview: '', createdAt: at, lastActivityAt: at }],
+      runners: [{ id: 'mac-mini', name: 'mac-mini', online: true, lastSeenAt: at }],
+      threads: [{ runnerId: 'mac-mini', threadId: T, title: 'A thread', cwd: '/x', accountId: 'a', provider: 'claude', status: 'idle', needsYou: false, unread: true, preview: '', createdAt: at, lastActivityAt: at }],
     }),
     readPicture: () => ({ bytes: new Uint8Array([1]), mediaType: 'image/png' }),
     subscribed: () => false,

@@ -142,7 +142,7 @@ test('idle release after 30 minutes, then the next send resumes the session', as
   assert.equal(h.runner.get(thread.id).costUsd, 0.005);
 });
 
-test('a message from the phone tells the agent so, and where Mike is; the transcript keeps what he typed', async () => {
+test('a message from the phone tells the agent so, and where Alex is; the transcript keeps what he typed', async () => {
   let atMac: boolean | undefined;
   const h = makeHarness(undefined, {}, { atMac: () => atMac });
   const { thread, turnId } = create(h, { origin: 'phone' });
@@ -648,10 +648,10 @@ test('a dated snooze or a message clears an until-restart snooze', () => {
   assert.throws(() => h.runner.update({ threadId: thread.id, snoozedUntil: 'later' }), /ISO time, "restart" or "release"/);
 });
 
-test('an archive says who did it, and Mike\'s verdict goes in the thread', () => {
+test('an archive says who did it, and Alex\'s verdict goes in the thread', () => {
   const h = makeHarness();
   const { thread } = create(h);
-  // ⌘E or a swipe: Mike, no verdict, no note.
+  // ⌘E or a swipe: Alex, no verdict, no note.
   const plain = h.runner.update({ threadId: thread.id, archived: true }).thread;
   assert.equal(plain.archivedBy, 'mike');
   assert.equal(plain.archiveVerdict, undefined);
@@ -668,7 +668,7 @@ test('an archive says who did it, and Mike\'s verdict goes in the thread', () =>
   assert.equal(h.runner.get(thread.id).archiveVerdict, undefined);
   const byAgent = h.runner.update({ threadId: thread.id, archived: true, archivedBy: 'agent', verdict: 'worked' }).thread;
   assert.equal(byAgent.archivedBy, 'agent');
-  assert.equal(byAgent.archiveVerdict, undefined, "only Mike's verdict counts");
+  assert.equal(byAgent.archiveVerdict, undefined, "only Alex's verdict counts");
 });
 
 test('archive mid-turn interrupts, then releases the CLI; unarchive brings it back', async () => {
@@ -1140,7 +1140,7 @@ test('a background subagent asking for approval with no turn running gets a card
   assert.equal(h.runner.get(thread.id).status, 'idle');
   // The subagent finishes; the CLI's own turn reports it, then ends.
   s.out({ kind: 'cliTurn', note: 'Agent "make a folder" completed' });
-  s.text('m5:0', 'Made the folder.');
+  s.text('laptop:0', 'Made the folder.');
   s.out({ kind: 'result', result: { outcome: 'completed', durationMs: 5, own: true } });
   assert.equal(h.events(thread.id).at(-1).type, 'turn.completed');
   assert.equal(h.runner.get(thread.id).status, 'idle');
@@ -1212,7 +1212,7 @@ test("Stop closes a subagent's card with no turn running, and it's the only thin
   assert.deepEqual(checkSequence(h.events(thread.id)), []);
 });
 
-test("an agent's or the runner's stop isn't told to the agent as Mike's", async () => {
+test("an agent's or the runner's stop isn't told to the agent as Alex's", async () => {
   const h = makeHarness();
   const { thread } = create(h, { permissionMode: 'ask' });
   const s = h.adapter.last;
@@ -1378,7 +1378,7 @@ test('a turn background work woke says what finished, sub-agents and shells alik
   s.out({ kind: 'cliTurn', note: 'Agent "Mine the repo for stories" completed' });
   let started = h.events(thread.id).filter((e) => e.type === 'turn.started');
   assert.equal(started.length, 2);
-  assert.equal(started[0].wokeBy, undefined, "Mike's own turn wasn't woken");
+  assert.equal(started[0].wokeBy, undefined, "Alex's own turn wasn't woken");
   assert.deepEqual(started[1].wokeBy, [
     { kind: 'agent', description: 'Mine the repo for stories' },
     { kind: 'shell', description: 'npm test' },
@@ -2171,7 +2171,7 @@ test('needs you: asks wait for sub-agents to finish, not for shell jobs', () => 
   assert.equal(t.needsYou, true);
 });
 
-test('needs you: text after an accepted end_turn is dropped, until Mike writes again mid-turn', () => {
+test('needs you: text after an accepted end_turn is dropped, until Alex writes again mid-turn', () => {
   const h = makeHarness();
   const { thread } = create(h);
   const s = h.adapter.last;
@@ -2181,7 +2181,7 @@ test('needs you: text after an accepted end_turn is dropped, until Mike writes a
   // A refused end_turn doesn't end anything, even one a provider reports as
   // ok: the reply after it shows.
   endTurnCall(s, 't0', { needs: 'nothing' });
-  result('t0', 'Not ended: Mike hasn\'t had a reply this turn.');
+  result('t0', 'Not ended: Alex hasn\'t had a reply this turn.');
   s.text('m1', 'The answer.');
   endTurnCall(s, 't1', { needs: 'nothing' });
   result('t1', 'Noted: this thread is done.');
@@ -2289,7 +2289,7 @@ test('needs you: end_turn with archive leaves the thread where it is while a car
   assert.equal(h.runner.get(thread.id).archivedAt, undefined, 'not archived with the card waiting');
   const evs = h.events(thread.id);
   assert.ok(evs.some((e) => e.type === 'approval.requested'), 'the card was shown');
-  assert.ok(!evs.some((e) => e.type === 'approval.resolved'), 'and still waits for Mike');
+  assert.ok(!evs.some((e) => e.type === 'approval.resolved'), 'and still waits for Alex');
   void answer;
 });
 
@@ -2309,7 +2309,7 @@ test('needs you: an interrupted turn, or one without archive, leaves the thread 
   assert.equal(h.runner.get(thread.id).archivedAt, undefined);
 });
 
-test('a scheduled run puts an archived thread back in the archive when it ends with nothing for Mike', () => {
+test('a scheduled run puts an archived thread back in the archive when it ends with nothing for Alex', () => {
   const h = makeHarness();
   const { thread } = create(h);
   let s = h.adapter.last;
@@ -2319,7 +2319,7 @@ test('a scheduled run puts an archived thread back in the archive when it ends w
   h.runner.update({ threadId: thread.id, archived: true });
   assert.ok(h.runner.get(thread.id).archivedAt);
 
-  // Nothing new: it comes out for the run, then goes back as Mike left it.
+  // Nothing new: it comes out for the run, then goes back as Alex left it.
   h.runner.send(thread.id, 'Check for a reply', [], { origin: 'schedule', scheduleId: 'sch_1' });
   assert.equal(h.runner.get(thread.id).archivedAt, undefined, 'out of the archive while it runs');
   s = h.adapter.last;
@@ -2338,9 +2338,9 @@ test('a scheduled run puts an archived thread back in the archive when it ends w
   endTurnCall(s, 't3', { needs: 'you', asks: [{ action: 'Send the reply?' }] });
   s.result('completed');
   t = h.runner.get(thread.id);
-  assert.equal(t.archivedAt, undefined, 'stays out when it needs Mike');
+  assert.equal(t.archivedAt, undefined, 'stays out when it needs Alex');
 
-  // So does one Mike wrote into, even if it then ends with nothing.
+  // So does one Alex wrote into, even if it then ends with nothing.
   h.runner.update({ threadId: thread.id, archived: true });
   h.runner.send(thread.id, 'Check for a reply', [], { origin: 'schedule', scheduleId: 'sch_1' });
   s = h.adapter.last;
@@ -2361,7 +2361,7 @@ test('a scheduled run puts an archived thread back in the archive when it ends w
   assert.equal(h.runner.get(thread.id).archivedAt, undefined, 'only one that came out of the archive goes back');
 });
 
-test('a scheduled run that asks Mike something, or is stopped, keeps the thread out even after a later run finds nothing', () => {
+test('a scheduled run that asks Alex something, or is stopped, keeps the thread out even after a later run finds nothing', () => {
   const h = makeHarness();
   const { thread } = create(h);
   let s = h.adapter.last;
@@ -2439,9 +2439,9 @@ test('sharing: a link that stays across off and on, and a new link on request', 
   assert.equal(h.runner.get(thread.id).share!.access, 'link');
 });
 
-test('who started a thread: a row says so when it was not Mike, and end_turn says how it came out', () => {
+test('who started a thread: a row says so when it was not Alex, and end_turn says how it came out', () => {
   const h = makeHarness();
-  // Mike's own has none, and a byline can't give it one.
+  // Alex's own has none, and a byline can't give it one.
   const mine = create(h).thread;
   assert.equal(mine.startedBy, undefined);
   let s = h.adapter.last;
@@ -2485,7 +2485,7 @@ test('who started a thread: the runner and a schedule each say so', () => {
   assert.deepEqual(scheduled.startedBy, { kind: 'schedule', label: 'Schedule' });
 });
 
-test('asked: the summary carries Mike\'s last message, not a schedule\'s or an agent\'s', () => {
+test('asked: the summary carries Alex\'s last message, not a schedule\'s or an agent\'s', () => {
   const h = makeHarness();
   const { thread } = create(h);
   assert.equal(thread.asked, 'Fix the tests more detail here');
@@ -2504,7 +2504,7 @@ test('asked: the summary carries Mike\'s last message, not a schedule\'s or an a
   assert.deepEqual(checkSummary(h.runner.get(thread.id)), []);
 });
 
-test('asked: a review reply is Mike\'s notes, or the option he picked', () => {
+test('asked: a review reply is Alex\'s notes, or the option he picked', () => {
   const review = { id: 'r1', title: 'Grey line', status: 'answered', options: [{ id: 'A', title: 'Results', path: '/a.png' }, { id: 'C', title: 'What you asked', path: '/c.png' }] } as never;
   const head = 'Review: Grey line (r1)\n\n';
   assert.equal(askedLine({ text: head + 'Notes on C (What you asked): try this', reviewId: 'r1', reviewResponse: { notes: { C: 'try this' } } }, [review]), 'try this');

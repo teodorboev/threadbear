@@ -362,6 +362,10 @@ export default defineSchema({
     // A move's chunk (moves.ts moveChunkUrl): outside the runner's picture
     // allowances, bounded by the move instead, and gone when it ends.
     moveId: v.optional(v.string()),
+    // Set when /runner/upload claims the ticket, before it reads the body
+    // (sync:claimUpload), and cleared when it finishes: only the request
+    // that claimed it can store a file with it (uploads.ts takeUpload).
+    claim: v.optional(v.string()),
   })
     .index('by_hash', ['ticketHash'])
     .index('by_move', ['moveId'])
@@ -369,7 +373,7 @@ export default defineSchema({
     .index('by_issued', ['issuedAt']),
 
   // All a runner key's runner keeps in file storage, against its cap
-  // (sync:redeemUpload), less what's been deleted.
+  // (sync:finishUpload), less what's been deleted.
   // Also its message count (CAP.messages) and its pushes this minute.
   runnerStorage: defineTable({
     runnerId: v.string(),
@@ -402,7 +406,7 @@ export default defineSchema({
   })
     .index('by_storageId', ['storageId'])
     .index('by_move', ['moveId'])
-    // A runner's bytes uploaded in the last hour (sync:redeemUpload's cap).
+    // A runner's bytes uploaded in the last hour (sync:finishUpload's cap).
     .index('by_runner_at', ['runnerId', 'at'])
     .index('by_unattached', ['attachedAt', 'at']),
 
@@ -419,6 +423,8 @@ export default defineSchema({
     usedAt: v.optional(v.number()),
     storageId: v.optional(v.id('_storage')),
     bytes: v.optional(v.number()),
+    // The upload's claim, from before its body is read until it's stored (uploads.ts takeUpload).
+    claim: v.optional(v.string()),
   })
     .index('by_hash', ['ticketHash'])
     .index('by_token_issued', ['tokenId', 'issuedAt'])
@@ -436,6 +442,8 @@ export default defineSchema({
     issuedAt: v.number(),
     usedAt: v.optional(v.number()),
     storageId: v.optional(v.id('_storage')),
+    // The upload's claim, from before its body is read until it's stored (uploads.ts takeUpload).
+    claim: v.optional(v.string()),
   })
     .index('by_hash', ['ticketHash'])
     .index('by_storageId', ['storageId'])
@@ -582,6 +590,12 @@ export default defineSchema({
     createdAt: v.number(),
     updatedAt: v.number(),
     frozenAt: v.optional(v.number()),
+    // When the last of its rows went to T (moves.ts rehomeRows): a claimed
+    // move ends only after, so a next move of the thread can't start while
+    // a page of this one is still to run (Daybreak, 15 Nov 2026).
+    rehomedAt: v.optional(v.number()),
+    // T said it's done (moveDone) before that: rehomeRows ends it then.
+    doneAsked: v.optional(v.boolean()),
   })
     .index('by_moveId', ['moveId'])
     .index('by_thread', ['threadId', 'createdAt'])
@@ -683,6 +697,23 @@ export default defineSchema({
     .index('by_hash', ['hash'])
     // The audit's live tokens, without reading revoked ones.
     .index('by_revokedAt', ['revokedAt']),
+
+  // One-use pairing codes (API 80, tokens.ts): what the Mac's QR code
+  // carries in place of a token. Only the code's SHA-256; the phone trades
+  // the code for a token with tokens:claim within ten minutes, once.
+  pairingCodes: defineTable({
+    hash: v.string(),
+    name: v.string(),
+    kind: v.union(v.literal('phone'), v.literal('browser')),
+    days: v.optional(v.number()),
+    createdAt: v.number(),
+    expiresAt: v.number(),
+    usedAt: v.optional(v.number()),
+    issuedBy: v.optional(v.string()),
+    ownerKeyPrint: v.optional(v.string()),
+  })
+    .index('by_hash', ['hash'])
+    .index('by_expiresAt', ['expiresAt']),
 
   // The runner's projects, schedules and accounts (docs/protocol.md), one
   // row each, replaced as a whole when the runner's list changes.

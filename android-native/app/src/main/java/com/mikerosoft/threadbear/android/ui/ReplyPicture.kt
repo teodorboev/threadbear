@@ -104,8 +104,9 @@ class LoadedPicture(
 )
 
 /**
- * Pictures from file storage or the web (the iPhone's PictureLoader). The
- * address is whatever an agent wrote, so the server is anyone's: read with
+ * Pictures from the backend's file storage (the iPhone's PictureLoader). A
+ * web address an agent wrote is never loaded here (WebPictureLink), but
+ * what's stored is still whatever a runner uploaded, so it's read with
  * a byte cap and one deadline over the whole download, headers included
  * (CappedDownload), its size checked from its header before anything is
  * decoded (50 million source pixels, PictureLimits), and decoded down to
@@ -339,10 +340,10 @@ private fun PlayBadge() {
  * yet, it's too big, or it's from a thread too old to have been looked through.
  */
 @Composable
-fun PictureOnMac(alt: String, note: String = "On your Mac") {
+fun PictureOnMac(alt: String, note: String = "On your Mac", modifier: Modifier = Modifier) {
     val colors = MaterialTheme.colorScheme
     Row(
-        Modifier.clip(RoundedCornerShape(10.dp)).background(colors.surfaceContainerHigh).padding(horizontal = 12.dp, vertical = 8.dp),
+        Modifier.clip(RoundedCornerShape(10.dp)).then(modifier).background(colors.surfaceContainerHigh).padding(horizontal = 12.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Icon(Line.Photo, null, Modifier.size(18.dp), tint = colors.onSurfaceVariant)
@@ -352,6 +353,23 @@ fun PictureOnMac(alt: String, note: String = "On your Mac") {
             Text(note, style = MaterialTheme.typography.labelSmall, color = colors.onSurfaceVariant)
         }
     }
+}
+
+/**
+ * A picture an agent or another Mac wrote as a web address, which isn't one
+ * of the thread's stored pictures: the app never fetches it, as the address
+ * could be anyone's server or one on Mike's own network (Daybreak findings
+ * 129 and 133). A tap opens it through the thread's links, like any other.
+ */
+@Composable
+fun WebPictureLink(alt: String, url: String, seq: Int?) {
+    val link = LocalThreadLink.current
+    val host = remember(url) { runCatching { java.net.URI(url).host }.getOrNull() ?: "the web" }
+    PictureOnMac(
+        alt,
+        "Picture on $host, not loaded. Tap to open it.",
+        Modifier.clickable(onClickLabel = "Open the picture's web address") { link(url, seq) },
+    )
 }
 
 /**

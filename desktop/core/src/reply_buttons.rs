@@ -234,7 +234,7 @@ mod tests {
 
     #[test]
     fn looks_and_says_what_it_does() {
-        let start = button(json!({ "id": "abc12345", "title": "Fill in the form", "start": { "text": "Open the form   and\\nfill it in", "cwd": "/Users/m/dev/me/misc" } }));
+        let start = button(json!({ "id": "abc12345", "title": "Fill in the form", "start": { "text": "Open the form   and\\nfill it in", "cwd": "/Users/alex/code/misc" } }));
         assert_eq!(look(&start, false), Look::Start);
         assert_eq!(label(&start, Look::Start), "\u{25B6}\u{FE0E} Fill in the form");
         assert_eq!(tip(&start, Look::Start), "Starts a thread in misc: Open the form and\\nfill it in");

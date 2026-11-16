@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { tmpDir } from '../helpers/fakes.ts';
 import { FakeClock } from '../../src/clock.ts';
 import { nullLogger } from '../../src/log.ts';
-import { GPUI_SHARED, scanSwiftChanges, SwiftChanges } from '../../src/swift-changes.ts';
+import { firstLookMessage, GPUI_SHARED, scanSwiftChanges, SwiftChanges } from '../../src/swift-changes.ts';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 const ENV = { ...process.env, GIT_AUTHOR_NAME: 'Them', GIT_AUTHOR_EMAIL: 'them@example.com', GIT_COMMITTER_NAME: 'Them', GIT_COMMITTER_EMAIL: 'them@example.com', GIT_CONFIG_GLOBAL: '/dev/null' };
@@ -168,4 +168,10 @@ test('what the GPUI app still uses from app/ matches swift-freeze.sh', () => {
   const r = spawnSync('bash', [path.join(REPO, 'scripts', 'swift-freeze.sh'), '--gpui-shared'], { encoding: 'utf8' });
   assert.equal(r.status, 0);
   assert.equal(GPUI_SHARED.source.replace(/\\\//g, '/'), r.stdout.trim());
+});
+
+test('a change is dated the day it was made where it was made, not in UTC', () => {
+  // 7:49 am on 15 Nov in Perth is still 14 Nov in UTC (Tinker Desk's try, 15 Nov).
+  const text = firstLookMessage([{ commit: 'a'.repeat(40), short: 'aaaaaaa', subject: 'Say Just woke up', date: '2026-11-15T07:49:47+08:00', files: ['app/x.swift'] }]);
+  assert.match(text, /\(15 Nov 2026\)/);
 });

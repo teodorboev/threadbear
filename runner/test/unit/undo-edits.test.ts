@@ -61,7 +61,7 @@ test('a file changed since in a way the diff does not fit is left alone and repo
   const a = path.join(dir, 'a.txt');
   fs.writeFileSync(a, 'one\ntwo\nthree\n');
   const events = edit(a, 'one\nTWO\nthree\n');
-  // Mike rewrote the same line afterwards.
+  // Alex rewrote the same line afterwards.
   fs.writeFileSync(a, 'one\nzwei\nthree\n');
   const r = undoChanges(appliedChanges(events), dir);
   assert.deepEqual(r.undone, []);

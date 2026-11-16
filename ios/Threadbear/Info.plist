@@ -2,7 +2,7 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<!-- threadbear://pair?url=…&token=… from the QR code tb phone-token shows. -->
+	<!-- threadbear://quickask and threadbear://open. A threadbear://pair link opened here is refused: the app's own scanner reads the Mac's pairing code (Daybreak 127). -->
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>

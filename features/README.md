@@ -42,7 +42,7 @@ code, and make it fail first when you can.
 - `@long-thread` runs a scenario on a made-up long thread and one short demo
   thread (`support/long-thread.ts`), for what only shows on more than a page
   of events. `@remote-threads` turns on the mock's other-Mac threads
-  (`bruce_*`), which it leaves out otherwise.
+  (`mini_*`), which it leaves out otherwise.
 - `@browserbear` gives the app a stand-in BrowserBear (`support/browserbear.ts`):
   its folder through `BROWSERBEAR_HOME`, with `agent/tabs.json` and its socket.
   Without it the GPUI app has none, so a run never reaches the real one.

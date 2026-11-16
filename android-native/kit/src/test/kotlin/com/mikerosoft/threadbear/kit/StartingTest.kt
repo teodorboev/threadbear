@@ -16,15 +16,15 @@ class StartingTest {
     }
 
     @Test fun theLineSaysWhereItStarts() {
-        val m5 = runner("m5")
-        val bruce = runner("bruce", 600)
-        assertEquals("M5", row(runnerId = "m5").line(listOf(m5, bruce), NOW))
-        assertEquals("BRUCE offline, starts when it's back", row(runnerId = "bruce").line(listOf(m5, bruce), NOW))
+        val laptop = runner("laptop")
+        val mini = runner("mac-mini", 600)
+        assertEquals("LAPTOP", row(runnerId = "laptop").line(listOf(laptop, mini), NOW))
+        assertEquals("MAC-MINI offline, starts when it's back", row(runnerId = "mac-mini").line(listOf(laptop, mini), NOW))
         // No runner picked, one runner: that one.
-        assertEquals("M5", row().line(listOf(m5), NOW))
+        assertEquals("LAPTOP", row().line(listOf(laptop), NOW))
         // No runner picked among several: the backend picks.
-        assertEquals("On its way", row().line(listOf(m5, bruce), NOW))
-        assertEquals("Tap to try again · No such folder", row(failed = "No such folder").line(listOf(m5), NOW))
+        assertEquals("On its way", row().line(listOf(laptop, mini), NOW))
+        assertEquals("Tap to try again · No such folder", row(failed = "No such folder").line(listOf(laptop), NOW))
     }
 
     @Test fun aCommandsStatusSaysWhatBecomesOfTheRow() {

@@ -1,64 +1,64 @@
 {
-  "about": "Cases for poolForFolder(pools, cwd): which pool a new thread in a folder starts on (docs/pools-plan.md, 'Folders choose the pool'). A pool's folders hold the folder itself and every folder inside it, on whole path components. The most specific folder wins; between equal folders, the first pool. '~' and '~/...' in a cwd or a pool's folders are home. Trailing slashes don't matter. expected null means no pool names the folder, so the caller falls back (the app: the pool Mike last picked; the runner: defaults.poolId). A case's own pools replace the shared ones. The runner (runner/src/pools.ts) and the app (Pools.forFolder in ThreadbearCore, with app/Tests/Fixtures holding a byte-for-byte copy) both run every case.",
-  "home": "/Users/mike",
+  "about": "Cases for poolForFolder(pools, cwd): which pool a new thread in a folder starts on (docs/pools-plan.md, 'Folders choose the pool'). A pool's folders hold the folder itself and every folder inside it, on whole path components. The most specific folder wins; between equal folders, the first pool. '~' and '~/...' in a cwd or a pool's folders are home. Trailing slashes don't matter. expected null means no pool names the folder, so the caller falls back (the app: the pool Alex last picked; the runner: defaults.poolId). A case's own pools replace the shared ones. The runner (runner/src/pools.ts) and the app (Pools.forFolder in ThreadbearCore, with app/Tests/Fixtures holding a byte-for-byte copy) both run every case.",
+  "home": "/Users/alex",
   "pools": [
     { "id": "claude", "title": "Claude", "accountIds": ["claude-main", "claude-1", "claude-3"] },
-    { "id": "convex", "title": "Convex", "accountIds": ["claude-2"], "folders": ["~/dev/convex"] },
-    { "id": "clients", "title": "Clients", "accountIds": ["claude-3"], "folders": ["/Users/mike/dev/clients/"] },
+    { "id": "work", "title": "Work", "accountIds": ["claude-2"], "folders": ["~/dev/work"] },
+    { "id": "clients", "title": "Clients", "accountIds": ["claude-3"], "folders": ["/Users/alex/dev/clients/"] },
     { "id": "codex", "title": "Codex", "accountIds": ["codex-main"] }
   ],
   "cases": [
-    { "name": "a folder a pool names", "cwd": "/Users/mike/dev/convex", "expected": "convex" },
-    { "name": "a folder inside one", "cwd": "/Users/mike/dev/convex/chef/app", "expected": "convex" },
-    { "name": "a sibling whose name only starts the same", "cwd": "/Users/mike/dev/convex-old", "expected": null },
-    { "name": "anywhere else", "cwd": "/Users/mike/dev/me/misc", "expected": null },
-    { "name": "the folder above a pool's folder isn't in it", "cwd": "/Users/mike/dev", "expected": null },
-    { "name": "a cwd with a trailing slash", "cwd": "/Users/mike/dev/convex/", "expected": "convex" },
-    { "name": "a pool folder written with a trailing slash", "cwd": "/Users/mike/dev/clients/acme", "expected": "clients" },
-    { "name": "a pool folder written absolute, cwd exactly it", "cwd": "/Users/mike/dev/clients", "expected": "clients" },
-    { "name": "a cwd written with ~", "cwd": "~/dev/convex/stack", "expected": "convex" },
+    { "name": "a folder a pool names", "cwd": "/Users/alex/dev/work", "expected": "work" },
+    { "name": "a folder inside one", "cwd": "/Users/alex/dev/work/chef/app", "expected": "work" },
+    { "name": "a sibling whose name only starts the same", "cwd": "/Users/alex/dev/work-old", "expected": null },
+    { "name": "anywhere else", "cwd": "/Users/alex/code/misc", "expected": null },
+    { "name": "the folder above a pool's folder isn't in it", "cwd": "/Users/alex/dev", "expected": null },
+    { "name": "a cwd with a trailing slash", "cwd": "/Users/alex/dev/work/", "expected": "work" },
+    { "name": "a pool folder written with a trailing slash", "cwd": "/Users/alex/dev/clients/acme", "expected": "clients" },
+    { "name": "a pool folder written absolute, cwd exactly it", "cwd": "/Users/alex/dev/clients", "expected": "clients" },
+    { "name": "a cwd written with ~", "cwd": "~/dev/work/stack", "expected": "work" },
     { "name": "an empty cwd", "cwd": "", "expected": null },
     {
       "name": "the most specific folder wins, whatever the pool order",
       "pools": [
         { "id": "dev", "title": "Dev", "accountIds": ["claude-main"], "folders": ["~/dev"] },
-        { "id": "convex", "title": "Convex", "accountIds": ["claude-2"], "folders": ["~/dev/convex"] }
+        { "id": "work", "title": "Work", "accountIds": ["claude-2"], "folders": ["~/dev/work"] }
       ],
-      "cwd": "/Users/mike/dev/convex/chef",
-      "expected": "convex"
+      "cwd": "/Users/alex/dev/work/chef",
+      "expected": "work"
     },
     {
       "name": "the less specific folder still holds the rest",
       "pools": [
         { "id": "dev", "title": "Dev", "accountIds": ["claude-main"], "folders": ["~/dev"] },
-        { "id": "convex", "title": "Convex", "accountIds": ["claude-2"], "folders": ["~/dev/convex"] }
+        { "id": "work", "title": "Work", "accountIds": ["claude-2"], "folders": ["~/dev/work"] }
       ],
-      "cwd": "/Users/mike/dev/me/misc",
+      "cwd": "/Users/alex/dev/misc",
       "expected": "dev"
     },
     {
       "name": "the same folder in two pools: the first pool wins",
       "pools": [
         { "id": "first", "title": "First", "accountIds": ["claude-main"], "folders": ["~/work"] },
-        { "id": "second", "title": "Second", "accountIds": ["claude-3"], "folders": ["/Users/mike/work/"] }
+        { "id": "second", "title": "Second", "accountIds": ["claude-3"], "folders": ["/Users/alex/work/"] }
       ],
-      "cwd": "/Users/mike/work/site",
+      "cwd": "/Users/alex/work/site",
       "expected": "first"
     },
     {
       "name": "one of several folders in a pool",
       "pools": [
-        { "id": "convex", "title": "Convex", "accountIds": ["claude-2"], "folders": ["~/dev/convex", "~/dev/stack"] }
+        { "id": "work", "title": "Work", "accountIds": ["claude-2"], "folders": ["~/dev/work", "~/dev/stack"] }
       ],
-      "cwd": "/Users/mike/dev/stack/posts",
-      "expected": "convex"
+      "cwd": "/Users/alex/dev/stack/posts",
+      "expected": "work"
     },
     {
       "name": "~ alone is the whole home folder",
       "pools": [
         { "id": "home", "title": "Home", "accountIds": ["claude-main"], "folders": ["~"] }
       ],
-      "cwd": "/Users/mike/anything/at/all",
+      "cwd": "/Users/alex/anything/at/all",
       "expected": "home"
     },
     {
@@ -66,9 +66,9 @@
       "pools": [
         { "id": "home", "title": "Home", "accountIds": ["claude-main"], "folders": ["~"] }
       ],
-      "cwd": "/Users/mikey/dev",
+      "cwd": "/Users/alexy/dev",
       "expected": null
     },
-    { "name": "no pools", "pools": [], "cwd": "/Users/mike/dev/convex", "expected": null }
+    { "name": "no pools", "pools": [], "cwd": "/Users/alex/dev/work", "expected": null }
   ]
 }

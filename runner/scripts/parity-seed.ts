@@ -19,5 +19,5 @@ const runnerId = 'parityrun001';
 const post = convexPoster(url);
 const { sync, ids } = await playInto(post, { key, runnerId, name: 'Parity runner' }, SCENARIOS.map((s) => s.play));
 await sync.stop();
-const { token } = (await post('mutation', 'sync:issueToken', { key, kind: 'phone', name: 'parity run' })) as { token: string };
+const { token } = (await post('mutation', 'sync:issueToken', { key, kind: 'browser', name: 'parity run' })) as { token: string };
 console.log(JSON.stringify({ token, runnerId, threads: SCENARIOS.map((s, i) => ({ name: s.name, shows: s.shows, threadId: ids[i] })) }, null, 2));

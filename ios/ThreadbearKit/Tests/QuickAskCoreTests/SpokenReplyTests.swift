@@ -14,8 +14,8 @@ struct SpokenReplyTests {
     }
 
     @Test func linksSayTheirTextAndURLsTheirHost() {
-        let text = "See [the plan](https://example.com/plan) or https://bruce.tail9ef766.ts.net:9443/?thread=x."
-        #expect(SpokenReply.text(from: text) == "See the plan or bruce.tail9ef766.ts.net.")
+        let text = "See [the plan](https://example.com/plan) or https://mac-mini.tail1234.ts.net:9443/?thread=x."
+        #expect(SpokenReply.text(from: text) == "See the plan or mac-mini.tail1234.ts.net.")
     }
 
     @Test func longRepliesStopAtASentence() {

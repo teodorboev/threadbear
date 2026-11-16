@@ -255,7 +255,7 @@ test('an agent that checks and goes back to sleep is not woken again by the same
   assert.equal(h.runner.wakeForTopic(thread.id, other.id, shown), true);
 });
 
-test("Mike's own Wake when… still only brings the thread back, with no turn", async () => {
+test("Alex's own Wake when… still only brings the thread back, with no turn", async () => {
   const { h, thread } = setup(() => ok({ until: null, topic: 'woodworking', why: 'topic' }));
   await h.runner.hibernateWhen({ threadId: thread.id, said: 'next time I talk about woodworking' });
   assert.deepEqual(h.runner.waitingTopics(), [{ threadId: thread.id, title: 'Plan the workbench drawers', topic: 'woodworking' }]);

@@ -3,31 +3,82 @@ package com.mikerosoft.threadbear.kit
 import java.io.ByteArrayOutputStream
 import java.net.URI
 import java.util.Base64
+import kotlinx.serialization.json.JsonPrimitive
 
 /**
- * Where the app connects and with what token (Pairing.swift): a
- * `threadbear://pair?url=…&token=…&key=<runnerId>:<key>` link, from the
- * Mac's QR code or pasted. Never through the Mac clipboard.
+ * Where the app connects and with what token (Pairing.swift). The Mac's
+ * Settings › Phone & browser draws a QR code of `TBPAIR1_` and the base64url
+ * of `url=…&code=<one-use code>&key=<runnerId>:<key>` (runner/src/devices.ts,
+ * pairingText), which only the app's own scanner reads: it trades the code
+ * for the phone's token ([claimed]). Never through the Mac clipboard.
+ *
+ * It used to be a `threadbear://pair?url=…&token=…` link the camera opened,
+ * and any app can claim that scheme, so another app could be handed the
+ * 90-day token (Daybreak finding 127, 15 Nov 2026). Such a link is refused
+ * from anywhere ([PairingSource.isOldLink]).
  */
 data class Pairing(
     /** The deployment's origin, e.g. https://happy-bear-123.convex.cloud */
     val deploymentUrl: String,
+    /** Empty until a pairing code has been traded for it. */
     val token: String,
     /** Runner id to secret-box public key (base64), from the link's `key` items. */
     val runnerKeys: Map<String, String> = emptyMap(),
+    /** The one-use pairing code from the Mac's QR code, to trade for [token]. */
+    val code: String? = null,
 ) {
+    /**
+     * The token for a pairing code, from `tokens:claim` (backend API 80),
+     * which takes each code once: this pairing with its token and no code.
+     * One that has its token already is handed back as it is.
+     */
+    suspend fun claimed(transport: ConvexTransport): Pairing {
+        val code = code ?: return this
+        val raw = transport.mutation("tokens:claim", mapOf("code" to JsonPrimitive(code)))
+        val token = runCatching { parseJson(raw).asObject()?.str("token") }.getOrNull()
+        if (token == null || !token.startsWith("tb_")) throw TransportError.Server("The server didn't give the phone a token for that code.")
+        return copy(token = token, code = null)
+    }
+
     val serverName: String get() = serverName(deploymentUrl)
 
-    val link: String
+    /** The old token link, for tests only: nothing the app shows or sends makes one (Daybreak 127). */
+    internal val link: String
         get() {
             val parts = mutableListOf("url=${encode(deploymentUrl)}", "token=${encode(token)}")
             runnerKeys.toSortedMap().forEach { (id, key) -> parts += "key=${encode("$id:$key")}" }
             return "threadbear://pair?" + parts.joinToString("&")
         }
 
-    override fun toString() = "Pairing($serverName)" // never the token
+    override fun toString() = "Pairing($serverName)" // never the token or the code
 
     companion object {
+        /** What starts the Mac's pairing text. */
+        const val TEXT_PREFIX = "TBPAIR1_"
+
+        /** `tbp_` and hex, as convex/tokens.ts makes them. */
+        internal fun isCode(code: String) = code.startsWith("tbp_") && code.length in 5..200 && code.substring(4).all { it in '0'..'9' || it in 'a'..'f' || it in 'A'..'F' }
+
+        /**
+         * The Mac's pairing text, or an older Mac's `threadbear://pair` link.
+         * Null for anything else. Where it came from is [PairingRequest.ask]'s to judge.
+         */
+        fun parse(text: String, allowLocal: Boolean = false): Pairing? {
+            val t = text.trim()
+            if (!t.startsWith(TEXT_PREFIX)) return parseLink(t, allowLocal)
+            val body = t.substring(TEXT_PREFIX.length)
+            if (body.isEmpty() || body.length > 4096 || !body.all { it in 'A'..'Z' || it in 'a'..'z' || it in '0'..'9' || it == '-' || it == '_' }) return null
+            // Padded back first: the Mac leaves it off, and not every Android
+            // decoder takes base64 without it.
+            val padded = body + "=".repeat((4 - body.length % 4) % 4)
+            val query = try { String(Base64.getUrlDecoder().decode(padded), Charsets.UTF_8) } catch (_: Exception) { return null }
+            val items = queryItems(query)
+            val code = items.firstOrNull { it.first == "code" }?.second?.takeIf(::isCode) ?: return null
+            // A code and a token both is no text the Mac makes.
+            if (items.any { it.first == "token" }) return null
+            return fromItems(items, allowLocal)?.copy(code = code)
+        }
+
         /**
          * Convex cloud deployments, or a self-hosted backend at any https
          * address: on the tailnet, or one of the user's own (setup --url,
@@ -35,12 +86,18 @@ data class Pairing(
          * `allowLocal` (debug builds) also takes http://127.0.0.1 and the
          * emulator's 10.0.2.2.
          */
-        fun parse(link: String, allowLocal: Boolean = false): Pairing? {
+        private fun parseLink(link: String, allowLocal: Boolean): Pairing? {
             val uri = try { URI(link.trim().replace(" ", "%20")) } catch (_: Exception) { return null }
             if (uri.scheme != "threadbear" || uri.host != "pair") return null
             val items = queryItems(uri.rawQuery ?: return null)
-            val raw = items.firstOrNull { it.first == "url" }?.second ?: return null
             val token = items.firstOrNull { it.first == "token" }?.second?.takeIf { it.isNotEmpty() } ?: return null
+            return fromItems(items, allowLocal)?.copy(token = token)
+        }
+
+        /** The server and runner keys of a link's or text's items, with no token yet. */
+        private fun fromItems(items: List<Pair<String, String>>, allowLocal: Boolean): Pairing? {
+            val token = ""
+            val raw = items.firstOrNull { it.first == "url" }?.second ?: return null
             val deployment = try { URI(raw) } catch (_: Exception) { return null }
             val host = deployment.host?.takeIf { it.isNotEmpty() } ?: return null
             val keys = runnerKeys(items)
@@ -135,6 +192,33 @@ data class Pairing(
     }
 }
 
+/** Where a pairing code or link came from (PairingRequest.swift). */
+enum class PairingSource {
+    /** The app's own scanner, on its pairing screen. */
+    SCANNED,
+    /** The clipboard. */
+    PASTED,
+    /**
+     * A link another app, a web page or the camera opened the app with.
+     * Never taken: any app can claim the threadbear scheme and be handed the
+     * same link (Daybreak finding 127). Scan the code in the app instead.
+     */
+    OPENED;
+
+    /** Whether this is a pairing refused only because of where it came from. */
+    fun refuses(text: String, allowLocal: Boolean): Boolean = this == OPENED && Pairing.parse(text, allowLocal) != null
+
+    companion object {
+        /**
+         * An older Mac's `threadbear://pair` link with the token in it: never
+         * taken, from anywhere. The token may have reached another app on its
+         * way, and the clipboard is anyone's to fill, so an app that read the
+         * Mac's one-use code could swap in a link with the token it claimed.
+         */
+        fun isOldLink(text: String, allowLocal: Boolean): Boolean = Pairing.parse(text, allowLocal)?.let { it.code == null } ?: false
+    }
+}
+
 /** What a pairing link would change, asked about before anything is kept (PairingRequest.swift). */
 data class PairingRequest(
     val pairing: Pairing,
@@ -165,8 +249,10 @@ data class PairingRequest(
         }
 
     companion object {
-        fun of(link: String, allowLocal: Boolean, current: Pairing?, keptKey: (String) -> String?): PairingRequest? {
-            val pairing = Pairing.parse(link, allowLocal) ?: return null
+        /** Null for anything that isn't a pairing, and for any opened from outside ([PairingSource.OPENED]). */
+        fun of(link: String, source: PairingSource, allowLocal: Boolean, current: Pairing?, keptKey: (String) -> String?): PairingRequest? {
+            if (source == PairingSource.OPENED) return null
+            val pairing = Pairing.parse(link, allowLocal)?.takeIf { it.code != null } ?: return null
             val newHost = pairing.serverName
             val currentHost = current?.serverName
             var added = 0

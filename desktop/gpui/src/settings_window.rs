@@ -35,6 +35,7 @@ use crate::tips::Tip as _;
 mod devices;
 mod keyboard;
 mod pools;
+mod reviewers;
 mod runners;
 
 /// The sections down the sidebar (`SettingsTab`).
@@ -551,12 +552,17 @@ impl SettingsWindow {
         if settings.lab_review_supported {
             let on = settings.lab_review;
             let switch = self.switch("settings-lab-review", on, "Have another lab check each code change a thread makes", cx, |this, on, cx| this.update(json!({ "labReview": on }), cx));
+            let mut rows = vec![row("Review code changes before a thread is done", switch, cx)];
+            // Who reviews, in order, while reviews are on (reviewers.rs).
+            if let Some(list) = settings.lab_reviewers.as_ref().filter(|_| on) {
+                rows.extend(self.reviewer_rows(list, cx));
+            }
             sections.push(section(
                 "settings-code-review",
                 "Code review",
-                "When a thread changes code and is done, Threadbear has your other provider (Codex for a Claude thread, Claude for a Codex one) try to break the change in a review thread of its own. Your thread waits for what it finds, fixes what holds up, and tells you in its reply. With only one provider, a fresh session of the same one reviews instead.",
-                "explain what a review found, or turn reviews on or off for you.",
-                vec![row("Review code changes before a thread is done", switch, cx)],
+                "When a thread changes code and is done, another lab tries to break the change in a review thread of its own. Your thread waits for what it finds, fixes what holds up, and tells you in its reply. The reviewers below go in order: the first that isn't the thread's own provider and has a login with room reviews, on its model and effort, so when one runs out the next takes over. Drag them to change the order. With no other lab to hand, a fresh session of the thread's own provider reviews instead.",
+                "explain what a review found, change who reviews, or turn reviews on or off for you.",
+                rows,
                 cx,
             ));
         }
@@ -960,8 +966,14 @@ impl SettingsWindow {
     /// A pop-up menu: what's chosen, and the choices, each the change it
     /// sends (`settings.update`).
     fn menu(&self, id: &'static str, label: String, face: Option<Icon>, tip: &'static str, choices: Vec<(String, bool, Value)>, cx: &mut Context<Self>) -> AnyElement {
+        self.menu_owned(id.to_owned(), label, face, tip.to_owned(), choices, cx)
+    }
+
+    /// `menu`, for one whose id or tip is made up as it's drawn (a
+    /// reviewer's row).
+    fn menu_owned(&self, id: String, label: String, face: Option<Icon>, tip: String, choices: Vec<(String, bool, Value)>, cx: &mut Context<Self>) -> AnyElement {
         let me = cx.entity().downgrade();
-        let mut button = Button::new(id).label(label).small().secondary().dropdown_caret(true).tooltip(tip);
+        let mut button = Button::new(SharedString::from(id.clone())).label(label).small().secondary().dropdown_caret(true).tooltip(tip.clone());
         if let Some(face) = face {
             button = button.icon(face);
         }
@@ -1145,6 +1157,7 @@ impl SettingsWindow {
             "keepAwake": settings.as_ref().and_then(|s| s.keep_awake),
             "fullSync": settings.as_ref().and_then(|s| s.full_sync),
             "labReview": settings.as_ref().map(|s| s.lab_review),
+            "labReviewers": settings.as_ref().and_then(|s| s.lab_reviewers.as_ref()).map(|l| l.iter().map(|r| r.provider.clone()).collect::<Vec<_>>()),
             "privateFolders": settings.as_ref().map(|s| s.private_folders.clone()),
             "smallJobsPool": settings.as_ref().and_then(|s| s.pool.clone()),
             // General's Web runtime row, as it reads.

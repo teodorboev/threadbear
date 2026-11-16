@@ -1,7 +1,7 @@
 {
   "id": "demo_design_review",
   "title": "Compare account picker designs",
-  "cwd": "/Users/mike/dev/me/threadbare",
+  "cwd": "/Users/alex/code/threadbare",
   "accountId": "claude-main",
   "provider": "claude",
   "permissionMode": "full",

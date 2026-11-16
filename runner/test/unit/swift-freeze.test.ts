@@ -150,6 +150,24 @@ test('what the GPUI app uses from app/ stays open: fixtures, art, rich scripts',
   assert.equal(commit(dir).status, 0);
 });
 
+// The Swift tests of the shared mock runner and its fixtures stay open: a
+// change to the mock's demo data (15 Nov, runners and pools renamed) has to
+// be able to update them. They stay out of --gpui-shared, so check.sh still
+// runs the Swift tests when they change.
+test("the Swift tests of the shared mock runner stay open, and still count as Swift for check.sh", () => {
+  const dir = repo(MIKE);
+  for (const f of ['MockRunnerTests', 'RunnerAuthTests', 'GoldenTranscriptTests']) {
+    const file = `app/Tests/ThreadbearCoreTests/${f}.swift`;
+    stage(dir, file);
+    assert.equal(edit(dir, file).status, 0, file);
+    const shared = new RegExp(spawnSync(script, ['--gpui-shared'], { encoding: 'utf8' }).stdout.trim());
+    assert.doesNotMatch(file, shared, file);
+  }
+  assert.equal(commit(dir).status, 0);
+  stage(dir, 'app/Tests/ThreadbearCoreTests/ThreadSectionsTests.swift');
+  assert.equal(commit(dir).status, 2, 'the Swift app\'s other tests are still frozen');
+});
+
 test("what the iPhone app builds from app/ stays open, found from ThreadbearKit's links", () => {
   const dir = repo(MIKE);
   stage(dir, 'app/Sources/ThreadbearCore/Threads/SlashCommands.swift');

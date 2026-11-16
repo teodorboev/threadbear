@@ -769,13 +769,13 @@ test('formatStatus: the line for the runner following main', () => {
 
 test('tb status says when the main key is still being rotated', () => {
   const now = Date.parse('2026-10-26T12:00:00.000Z');
-  const text = formatStatus({ version: '1', pid: 1, startedAt: '2026-10-26T11:00:00.000Z', home: '/h', logFile: '/h/l', liveClis: 0, running: [], sync: { state: 'ok', url: 'https://x.convex.cloud', name: 'm5', ownerKeyRotating: true } } as never, [], now);
+  const text = formatStatus({ version: '1', pid: 1, startedAt: '2026-10-26T11:00:00.000Z', home: '/h', logFile: '/h/l', liveClis: 0, running: [], sync: { state: 'ok', url: 'https://x.convex.cloud', name: 'laptop', ownerKeyRotating: true } } as never, [], now);
   assert.match(text, /RUNNER_KEY_NEXT/);
 });
 
 test('tb status says what a backend on this Mac only leaves out, and says nothing of it for cloud', () => {
   const now = Date.parse('2026-10-26T12:00:00.000Z');
-  const status = (url: string) => formatStatus({ version: '1', pid: 1, startedAt: '2026-10-26T11:00:00.000Z', home: '/h', logFile: '/h/l', liveClis: 0, running: [], sync: { state: 'ok', url, name: 'm5', pushOff: true } } as never, [], now);
+  const status = (url: string) => formatStatus({ version: '1', pid: 1, startedAt: '2026-10-26T11:00:00.000Z', home: '/h', logFile: '/h/l', liveClis: 0, running: [], sync: { state: 'ok', url, name: 'laptop', pushOff: true } } as never, [], now);
   assert.match(status('http://127.0.0.1:13210'), /On this Mac only: .*no phone or other Mac can reach it, and the website and share links only open on this Mac/);
   assert.ok(!status('https://mac.tail1.ts.net:3210').includes('On this Mac only'));
 });
@@ -783,7 +783,7 @@ test('tb status says what a backend on this Mac only leaves out, and says nothin
 test("tb status: a runner's first day of Convex use says what's been sent, not a monthly figure from minutes", () => {
   const now = Date.parse('2026-11-13T12:00:00.000Z');
   const status = (since: string) =>
-    formatStatus({ version: '1', pid: 1, startedAt: '2026-11-13T11:00:00.000Z', home: '/h', logFile: '/h/l', liveClis: 0, running: [], sync: { state: 'ok', url: 'https://x.convex.cloud', name: 'm5', use: { sent: 3e6, bodies: 1e6, io: 6e6, storage: 1.3e6, since } } } as never, [], now);
+    formatStatus({ version: '1', pid: 1, startedAt: '2026-11-13T11:00:00.000Z', home: '/h', logFile: '/h/l', liveClis: 0, running: [], sync: { state: 'ok', url: 'https://x.convex.cloud', name: 'laptop', use: { sent: 3e6, bodies: 1e6, io: 6e6, storage: 1.3e6, since } } } as never, [], now);
   const early = status('2026-11-13T11:30:00.000Z');
   assert.match(early, /Convex use, from this runner: 3 MB sent since .*a monthly estimate comes after its first day/);
   assert.ok(!early.includes('of I/O a month'), 'no monthly figure yet');

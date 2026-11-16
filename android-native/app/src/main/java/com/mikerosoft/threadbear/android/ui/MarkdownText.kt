@@ -139,10 +139,12 @@ private fun Block(block: MarkdownBlock, inline: InlineStyle, style: TextStyle, s
         is MarkdownBlock.Image -> {
             val pictures = LocalThreadPictures.current
             val image = pictures.image(block.src, seq)
-            val web = ThreadPictures.webUrl(block.src)
+            val web = ThreadPictures.webLink(block.src)
             when {
                 image != null -> ReplyPicture(image.url, block.alt, image.width, image.height)
-                web != null -> ReplyPicture(web, block.alt)
+                // Never fetched here: a link, like any other in the reply
+                // (Daybreak findings 129 and 133).
+                web != null -> WebPictureLink(block.alt, web, seq)
                 else -> PictureOnMac(block.alt)
             }
         }
