@@ -886,7 +886,7 @@ test("--pure goes only to an OpenCode whose help lists it", () => {
     assert.deepEqual(agentArgs(ACP_AGENTS.opencode, now), ['acp']);
     assert.deepEqual(agentArgs(ACP_AGENTS.opencode, path.join(dir, 'gone')), ['acp']);
     // Cursor has one set of arguments.
-    assert.deepEqual(agentArgs(ACP_AGENTS.cursor, now), ACP_AGENTS.cursor.args);
+    assert.deepEqual(agentArgs(ACP_AGENTS.cursor, now), ACP_AGENTS.cursor.args());
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
